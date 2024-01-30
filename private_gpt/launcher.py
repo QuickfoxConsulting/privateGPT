@@ -40,7 +40,7 @@ def create_app(root_injector: Injector) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_credentials=True,
-        allow_origins=["http://localhost:5173", "http://localhost:8001"],
+        allow_origins=["http://localhost:5173", "http://localhost:8080"],
         allow_methods=["DELETE", "GET", "POST", "PUT", "OPTIONS", "PATCH"],
         allow_headers=["*"],
     )
