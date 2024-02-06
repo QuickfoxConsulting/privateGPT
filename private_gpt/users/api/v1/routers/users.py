@@ -1,5 +1,6 @@
 from typing import Any, List, Optional
 
+import json
 from sqlalchemy.orm import Session
 from pydantic.networks import EmailStr
 from fastapi.responses import JSONResponse
@@ -126,6 +127,15 @@ def read_user_me(
         content={"message": "Current user retrieved successfully", "user": jsonable_encoder(user_data)},
     )
 
+# def expire_all_sessions(user_id: int, db: Session):
+#     # Add logic to expire all sessions for the user
+#     # This could involve updating a database field or using a session manager
+    
+#     # For example, you might have a UserSession model with an "expired" field
+#     # Set all sessions for the user to expired
+#     db.query(models.user.UserSession).filter(models.user.UserSession.user_id == user_id).update({"expired": True})
+#     db.commit()
+    
 
 @router.patch("/me/change-password", response_model=schemas.User)
 def change_password(
@@ -145,18 +155,52 @@ def change_password(
     current_user.hashed_password = new_password_hashed
     db.commit()
 
+    # Expire all sessions for the user
+    # expire_all_sessions(current_user.id, db)
+
     role = current_user.user_role.role.name if current_user.user_role else None
     user_data = schemas.UserBaseSchema(
         id=current_user.id,
         email=current_user.email,
         fullname=current_user.fullname,
-        company_id= current_user.company_id,
+        company_id=current_user.company_id,
     )
     
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={"message": "Password changed successfully", "user": jsonable_encoder(user_data)},
+        content={"message": "Password changed successfully. Would you like to logout from all sessions?", "user": jsonable_encoder(user_data)},
     )
+
+# @router.patch("/me/change-password", response_model=schemas.User)
+# def change_password(
+#     *,
+#     db: Session = Depends(deps.get_db),
+#     current_user: models.User = Depends(deps.get_current_user),
+#     old_password: str = Body(..., embed=True),
+#     new_password: str = Body(..., embed=True),
+# ) -> Any:
+#     """
+#     Change current user's password.
+#     """
+#     if not verify_password(old_password, current_user.hashed_password):
+#         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Old password is incorrect")
+
+#     new_password_hashed = get_password_hash(new_password)
+#     current_user.hashed_password = new_password_hashed
+#     db.commit()
+
+#     role = current_user.user_role.role.name if current_user.user_role else None
+#     user_data = schemas.UserBaseSchema(
+#         id=current_user.id,
+#         email=current_user.email,
+#         fullname=current_user.fullname,
+#         company_id= current_user.company_id,
+#     )
+    
+#     return JSONResponse(
+#         status_code=status.HTTP_200_OK,
+#         content={"message": "Password changed successfully", "user": jsonable_encoder(user_data)},
+#     )
 
 
 @router.get("/{user_id}", response_model=schemas.User)

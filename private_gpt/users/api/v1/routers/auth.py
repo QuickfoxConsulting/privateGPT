@@ -16,6 +16,7 @@ from private_gpt.users.utils import send_registration_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
 def register_user(
     db: Session,
     email: str,
@@ -26,8 +27,9 @@ def register_user(
     """
     Register a new user in the database.
     """
-    print(f"{email} {fullname} {password} {company.id}")
-    user_in = schemas.UserCreate(email=email, password=password, fullname=fullname, company_id=company.id)
+    print(f"{email} {fullname} {password}")
+    user_in = schemas.UserCreate(
+        email=email, password=password, fullname=fullname, company_id=company.id)
     send_registration_email(fullname, email, password)
     return crud.user.create(db, obj_in=user_in)
 
@@ -42,7 +44,8 @@ def create_user_role(
     Create a user role in the database.
     """
     role = crud.role.get_by_name(db, name=role_name)
-    user_role_in = schemas.UserRoleCreate(user_id=user.id, role_id=role.id, company_id=company.id if company else None)
+    user_role_in = schemas.UserRoleCreate(
+        user_id=user.id, role_id=role.id, company_id=company.id if company else None)
     return crud.user_role.create(db, obj_in=user_role_in)
 
 
@@ -91,7 +94,8 @@ def login_access_token(
         role = user.user_role.role.name
         if user.user_role.company_id:
             company_id = user.user_role.company_id
-        else: company_id = None
+        else:
+            company_id = None
 
     token_payload = {
         "id": str(user.id),
@@ -198,3 +202,4 @@ def register(
     }
 
     return JSONResponse(content=response_dict, status_code=status.HTTP_201_CREATED)
+

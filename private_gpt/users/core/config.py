@@ -4,6 +4,15 @@ from typing import Any, Dict, Optional
 from pydantic_settings import BaseSettings
 
 
+SQLALCHEMY_DATABASE_URI = "postgresql+psycopg2://{username}:{password}@{host}:{port}/{db_name}".format(
+    host='localhost',
+    port='5432',
+    db_name='QuickGPT',
+    username='postgres',
+    password="python",
+)
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "AUTHENTICATION AND AUTHORIZATION"
     API_V1_STR: str = "/v1"
