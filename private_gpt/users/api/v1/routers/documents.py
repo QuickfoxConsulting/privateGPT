@@ -4,12 +4,18 @@ from typing import Any, List
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from fastapi import APIRouter, Depends, HTTPException, status, Security, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Security, Request, File, UploadFile
+from private_gpt.server.ingest.ingest_router import create_documents
+from private_gpt.users.models.makerchecker import MakerCheckerActionType, MakerCheckerStatus
 
 from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 from private_gpt.users import crud, models, schemas
 from private_gpt.users.schemas import Document
+
+from pathlib import Path
+import aiofiles
+from private_gpt.constants import MAKER_UPLOAD
 
 logger = logging.getLogger(__name__)
 
@@ -202,3 +208,70 @@ def update_department(
             detail="Internal Server Error.",
         )
     
+
+
+
+@router.post('/upload', response_model=schemas.Document)
+async def upload_documents(
+    request: Request,
+    departments: schemas.DocumentDepartmentList = Depends(),
+    file: UploadFile = File(...),
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+    )
+):
+    try:
+        original_filename = file.filename
+        if original_filename is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No file name provided",
+            )
+        upload_path = Path(f"{MAKER_UPLOAD}/{original_filename}")
+        try:
+            contents = await file.read()
+            async with aiofiles.open(upload_path, 'wb') as f:
+                await f.write(contents)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal Server Error: Unable to ingest file.",
+            )
+        document =await create_documents(db, original_filename, current_user, departments, log_audit)
+        maker_in = schemas.MakerCheckerCreate(
+            table_name='Documents',
+            record_id = document.id,
+            action_type=MakerCheckerActionType.INSERT,
+            status=MakerCheckerStatus.PENDING,
+            created_by=current_user.id
+        )
+        crud.makerchecker.create(db, obj_in=maker_in)
+        return document
+
+    except HTTPException:
+        print(traceback.print_exc())
+        raise
+
+    except Exception as e:
+        print(traceback.print_exc())
+        log_audit(
+            model="Document",
+            action="create",
+            details={
+                "status": 500,
+                "detail": "Internal Server Error: Unable to ingest file.",
+            },
+            user_id=current_user.id,
+        )
+        logger.error(f"There was an error uploading the file(s): {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error: Unable to ingest file.",
+        )
+
+
+    
+

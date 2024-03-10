@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from private_gpt.users.constants.upload_type import UploadType
 
 from private_gpt.users import crud, models, schemas
 from private_gpt.users.api import deps
@@ -138,7 +139,7 @@ def delete_file(
             deps.get_current_user,
             scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
 
-        )) -> dict:
+)) -> dict:
     """Delete the specified filename.
 
     The `filename` can be obtained from the `GET /ingest/list` endpoint.
@@ -180,6 +181,14 @@ def delete_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
 
+def check_uploadtype(id):
+    if id == 1:
+        return UploadType.REGULAR
+    elif id == 2:
+        return UploadType.SCANNED
+    else: 
+        return UploadType.BOTH
+    
 async def create_documents(
         db: Session, 
         file_name: str = None, 
@@ -192,7 +201,8 @@ async def create_documents(
     `Document Department Association` table with the departments ids for the documents.
     """
     department_ids = departments.departments_ids
-    print("Department IDS: ", department_ids)
+    upload_type = check_uploadtype(departments.upload_type)
+
     file_ingested = crud.documents.get_by_filename(
         db, file_name=file_name)
     if file_ingested:
@@ -201,7 +211,7 @@ async def create_documents(
             detail="File already exists. Choose a different file.",
         )
     docs_in = schemas.DocumentCreate(
-        filename=file_name, uploaded_by=current_user.id
+        filename=file_name, uploaded_by=current_user.id, upload_type=UploadType.REGULAR
     )
     document = crud.documents.create(db=db, obj_in=docs_in)
     department_ids = [int(number) for number in department_ids.split(",")]
@@ -218,7 +228,6 @@ async def create_documents(
             user_id=current_user.id
         )
     return document
-
 
 async def common_ingest_logic(
     request: Request,
@@ -292,7 +301,6 @@ async def common_ingest_logic(
             detail="Internal Server Error: Unable to ingest file.",
         )
 
-
 @ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
 async def ingest_file(
         request: Request,
@@ -353,5 +361,46 @@ async def ingest_file(
         logger.error(f"There was an error uploading the file(s): {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error: Unable to ingest file.",
+        )
+
+
+
+def ingest_file(
+    request: Request,
+    db: Session,
+    original_file: str = None,
+    log_audit: models.Audit = None 
+):
+    service = request.state.injector.get(IngestService)
+    try:
+        with open(original_file, 'rb') as file:
+            file_name = Path(original_file).name
+            upload_path = Path(f"{UPLOAD_DIR}/{file_name}")
+
+            if file_name is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No file name provided",
+                )
+            with open(upload_path, "wb") as f:
+                f.write(file.read())
+            file.seek(0)  
+            ingested_documents = service.ingest_bin_data(file_name, file)
+        response = IngestResponse(
+            object="list", model="private-gpt", data=ingested_documents
+        )
+        return response
+
+    except HTTPException:
+        print(traceback.print_exc())
+        raise
+
+    except Exception as e:
+        print(traceback.print_exc())
+        log_audit(model='Document', action='create',
+                  details={"status": 500, "detail": "Internal Server Error: Unable to ingest file.", }, user_id=current_user.id)
+        raise HTTPException(
+            status_code=500,
             detail="Internal Server Error: Unable to ingest file.",
         )

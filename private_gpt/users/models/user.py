@@ -15,6 +15,7 @@ from sqlalchemy import event, func, select, update, insert
 from private_gpt.users.db.base_class import Base
 from private_gpt.users.models.department import Department
 from private_gpt.users.models.makerchecker import MakerChecker
+from private_gpt.users.constants.makerchecker import MakerCheckerActionType, MakerCheckerStatus
 
 
 class User(Base):
@@ -77,12 +78,14 @@ def create_maker_checker_entry(mapper, connection, target):
         insert(MakerChecker).values(
             table_name='users',
             record_id=target.id,
-            action_type='insert',
-            status='pending',
+            action_type=MakerCheckerActionType.INSERT,
+            status=MakerCheckerStatus.PENDING,
             verified_at=None,
             verified_by=None,
         )
     )
+
+
 
 
 @event.listens_for(User, 'after_insert')

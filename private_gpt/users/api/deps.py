@@ -144,3 +144,8 @@ def get_current_active_user(
     if not crud.user.is_active(current_user):
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
+
+def checker(
+    current_user: models.User = Security(get_current_user, scopes=[],),
+):
+    return current_user.checker

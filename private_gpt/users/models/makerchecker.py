@@ -4,17 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from private_gpt.users.db.base_class import Base
 from sqlalchemy import Enum
-from enum import Enum as PythonEnum
-
-class MakerCheckerStatus(PythonEnum):
-    PENDING = 'pending'
-    APPROVED = 'approved'
-    REJECTED = 'rejected'
-
-
-class MakerCheckerActionType(PythonEnum):
-    INSERT = 'insert'
-    UPDATE = 'update'
+from private_gpt.users.constants.makerchecker import MakerCheckerActionType, MakerCheckerStatus
 
 
 class MakerChecker(Base):
@@ -26,7 +16,10 @@ class MakerChecker(Base):
     record_id = Column(Integer, nullable=False)
     action_type = Column(Enum(MakerCheckerActionType), nullable=False, default=MakerCheckerActionType.INSERT)  # 'insert' or 'update'
     status = Column(Enum(MakerCheckerStatus), nullable=False, default=MakerCheckerStatus.PENDING)  # 'pending', 'approved', or 'rejected'
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
     verified_at = Column(DateTime, nullable=True)
     verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 

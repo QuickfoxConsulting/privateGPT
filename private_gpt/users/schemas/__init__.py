@@ -7,3 +7,4 @@ from .company import Company, CompanyBase, CompanyCreate, CompanyUpdate
 from .documents import Document, DocumentCreate, DocumentsBase, DocumentUpdate, DocumentList, DepartmentList, DocumentEnable, DocumentDepartmentUpdate
 from .department import Department, DepartmentCreate, DepartmentUpdate, DepartmentAdminCreate, DepartmentDelete, DocumentDepartmentList
 from .audit import AuditBase, AuditCreate, AuditUpdate, Audit, GetAudit
+from .makerchecker import MakerCheckerBase, CheckerUpdate, MakerCheckerCreate, MakerCheckerUpdate, MakerChecker, MakerCheckerList

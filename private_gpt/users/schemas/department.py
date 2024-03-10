@@ -53,3 +53,4 @@ class Department(DepartmentBase):
 
 class DocumentDepartmentList(BaseModel):
     departments_ids: str = Form(...)
+    upload_type: int

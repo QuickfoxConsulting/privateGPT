@@ -11,6 +11,7 @@ class DepartmentList(BaseModel):
 
 class DocumentCreate(DocumentsBase):
     uploaded_by: int
+    upload_type: str
 
 class DocumentUpdate(DocumentsBase):
     pass
