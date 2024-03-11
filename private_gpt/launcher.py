@@ -45,7 +45,7 @@ def create_app(root_injector: Injector) -> FastAPI:
             allow_origins=["http://localhost:80/", "http://10.1.101.125:80", "http://quickgpt.gibl.com.np:80", "http://127.0.0.1",
                            "http://10.1.101.125", "http://quickgpt.gibl.com.np", "http://localhost:8001", "http://192.168.1.93", "http://192.168.1.93:88", 
                            "http://192.168.1.98", "http://192.168.1.98:5173", "http://localhost:5173", "http://127.0.0.1/", "http://localhost/", 
-                           "http://localhost:80", "http://192.168.1.131:80/", "http://192.168.1.131"],
+                           "http://localhost:80", "http://192.168.1.131:80/", "http://192.168.1.131", "http://192.168.1.127:3000", "http://192.168.1.127"],
             allow_methods=["DELETE", "GET", "POST", "PUT", "OPTIONS", "PATCH"],
             allow_headers=["*"],
         )
