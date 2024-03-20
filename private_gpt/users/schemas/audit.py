@@ -29,12 +29,12 @@ class AuditInDB(AuditBase):
 
 class Audit(BaseModel):
     id: int
-    model: str
-    username: str
-    action: str
+    model: Optional[str]
+    username: Optional[str]
+    action: Optional[str]
     details: dict
     timestamp: Optional[datetime]
-    ip_address: str
+    ip_address: Optional[str]
 
 
 class GetAudit(BaseModel):

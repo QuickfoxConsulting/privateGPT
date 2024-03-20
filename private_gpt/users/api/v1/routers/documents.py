@@ -343,13 +343,13 @@ async def verify_documents(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Document already verified!",
             )
-        if CHECKER:
-            print("Current user is checker: ", current_user.checker)
-            if not current_user.checker:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="You are not the checker!",
-                )
+        # if CHECKER:
+        #     print("Current user is checker: ", current_user.checker)
+        #     if not current_user.checker:
+        #         raise HTTPException(
+        #             status_code=status.HTTP_400_BAD_REQUEST,
+        #             detail="You are not the checker!",
+        #         )
         
         if document.uploaded_by == current_user.id:
             raise HTTPException(

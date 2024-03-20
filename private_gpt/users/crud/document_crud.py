@@ -37,7 +37,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
                 .filter(document_department_association.c.department_id == department_id)
                 .offset(skip)
                 .limit(limit)
-                .all().order_by(desc(getattr(Document, 'uploaded_at')))
+                .all()
             )
     
     def get_files_to_verify(

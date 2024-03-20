@@ -37,7 +37,7 @@ def list_auditlog(
                 model=dep.model,
                 username=get_fullname(dep.user_id),
                 details=dep.details,
-                action=dep.action,
+                action=str(dep.action),
                 timestamp=dep.timestamp,
                 ip_address=dep.ip_address,
             )
