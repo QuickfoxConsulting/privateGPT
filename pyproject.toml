@@ -30,6 +30,8 @@ uvicorn = "^0.27.1"
 python-doctr = "0.7.0"
 pymupdf = "1.21.1"
 python-docx = "1.1.0"
+torchvision = "^0.17.1"
+fastapi-filter = "^1.1.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^22"

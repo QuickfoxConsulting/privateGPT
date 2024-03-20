@@ -1,6 +1,11 @@
+from typing import Optional
 from pydantic import BaseModel
 from datetime import datetime
 from typing import List
+from fastapi import Form, UploadFile, File
+
+from fastapi_filter.contrib.sqlalchemy import Filter
+
 
 class DocumentsBase(BaseModel):
     filename: str
@@ -12,10 +17,12 @@ class DepartmentList(BaseModel):
 class DocumentCreate(DocumentsBase):
     uploaded_by: int
 
-class DocumentUpdate(DocumentsBase):
-    pass
+class DocumentUpdate(BaseModel):
+    id: int
+    status: str
 
-class DocumentEnable(DocumentsBase):
+class DocumentEnable(BaseModel):
+    id: int
     is_enabled: bool
 
 class DocumentDepartmentUpdate(DocumentsBase):
@@ -32,9 +39,68 @@ class Document(BaseModel):
     id: int
     is_enabled: bool
     filename: str
-    uploaded_by: str
+    uploaded_by: int
     uploaded_at: datetime
     departments: List[DepartmentList] = []
 
     class Config:
         orm_mode = True
+
+class DocumentMakerChecker(DocumentCreate):
+    action_type: str
+    status: str
+    doc_type_id: int
+
+class DocumentMakerCreate(DocumentMakerChecker):
+    pass
+
+
+class DocumentCheckerUpdate(BaseModel):
+    action_type: str
+    status: str
+    is_enabled: bool
+    verified_at: datetime
+    verified_by: int
+    verified: bool
+
+class DocumentDepartmentList(BaseModel):
+    departments_ids: str = Form(...)
+    doc_type_id: int = Form(...)
+    file: UploadFile = File(...)
+
+
+
+class DocumentView(BaseModel):
+    id: int
+    is_enabled: bool
+    filename: str
+    uploaded_by: str
+    uploaded_at: datetime
+    departments: List[DepartmentList] = []
+    action_type: str
+    status: str
+
+    class Config:
+        orm_mode = True
+
+
+class DocumentVerify(BaseModel):
+    id: int
+    filename: str
+    uploaded_by: str
+    uploaded_at: datetime
+    departments: List[DepartmentList] = []
+    status: str
+
+    class Config:
+        orm_mode = True
+
+
+
+class DocumentFilter(BaseModel):
+    filename: Optional[str] = None
+    uploaded_by: Optional[str] = None
+    action_type: Optional[str] = None
+    status: Optional[str] = None
+    order_by: Optional[str] = None
+

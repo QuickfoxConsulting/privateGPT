@@ -2,10 +2,11 @@ import os
 import logging
 import traceback
 
+import aiofiles
 from pathlib import Path
 from typing import Literal
-import aiofiles
 
+from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
 from fastapi.responses import JSONResponse
@@ -18,7 +19,7 @@ from private_gpt.users.constants.role import Role
 from private_gpt.server.ingest.ingest_service import IngestService
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.server.utils.auth import authenticated
-from private_gpt.constants import UPLOAD_DIR, OCR_UPLOAD
+from private_gpt.constants import UPLOAD_DIR
 
 ingest_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
@@ -43,13 +44,13 @@ class IngestResponse(BaseModel):
 class DeleteFilename(BaseModel):
     filename: str
 
-@ingest_router.post("/ingest", tags=["Ingestion"], deprecated=True)
-def ingest(request: Request, file: UploadFile) -> IngestResponse:
-    """Ingests and processes a file.
+# @ingest_router.post("/ingest", tags=["Ingestion"], deprecated=True)
+# def ingest(request: Request, file: UploadFile) -> IngestResponse:
+#     """Ingests and processes a file.
 
-    Deprecated. Use ingest/file instead.
-    """
-    return ingest_file(request, file)
+#     Deprecated. Use ingest/file instead.
+#     """
+#     return ingest_file(request, file)
 
 
 @ingest_router.post("/ingest/file1", tags=["Ingestion"])
@@ -162,8 +163,8 @@ def delete_file(
                 model='Document', 
                 action='delete',
                 details={
-                    "detail": f"{filename}' deleted successfully.",
-                    'user': current_user.fullname,
+                    "detail": f"{filename}",
+                    'user': current_user.username,
                     }, 
                 user_id=current_user.id
             )
@@ -181,18 +182,18 @@ def delete_file(
 
 
 async def create_documents(
-        db: Session, 
-        file_name: str = None, 
-        current_user: models.User = None,
-        departments: schemas.DocumentDepartmentList = Depends(),
-        log_audit: models.Audit = None,
-    ):
+    db: Session, 
+    file_name: str = None, 
+    current_user: models.User = None,
+    departments: schemas.DocumentDepartmentList = Depends(),
+    log_audit: models.Audit = None,
+):
     """
     Create documents in the `Document` table and update the \n
     `Document Department Association` table with the departments ids for the documents.
     """
     department_ids = departments.departments_ids
-    print("Department IDS: ", department_ids)
+    print("Department ids: ", department_ids)
     file_ingested = crud.documents.get_by_filename(
         db, file_name=file_name)
     if file_ingested:
@@ -200,19 +201,26 @@ async def create_documents(
             status_code=409,
             detail="File already exists. Choose a different file.",
         )
-    docs_in = schemas.DocumentCreate(
-        filename=file_name, uploaded_by=current_user.id
+    print(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
+    docs_in = schemas.DocumentMakerCreate(
+        filename=file_name, 
+        uploaded_by=current_user.id, 
+        action_type=MakerCheckerActionType.INSERT,
+        status=MakerCheckerStatus.PENDING,
+        doc_type_id=departments.doc_type_id,
     )
+    print("DOCUMENT CREATE: ", docs_in)
     document = crud.documents.create(db=db, obj_in=docs_in)
     department_ids = [int(number) for number in department_ids.split(",")]
     for department_id in department_ids:
         db.execute(models.document_department_association.insert().values(document_id=document.id, department_id=department_id))
+
     log_audit(
             model='Document', 
             action='create',
             details={
-                'detail': f"{file_name} uploaded successfully", 
-                'user': f"{current_user.fullname}",
+                'filename': f"{file_name}", 
+                'user': f"{current_user.username}",
                 'departments': f"{department_ids}"
             }, 
             user_id=current_user.id
@@ -275,7 +283,7 @@ async def common_ingest_logic(
                 )
                     
         logger.info(
-            f"{file_name} is uploaded by the {current_user.fullname}.")
+            f"{file_name} is uploaded by the {current_user.username}.")
 
         return ingested_documents
 
@@ -285,12 +293,35 @@ async def common_ingest_logic(
 
     except Exception as e:
         print(traceback.print_exc())
-        log_audit(model='Document', action='create',
-                  details={"status": 500, "detail": "Internal Server Error: Unable to ingest file.", }, user_id=current_user.id)
         raise HTTPException(
             status_code=500,
             detail="Internal Server Error: Unable to ingest file.",
         )
+
+
+async def ingest(request: Request, file_path: str) -> IngestResponse:
+    """Ingests and processes a file, storing its chunks to be used as context."""
+    service = request.state.injector.get(IngestService)
+
+    try:
+        with open(file_path, 'rb') as file:
+            file_name = Path(file_path).name
+            upload_path = Path(f"{UPLOAD_DIR}/{file_name}")
+
+            with upload_path.open('wb') as f:
+                f.write(file.read())
+
+            with upload_path.open('rb') as f:
+                ingested_documents = await service.ingest_bin_data(file_name, f)
+
+    except Exception as e:
+        return {"message": f"There was an error uploading the file(s)\n {e}"}
+
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
+
 
 
 @ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
@@ -329,7 +360,7 @@ async def ingest_file(
         with open(upload_path, "rb") as f:
             ingested_documents = service.ingest_bin_data(original_filename, f)
 
-        logger.info(f"{original_filename} is uploaded by {current_user.fullname} in {departments.departments_ids}")
+        logger.info(f"{original_filename} is uploaded by {current_user.username} in {departments.departments_ids}")
         response = IngestResponse(
             object="list", model="private-gpt", data=ingested_documents
         )
@@ -341,15 +372,6 @@ async def ingest_file(
 
     except Exception as e:
         print(traceback.print_exc())
-        log_audit(
-            model="Document",
-            action="create",
-            details={
-                "status": 500,
-                "detail": "Internal Server Error: Unable to ingest file.",
-            },
-            user_id=current_user.id,
-        )
         logger.error(f"There was an error uploading the file(s): {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -9,9 +9,10 @@ from private_gpt.users.schemas.company import Company
 
 class UserBaseSchema(BaseModel):
 	email: EmailStr
-	fullname: str
+	username: str
 	company_id: int
 	department_id: int
+	checker: bool
 
 	class Config:
 		arbitrary_types_allowed = True
@@ -22,7 +23,7 @@ class UserCreate(UserBaseSchema):
 
 
 class UsernameUpdate(BaseModel):
-	fullname: str
+	username: str
 
 
 class UserUpdate(BaseModel):
@@ -37,7 +38,6 @@ class UserLoginSchema(BaseModel):
 	class Config:
 		arbitrary_types_allowed = True
 
-
 class UserSchema(UserBaseSchema):
 	id: int
 	user_role: Optional[UserRole] = None
@@ -48,8 +48,6 @@ class UserSchema(UserBaseSchema):
 
 	class Config:
 		orm_mode = True
-
-
 
 class User(UserSchema):
     pass
@@ -69,17 +67,14 @@ class DeleteUser(BaseModel):
 
 class UserAdminUpdate(BaseModel):
 	id: int
-	fullname: str
+	username: str
 	role: str
 	department_id: int
 
 class UserAdmin(BaseModel):
-	fullname: str
+	username: str
 	department_id: int
 
 
 class PasswordUpdate(BaseModel):
 	password_created: Optional[datetime] = None
-
-class SuperMakerUpdate(BaseModel):
-	checker: bool

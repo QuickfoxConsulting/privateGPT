@@ -1,104 +1,90 @@
-import datetime
+from datetime import datetime
 from sqlalchemy import (
-    Column, 
-    String, 
+    Column,
+    String,
     Integer,
-    Boolean, 
-    UniqueConstraint, 
-    PrimaryKeyConstraint,
-    DateTime,
-    ForeignKey
+    Boolean,
+    UniqueConstraint,
+    ForeignKey,
+    DateTime
 )
-from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import relationship
+from sqlalchemy import event, func, select, update
+
 from private_gpt.users.db.base_class import Base
 from private_gpt.users.models.department import Department
+
 
 class User(Base):
     """Models a user table"""
     __tablename__ = "users"
     id = Column(Integer, nullable=False, primary_key=True)
-    
+
     email = Column(String(225), nullable=False, unique=True)
     hashed_password = Column(String, nullable=False)
-    fullname = Column(String(225), nullable=False, unique=True)
-
-    UniqueConstraint("email", name="uq_user_email")
-    PrimaryKeyConstraint("id", name="pk_user_id")
+    username = Column(String(225), nullable=False, unique=True)
 
     is_active = Column(Boolean, default=False)
 
-    last_login = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_login = Column(DateTime, nullable=True, default=None)
+    created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(
         DateTime,
-        default=datetime.datetime.utcnow,
-        onupdate=datetime.datetime.utcnow,
+        default=datetime.now,
+        onupdate=datetime.now,
     )
-    
+
     password_created = Column(DateTime, nullable=True)
     checker = Column(Boolean, default=False)
 
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)  
-    company = relationship("Company", back_populates="users") 
-    
-    uploaded_documents = relationship("Document", back_populates="uploaded_by_user")
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    company = relationship("Company", back_populates="users")
+
+    uploaded_documents = relationship(
+        "Document", back_populates="uploaded_by_user",
+        foreign_keys="[Document.uploaded_by]")
 
     user_role = relationship(
         "UserRole", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+    department_id = Column(
+        Integer, ForeignKey("departments.id"), nullable=False)
     
-    department_id = Column(Integer, ForeignKey(
-        "departments.id"), nullable=False)
     department = relationship("Department", back_populates="users")
+
+    __table_args__ = (
+        UniqueConstraint('username', name='unique_username_no_spacing'),
+    )
 
     def __repr__(self):
         """Returns string representation of model instance"""
-        return "<User {fullname!r}>".format(fullname=self.fullname)
-    
-    __table_args__ = (
-        UniqueConstraint('fullname', name='unique_username_no_spacing'),
-    )
+        return "<User {username!r}>".format(username=self.username)
 
 
-@event.listens_for(User, 'after_insert')
-@event.listens_for(User, 'after_delete')
-def update_total_users(mapper, connection, target):
-    department_id = target.department_id
-    print(f"Department ID is: {department_id}")
-    total_users = connection.execute(
-        select([func.count()]).select_from(User).where(
-            User.department_id == department_id)
-    ).scalar()
-    print(f"Total users is: {total_users}")
-    connection.execute(
-        update(Department).values(total_users=total_users).where(
-            Department.id == department_id)
-    )
+# Event listeners
+# @event.listens_for(User, 'after_insert')
+# @event.listens_for(User, 'after_delete')
+# def update_total_users(mapper, connection, target):
+#     department_id = target.department_id
+#     total_users = connection.execute(
+#         select([func.count()]).select_from(User).where(
+#             User.department_id == department_id)
+#     ).scalar()
+#     connection.execute(
+#         update(Department).values(total_users=total_users).where(
+#             Department.id == department_id)
+#     )
 
 
 @event.listens_for(User, 'before_insert')
 def set_password_created(mapper, connection, target):
-    target.password_created = datetime.datetime.utcnow()
-    connection.execute(
-        update(User)
-        .values(password_created=datetime.datetime.utcnow())
-        .where(User.id == target.id)
-    )
+    target.password_created = datetime.utcnow()
+
 
 @event.listens_for(User, 'before_update', propagate=True)
 def check_password_expiry(mapper, connection, target):
     if target.password_created and (
-            datetime.datetime.utcnow() - target.password_created).days > 90:
+            datetime.now() - target.password_created).days > 90:
         target.is_active = False
-        connection.execute(
-            update(User)
-            .values(is_active=False)
-            .where(User.id == target.id)
-        )
     else:
-        connection.execute(
-            update(User)
-            .values(is_active=True)
-            .where(User.id == target.id)
-        )
-
+        target.is_active = True

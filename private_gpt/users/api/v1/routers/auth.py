@@ -29,6 +29,7 @@ def register_user(
     password: str,
     company: Optional[models.Company] = None,
     department: Optional[models.Department] = None,
+    role: Optional[str] = None,
 ) -> models.User:
     """
     Register a new user in the database.
@@ -37,16 +38,17 @@ def register_user(
     user_in = schemas.UserCreate(
             email=email,
             password=password,
-            fullname=fullname,
+            username=fullname,
             company_id=company.id,
             department_id=department.id,
+            checker= True if role == 'OPERATOR' else False
         )    
-    try:
-        send_registration_email(fullname, email, password)
-    except Exception as e:
-        logging.info(f"Failed to send registration email: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to send registration email.")
+    # try:
+    #     send_registration_email(fullname, email, password)
+    # except Exception as e:
+    #     logging.info(f"Failed to send registration email: {str(e)}")
+    #     raise HTTPException(
+    #         status_code=500, detail=f"Failed to send registration email.")
     return crud.user.create(db, obj_in=user_in)
 
 
@@ -82,7 +84,7 @@ def create_token_payload(user: models.User, user_role: models.UserRole) -> dict:
         "id": str(user.id),
         "email": str(user.email),
         "role": user_role.role.name,
-        "username": str(user.fullname),
+        "username": str(user.username),
         "company_id": user_role.company.id if user_role.company else None,
         "department_id": user.department_id
     }
@@ -97,7 +99,7 @@ def ad_user_register(
     """
     Register a new user in the database. Company id is directly given here.
     """
-    user_in = schemas.UserCreate(email=email, password=password, fullname=fullname, company_id=1, department_id=department_id)
+    user_in = schemas.UserCreate(email=email, password=password, username=fullname, company_id=1, department_id=department_id, checker=False)
     user = crud.user.create(db, obj_in=user_in)
     user_role_name = Role.GUEST["name"]
     company = crud.company.get(db, 1)
@@ -173,7 +175,7 @@ def login_access_token(
     token_payload = {
         "id": str(user.id),
         "email": str(user.email),
-        "username": str(user.fullname),
+        "username": str(user.username),
         "role": role,
         "company_id": company_id,
         "department_id": str(user.department_id),
@@ -230,15 +232,15 @@ def register(
     email: str = Body(...),
     fullname: str = Body(...),
     # password: str = Body(...),
-    company_id: int = Body(None, title="Company ID",
-                           description="Company ID for the user (if applicable)"),
     department_id: int = Body(None, title="Department ID",
                                 description="Department name for the user (if applicable)"),
     role_name: str = Body(None, title="Role Name",
                           description="User role name (if applicable)"),
     current_user: models.User = Security(
         deps.get_current_active_user,
-        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"]],
+        scopes=[Role.ADMIN["name"], 
+                Role.SUPER_ADMIN["name"],
+                Role.OPERATOR["name"]],
     ),
 ) -> Any:
     """
@@ -258,7 +260,10 @@ def register(
             detail="The user with this email already exists!",
         )
     random_password = security.generate_random_password()
+    # random_password = password
+    
     try:
+        company_id = current_user.company_id
         if company_id:
             company = crud.company.get(db, company_id)
             if not company:
@@ -276,24 +281,25 @@ def register(
                     )
                 logging.info(f"Department is {department}")
             user = register_user(
-                db, email, fullname, random_password, company, department
+                db, email, fullname, random_password, company, department, role_name
             )
             user_role_name = role_name or Role.GUEST["name"]
             user_role = create_user_role(db, user, user_role_name, company)
-            log_audit(model='user_roles', action='creation',
+            log_audit(model='user_roles', action='create',
                       details={'detail': "User role created successfully.", }, user_id=current_user.id)
+            
     except Exception as e:
         print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail="Unable to create account.",
         )
+    
     token_payload = create_token_payload(user, user_role)
     response_dict = {
         "access_token": security.create_access_token(token_payload, expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)),
         "refresh_token": security.create_refresh_token(token_payload, expires_delta=timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)),
         "token_type": "bearer",
-        "password": random_password,
     }
     log_audit(model='User', action='creation',
               details={'detail': "User created successfully.",'username':fullname}, user_id=current_user.id)

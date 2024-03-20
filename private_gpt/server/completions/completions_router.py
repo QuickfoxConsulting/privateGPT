@@ -99,6 +99,13 @@ class CompletionsBody(BaseModel):
     summary="Completion",
     responses={200: {"model": OpenAICompletion}},
     tags=["Contextual Completions"],
+    openapi_extra={
+        "x-fern-streaming": {
+            "stream-condition": "stream",
+            "response": {"$ref": "#/components/schemas/OpenAICompletion"},
+            "response-stream": {"$ref": "#/components/schemas/OpenAICompletion"},
+        }
+    },
 )
 async def prompt_completion(
     request: Request,
@@ -155,7 +162,7 @@ async def prompt_completion(
         action='Chat',
         details={
             "query": body.prompt,
-            'user': current_user.fullname,
+            'user': current_user.username,
             }, 
         user_id=current_user.id
     )
