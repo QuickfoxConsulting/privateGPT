@@ -42,7 +42,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
     def get_enabled_documents_by_departments(
             self, db: Session, *, department_id: int, skip: int = 0, limit: int = 100
         ) -> List[Document]:
-            all_department_id = 4  # department ID for "ALL" is 4
+            all_department_id = 6  # department ID for "ALL" is 4
 
             return (
                 db.query(self.model)

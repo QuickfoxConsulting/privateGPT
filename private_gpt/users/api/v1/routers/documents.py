@@ -269,7 +269,7 @@ async def upload_documents(
 @router.post('/verify')
 async def verify_documents(
     request: Request,
-    checker_in: schemas.DocumentUpdate = Depends(),
+    checker_in: schemas.DocumentUpdate,
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
@@ -293,7 +293,7 @@ async def verify_documents(
             checker = schemas.DocumentCheckerUpdate(
                     action_type=MakerCheckerActionType.UPDATE,
                     status=MakerCheckerStatus.APPROVED,
-                    is_enabled=checker_in.is_enabled,
+                    is_enabled=False,
                     verified_at=datetime.now(),
                     verified_by=current_user.id,
                 )

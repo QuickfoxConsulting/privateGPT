@@ -16,7 +16,7 @@ class DocumentCreate(DocumentsBase):
 class DocumentUpdate(BaseModel):
     id: int
     status: str
-    is_enabled: bool
+    # is_enabled: bool = False
 
 class DocumentEnable(BaseModel):
     id: int
