@@ -113,7 +113,7 @@ def login_access_token(
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     db: Session = Depends(deps.get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
-    # active_subscription: models.Subscription = Depends(deps.get_active_subscription)
+    active_subscription: models.Subscription = Depends(deps.get_active_subscription)
 ) -> Any:
     """
     OAuth2 compatible token login, get an access token for future requests
@@ -123,7 +123,7 @@ def login_access_token(
             existing_user = crud.user.get_by_email(db, email=form_data.username)
             
             if existing_user:
-                if existing_user.user_role.role.name == "SUPER_ADMIN":
+                if existing_user.user_role.role.name == "SUPER_ADMIN" or existing_user.user_role.role.name == "OPERATOR":
                     return existing_user
                 else:
                     username, department = ldap_login(db=db, username=form_data.username, password=form_data.password)

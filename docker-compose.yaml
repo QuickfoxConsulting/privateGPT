@@ -6,11 +6,11 @@ services:
       - ./local_data/:/home/worker/app/local_data
       - ./models/:/home/worker/app/models
     ports:
-      - 8000:8000
+      - 8001:8080
     environment:
-      PORT: 8000
+      PORT: 8080
       PGPT_PROFILES: docker
-      PGPT_MODE: local
+      PGPT_MODE: llamacpp
 
     env_file:
       - .env
