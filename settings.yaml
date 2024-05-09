@@ -37,11 +37,11 @@ ui:
 
 llm:
   mode: llamacpp
-  prompt_style: "chatml"
+  prompt_style: "llama3"
   # Should be matching the selected model
-  max_new_tokens: 512
-  context_window: 3900
-  tokenizer: mistralai/Mistral-7B-Instruct-v0.2
+  max_new_tokens: 8192
+  context_window: 8192
+  tokenizer: meta-llama/Meta-Llama-3-8B-Instruct
   temperature: 0.1      # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 
 rag:
@@ -55,8 +55,8 @@ rag:
     top_n: 2
 
 llamacpp:
-  llm_hf_repo_id: TheBloke/OpenHermes-2.5-Mistral-7B-GGUF
-  llm_hf_model_file: openhermes-2.5-mistral-7b.Q5_K_M.gguf
+  llm_hf_repo_id: bartowski/Llama-3-ChatQA-1.5-8B-GGUF
+  llm_hf_model_file: ChatQA-1.5-8B-Q6_K.gguf
   tfs_z: 1.0            # Tail free sampling is used to reduce the impact of less probable tokens from the output. A higher value (e.g., 2.0) will reduce the impact more, while a value of 1.0 disables this setting
   top_k: 40             # Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative. (Default: 40)
   top_p: 0.9            # Works together with top-k. A higher value (e.g., 0.95) will lead to more diverse text, while a lower value (e.g., 0.5) will generate more focused and conservative text. (Default: 0.9)
@@ -70,7 +70,7 @@ embedding:
   embed_dim: 384 # 384 is for BAAI/bge-small-en-v1.5
 
 huggingface:
-  embedding_hf_model_name: mixedbread-ai/mxbai-embed-large-v1
+  embedding_hf_model_name: Alibaba-NLP/gte-large-en-v1.5
   access_token: ${HUGGINGFACE_TOKEN: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}
 
 vectorstore:
