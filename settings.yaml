@@ -37,7 +37,7 @@ ui:
 
 llm:
   mode: llamacpp
-  prompt_style: "llama3"
+  prompt_style: "llama-3"
   # Should be matching the selected model
   max_new_tokens: 8192
   context_window: 8192
@@ -70,7 +70,7 @@ embedding:
   embed_dim: 384 # 384 is for BAAI/bge-small-en-v1.5
 
 huggingface:
-  embedding_hf_model_name: Alibaba-NLP/gte-large-en-v1.5
+  embedding_hf_model_name: Snowflake/snowflake-arctic-embed-l
   access_token: ${HUGGINGFACE_TOKEN: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}
 
 vectorstore:

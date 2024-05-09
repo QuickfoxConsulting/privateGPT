@@ -208,6 +208,7 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
+        print("Wrapped response: ", wrapped_response)
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
