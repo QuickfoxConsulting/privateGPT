@@ -8,7 +8,7 @@ llm:
   max_new_tokens: 512
   context_window: 3900
   tokenizer: mistralai/Mistral-7B-Instruct-v0.2
-  prompt_style: "mistral"
+  prompt_style: "chatml"
 
 llamacpp:
   llm_hf_repo_id: TheBloke/OpenHermes-2.5-Mistral-7B-GGUF
