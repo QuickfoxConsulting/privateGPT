@@ -31,6 +31,7 @@ class BaseIngestComponent(abc.ABC):
         self,
         storage_context: StorageContext,
         embed_model: EmbedType,
+        llm,
         transformations: list[TransformComponent],
         *args: Any,
         **kwargs: Any,
@@ -39,6 +40,7 @@ class BaseIngestComponent(abc.ABC):
         self.storage_context = storage_context
         self.embed_model = embed_model
         self.transformations = transformations
+        self.llm = llm
 
     @abc.abstractmethod
     def ingest(self, file_name: str, file_data: Path) -> list[Document]:
@@ -58,11 +60,12 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
         self,
         storage_context: StorageContext,
         embed_model: EmbedType,
+        llm,
         transformations: list[TransformComponent],
         *args: Any,
         **kwargs: Any,
     ) -> None:
-        super().__init__(storage_context, embed_model, transformations, *args, **kwargs)
+        super().__init__(storage_context, embed_model, llm, transformations, *args, **kwargs)
 
         self.show_progress = True
         self._index_thread_lock = (
@@ -100,7 +103,7 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
             store_nodes_override=True,  # Force store nodes in index and document stores
             show_progress=self.show_progress,
             transformations=self.transformations,
-            llm= 
+            llm= self.llm
         )
         # Store the keyword index in the vector store
         index.keyword_index = keyword_index
@@ -495,6 +498,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
 def get_ingestion_component(
     storage_context: StorageContext,
     embed_model: EmbedType,
+    llm,
     transformations: list[TransformComponent],
     settings: Settings,
 ) -> BaseIngestComponent:
@@ -504,6 +508,7 @@ def get_ingestion_component(
         return BatchIngestComponent(
             storage_context=storage_context,
             embed_model=embed_model,
+            llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
         )
@@ -511,6 +516,7 @@ def get_ingestion_component(
         return ParallelizedIngestComponent(
             storage_context=storage_context,
             embed_model=embed_model,
+            llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
         )
@@ -518,6 +524,7 @@ def get_ingestion_component(
         return PipelineIngestComponent(
             storage_context=storage_context,
             embed_model=embed_model,
+            llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
         )
@@ -525,5 +532,6 @@ def get_ingestion_component(
         return SimpleIngestComponent(
             storage_context=storage_context,
             embed_model=embed_model,
+            llm=llm,
             transformations=transformations,
         )
