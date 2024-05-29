@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
 @singleton
 class IngestService:
     @inject

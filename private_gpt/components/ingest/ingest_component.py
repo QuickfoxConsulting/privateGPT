@@ -32,6 +32,7 @@ class BaseIngestComponent(abc.ABC):
         storage_context: StorageContext,
         embed_model: EmbedType,
         llm,
+        llm,
         transformations: list[TransformComponent],
         *args: Any,
         **kwargs: Any,
@@ -40,6 +41,7 @@ class BaseIngestComponent(abc.ABC):
         self.storage_context = storage_context
         self.embed_model = embed_model
         self.transformations = transformations
+        self.llm = llm
         self.llm = llm
 
     @abc.abstractmethod
@@ -60,6 +62,7 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
         self,
         storage_context: StorageContext,
         embed_model: EmbedType,
+        llm,
         llm,
         transformations: list[TransformComponent],
         *args: Any,
@@ -501,6 +504,7 @@ def get_ingestion_component(
     storage_context: StorageContext,
     embed_model: EmbedType,
     llm,
+    llm,
     transformations: list[TransformComponent],
     settings: Settings,
 ) -> BaseIngestComponent:
@@ -511,6 +515,7 @@ def get_ingestion_component(
             storage_context=storage_context,
             embed_model=embed_model,
             llm=llm,
+            llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
         )
@@ -518,6 +523,7 @@ def get_ingestion_component(
         return ParallelizedIngestComponent(
             storage_context=storage_context,
             embed_model=embed_model,
+            llm=llm,
             llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
@@ -527,6 +533,7 @@ def get_ingestion_component(
             storage_context=storage_context,
             embed_model=embed_model,
             llm=llm,
+            llm=llm,
             transformations=transformations,
             count_workers=settings.embedding.count_workers,
         )
@@ -535,5 +542,6 @@ def get_ingestion_component(
             storage_context=storage_context,
             llm=llm,
             embed_model=embed_model,
+            llm=llm,
             transformations=transformations,
         )
