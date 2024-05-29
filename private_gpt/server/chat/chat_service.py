@@ -100,7 +100,7 @@ class ChatService:
             show_progress=True,
         )
         self.keyword_index = SimpleKeywordTableIndex.from_documents(
-            vector_store_component.vector_store,
+            vector_store_component.vector_store.keyword_index,
             storage_context=self.storage_context,
             embed_model=embedding_component.embedding_model,
             show_progress=True,
