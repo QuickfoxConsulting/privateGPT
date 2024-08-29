@@ -18,15 +18,13 @@ from private_gpt.components.vector_store.vector_store_component import (
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.settings.settings import settings
 
+
 if TYPE_CHECKING:
     from llama_index.core.storage.docstore.types import RefDocInfo
 
 logger = logging.getLogger(__name__)
 
-from langchain.text_splitter import MarkdownTextSplitter
-from llama_index.core.node_parser import LangchainNodeParser
-
-DEFAULT_CHUNK_SIZE = 384
+DEFAULT_CHUNK_SIZE = 520
 SENTENCE_CHUNK_OVERLAP = 50
 
 class SafeSemanticSplitter(SemanticSplitterNodeParser):
@@ -69,13 +67,6 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )       
-        # node_parser = LangchainNodeParser(
-        #     MarkdownTextSplitter(
-        #         chunk_size=DEFAULT_CHUNK_SIZE, 
-        #         chunk_overlap=SENTENCE_CHUNK_OVERLAP,
-        #         separators=["\n## ", "\n### ", "\n#### ", "\n##### ", "\n###### ", "\n", " ", ""]
-        #     ))
-        # nodes = parser.get_nodes_from_documents(nodes)
         node_parser = SafeSemanticSplitter.from_defaults(
             embed_model=embedding_component.embedding_model,
             breakpoint_percentile_threshold=95,
@@ -93,7 +84,6 @@ class IngestService:
             transformations=[
                 node_parser,
                 embedding_component.embedding_model,
-                # SummaryExtractor(llm=self.llm_service.llm)
             ],
             settings=settings(),
         )

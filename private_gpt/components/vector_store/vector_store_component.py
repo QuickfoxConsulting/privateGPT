@@ -13,7 +13,7 @@ from llama_index.core.vector_stores.types import (
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
 from private_gpt.paths import local_data_path
 from private_gpt.settings.settings import Settings
-from .hybrid_fn import sparse_query_vectors, sparse_doc_vectors, relative_score_fusion
+from .hybrid_fn import sparse_query_vectors, sparse_doc_vectors, relative_score_fusion_with_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,6 @@ class VectorStoreComponent:
         context_filter: ContextFilter | None = None,
         similarity_top_k: int = 2,
     ) -> VectorIndexRetriever:
-        # This way we support qdrant (using doc_ids) and the rest (using filters)
         return VectorIndexRetriever(
             index=index,
             similarity_top_k=similarity_top_k,
@@ -153,7 +152,8 @@ class VectorStoreComponent:
             ),
             sparse_top_k=12, 
             vector_store_query_mode="hybrid",
-            alpha=0.5
+            alpha=0.5,
+            vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
         )
 
     def close(self) -> None:

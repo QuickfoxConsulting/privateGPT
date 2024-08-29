@@ -63,11 +63,14 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
         )
     
     def get_enabled_documents_by_departments(
-            self, db: Session, *, department_id: int
-        ) -> List[Document]:
-        all_department_id = ALL_DEPARTMENT 
-
-        return (
+        self,
+        db: Session,
+        *,
+        department_id: int,
+        category_ids: Optional[List[int]] = None
+    ) -> List[Document]:
+        all_department_id = ALL_DEPARTMENT
+        query = (
             db.query(self.model)
             .join(document_department_association)
             .join(Department)
@@ -84,8 +87,13 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
                     ),
                 )
             )
-            .all()
         )
+        if category_ids:
+            query = query.join(document_category_association).filter(
+                document_category_association.c.category_id.in_(category_ids)
+            )
+
+        return query.all()
 
     def get_documents_by_categories(
             self, db: Session, *, category_id: int

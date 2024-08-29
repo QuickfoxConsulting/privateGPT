@@ -50,6 +50,8 @@ class DocumentMakerChecker(DocumentCreate):
     action_type: str
     status: str
     doc_type_id: int
+    version_type: Optional[str]
+    previous_document_id: Optional[int]
 
 class DocumentMakerCreate(DocumentMakerChecker):
     pass
@@ -68,6 +70,8 @@ class DocumentDepartmentList(BaseModel):
     doc_type_id: int = Form(...)
     category: int = Form(...)
     file: UploadFile = File(...)
+    version_type: str = Form(...)  
+    previous_document_id: Optional[int] = Form(None) 
 
 
 class DocumentView(BaseModel):

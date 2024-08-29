@@ -18,7 +18,7 @@ from llama_index.core.types import TokenGen
 from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
-from llama_index.core.query_engine import RetrieverQueryEngine, CitationQueryEngine
+from llama_index.core.query_engine import RetrieverQueryEngine
 
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.llm.llm_component import LLMComponent
@@ -31,6 +31,12 @@ from private_gpt.server.chunks.chunks_service import Chunk
 from private_gpt.settings.settings import Settings
 
 from private_gpt.paths import models_path
+
+from typing import List, Optional
+from llama_index.core import QueryBundle
+from llama_index.core.schema import NodeWithScore
+
+
 class Completion(BaseModel):
     response: str
     sources: list[Chunk] | None = None
@@ -56,6 +62,26 @@ CONDENSE_PROMPT_TEMPLATE = """
 
     Standalone Query:"""
 
+class SimilarityPostprocessorWithAtLeastOneResult(SimilarityPostprocessor):
+    """Similarity-based Node processor. Return always one result if result is empty"""
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "SimilarityPostprocessorWithAtLeastOneResult"
+
+    def _postprocess_nodes(
+        self,
+        nodes: List[NodeWithScore],
+        query_bundle: Optional[QueryBundle] = None,
+    ) -> List[NodeWithScore]:
+        """Postprocess nodes."""
+        # Call parent class's _postprocess_nodes method first
+        new_nodes = super()._postprocess_nodes(nodes, query_bundle)
+
+        if not new_nodes:  # If the result is empty
+            return [max(nodes, key=lambda x: x.score)] if nodes else []
+
+        return new_nodes
 
 @dataclass
 class ChatEngineInput:
@@ -133,14 +159,17 @@ class ChatService:
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
-                    similarity_cutoff=settings.rag.similarity_value
+                    similarity_cutoff=settings.rag.similarity_value,
+                    filter_empty=True,
+                    filter_duplicates=True,
+                    filter_similar=True
                 ),
             ]
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
                     llm=self.llm_component.llm, 
                     top_n=settings.rag.rerank.top_n,
-                    verbose=True
+                    # verbose=True
                 )
                 # rerank_postprocessor = SentenceTransformerRerank(
                 #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
@@ -149,21 +178,14 @@ class ChatService:
             
             response_synthesizer = get_response_synthesizer(
                 response_mode="tree_summarize", 
-                llm=self.llm_component.llm
+                llm=self.llm_component.llm,
+                # structured_answer_filtering=True
             )
             
             custom_query_engine = RetrieverQueryEngine(
                 retriever=vector_index_retriever,
                 response_synthesizer=response_synthesizer
             )
-            # custom_query_engine = CitationQueryEngine.from_args(
-            #     index=self.index,
-            #     similarity_top_k=3,
-            #     # here we can control how granular citation sources are, the default is 512
-            #     citation_chunk_size=512,
-            #     response_synthesizer=response_synthesizer,
-            #     llm = self.llm_component.llm
-            # )
             
             return ContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -226,27 +248,42 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-        system_prompt = """
-            You are a helpful AI assistant named QuickGPT, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
+        # system_prompt = """
+        #     You are a helpful AI assistant named QuickGPT, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
 
-            Please adhere to the following guidelines:
+        #     Please adhere to the following guidelines:
 
-            1. Answer questions truthfully based only on the provided context documents.
-            2. For each document, check whether it is related to the question. Only use relevant documents to answer.
-            3. Ignore documents that are not related to the question.
-            4. If the answer exists in several documents, summarize the information from all relevant sources.
-            5. Do not make up information or use external knowledge. Only answer based on the provided documents.
-            6. Always use references in the form [NUMBER] when citing information from a document, e.g., [3] for the third document.
-            7. The reference should only include the document number in square brackets.
-            8. Provide comprehensive answers, but ensure they are concise and directly relevant to the question asked.
-            9. If the documents cannot answer the question or you are unsure, state: "The answer cannot be found in the provided context."
-            10. If more specific information is needed to answer the question, you may ask the user to provide a more specific query.
+        #     1. Answer questions truthfully based only on the provided context documents.
+        #     2. For each document, check whether it is related to the question. Only use relevant documents to answer.
+        #     3. Ignore documents that are not related to the question.
+        #     4. If the answer exists in several documents, summarize the information from all relevant sources.
+        #     5. Do not make up information or use external knowledge. Only answer based on the provided documents.
+        #     6. Always use references in the form [NUMBER] when citing information from a document, e.g., [3] for the third document.
+        #     7. The reference should only include the document number in square brackets.
+        #     8. Provide comprehensive answers, but ensure they are concise and directly relevant to the question asked.
+        #     9. If the documents cannot answer the question or you are unsure, state: "The answer cannot be found in the provided context."
+        #     10. If more specific information is needed to answer the question, you may ask the user to provide a more specific query.
+
+        #     Context documents:
+        #     {context_str}
+
+        #     Your task is to provide detailed answers to user questions based exclusively on the above documents. Remember, if the information isn't in the context, simply state that you don't know or cannot find the answer in the provided information.
+        #     """
+        system_prompt = (
+            """
+            You are QuickGPT, an AI assistant created by Quickfox Consulting. 
+            Your sole purpose is to provide answers based strictly on the given context documents.
+            Adhere to these rules without exception:
+            1. Use ONLY the information in the provided context and not prior knowledge, answer the question.
+            2. If the exact answer is not in the context, state "I don't have enough information to answer that question."
+            3. If asked about topics not covered in the context, respond with "That topic is not covered in the available information."
 
             Context documents:
             {context_str}
 
-            Your task is to provide detailed answers to user questions based exclusively on the above documents. Remember, if the information isn't in the context, simply state that you don't know or cannot find the answer in the provided information.
+            Your responses must be based exclusively on the above documents. Do not deviate from this context under any circumstances.
             """
+        )
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -260,13 +297,13 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        print("---------------------------------------------------------")
-        for node in wrapped_response.source_nodes:
-            print("*********************************************")
-            print(node)
-            print("*********************************************")
-            # print(Chunk.from_node(node))
-        print("---------------------------------------------------------")
+        # print("---------------------------------------------------------")
+        # for node in wrapped_response.source_nodes:
+        #     print("*********************************************")
+        #     print(node)
+        #     print("*********************************************")
+        #     # print(Chunk.from_node(node))
+        # print("---------------------------------------------------------")
 
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)

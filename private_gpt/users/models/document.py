@@ -22,6 +22,10 @@ class MakerCheckerActionType(PythonEnum):
     UPDATE = 'UPDATE'
     DELETE = 'DELETE'
 
+class VersionType(PythonEnum):
+    NEW = 'NEW'
+    AMENDMENT = 'AMENDMENT'
+
 class DocumentType(Base):
     """Models a document table"""
     __tablename__ = "document_type"
@@ -70,44 +74,46 @@ class Document(Base):
         secondary=document_department_association,
         back_populates="documents"
     )
-
-    # cateogry
     categories = relationship(
         "Category",
         secondary=document_category_association,
         back_populates="documents"
     )
-    
+    version_type = Column(Enum(VersionType), nullable=False, default=VersionType.NEW) # 'new', 'amendment'
+    previous_document_id = Column(Integer, ForeignKey("document.id"), nullable=True)
+    previous_document = relationship("Document", remote_side=[id], backref="next_documents")
 
 
-
-# def get_associated_department(db: Session, document_id: int) -> list:
-#     print(db.query(document_department_association.c.department_id).all())
-#     print("DOcument:", document_id)
-#     associated_departments = db.query(document_department_association).filter(
+# def get_associated_department_ids(session: Session, document_id: int) -> list:
+#     """Get the department IDs associated with a given document."""
+#     department_ids = session.query(document_department_association.c.department_id).filter(
 #         document_department_association.c.document_id == document_id
 #     ).all()
-#     print("HELLO",associated_departments)
-#     associated_departments_ids = [department.id for department in associated_departments]
-
-#     return associated_departments_ids
-
+    
+#     # Flatten the list of tuples returned by the query
+#     return [dept_id for dept_id, in department_ids]
 
 # @event.listens_for(Document, 'after_insert')
 # @event.listens_for(Document, 'after_delete')
 # def update_total_documents(mapper, connection, target):
-#     session = Session(connection)
-#     print("Session object: ", session)
-#     # Get the department IDs associated with the target document
-#     associated_department_ids = get_associated_department(session, target.id)
-#     print('Department: ', associated_department_ids)
+#     session = Session(bind=connection)
+#     try:
+#         # Get the department IDs associated with the target document
+#         associated_department_ids = get_associated_department_ids(session, target.id)
         
-#     # Update total_documents for each associated department
-#     for department_id in associated_department_ids:
-#         department = session.query(Department).get(department_id)
-#         department.total_documents = session.query(func.count()).select_from(document_department_association).filter(
-#             document_department_association.document_id
-#         ).scalar()
-    
-#     session.commit()
-#     session.close()
+#         # Update total_documents for each associated department
+#         for department_id in associated_department_ids:
+#             total_documents = session.query(func.count()).select_from(document_department_association).filter(
+#                 document_department_association.c.department_id == department_id
+#             ).scalar()
+            
+#             department = session.query(Department).get(department_id)
+#             if department:
+#                 department.total_documents = total_documents
+        
+#         session.commit()
+#     except Exception as e:
+#         session.rollback()
+#         raise
+#     finally:
+#         session.close()

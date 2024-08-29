@@ -4,7 +4,7 @@ import traceback
 
 import aiofiles
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
@@ -188,35 +188,51 @@ async def create_documents(
     current_user: models.User = None,
     departments: schemas.DocumentDepartmentList = Depends(),
     log_audit: models.Audit = None,
+    version_type: str = "NEW",
+    previous_document_id: Optional[int] = None,
 ):
     """
-    Create documents in the `Document` table and update the \n
-    Document Department Association` table with the departments ids for the documents.
+    Create documents in the `Document` table and update the
+    `Document Department Association` table with the department IDs for the documents.
     """
     department_ids = departments.departments_ids
-    file_ingested = crud.documents.get_by_filename(
-        db, file_name=file_name)
+    file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
     if file_ingested:
         raise HTTPException(
             status_code=409,
             detail="File already exists. Choose a different file.",
         )
+
     print(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
+
     docs_in = schemas.DocumentMakerCreate(
         filename=file_name, 
         uploaded_by=current_user.id, 
         action_type=MakerCheckerActionType.INSERT,
         status=MakerCheckerStatus.PENDING,
         doc_type_id=departments.doc_type_id,
+        version_type=version_type,
+        previous_document_id=previous_document_id,
     )
+    
     document = crud.documents.create(db=db, obj_in=docs_in)
     department_ids = department_ids if department_ids else "1"
     department_ids = [int(number) for number in department_ids.split(",")]
+
     for department_id in department_ids:
-        db.execute(models.document_department_association.insert().values(document_id=document.id, department_id=department_id))
+        db.execute(
+            models.document_department_association.insert().values(
+                document_id=document.id, 
+                department_id=department_id
+            )
+        )
     if category:  
-        db.execute(models.document_category_association.insert().values(document_id=document.id, category_id=category))
-    
+        db.execute(
+            models.document_category_association.insert().values(
+                document_id=document.id, 
+                category_id=category
+            )
+        )
     log_audit(
         model='Document', 
         action='create',
@@ -224,54 +240,13 @@ async def create_documents(
             'filename': f"{file_name}", 
             'user': f"{current_user.username}",
             'departments': f"{department_ids}",
-            'categories': f"{category}"
+            'categories': f"{category}",
+            'version_type': f"{version_type}",
+            'previous_document_id': f"{previous_document_id}" if previous_document_id else "None"
         }, 
         user_id=current_user.id
     )
     return document
-
-
-async def common_ingest_logic(
-    request: Request,
-    db: Session,
-    ocr_file,
-    original_file: str = None,
-    current_user: models.User = None,
-    departments: schemas.DocumentDepartmentList = Depends(),
-    log_audit: models.Audit = None,
-):
-    service = request.state.injector.get(IngestService)
-    try:
-        with open(ocr_file, 'rb') as file:
-            file_name = Path(ocr_file).name
-            upload_path = Path(f"{UPLOAD_DIR}/{file_name}")
-
-            if file_name is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No file name provided",
-                )
-
-            await create_documents(db, file_name, current_user, departments, log_audit)
-            with open(upload_path, "wb") as f:
-                f.write(file.read())
-            file.seek(0)  
-            ingested_documents = service.ingest_bin_data(file_name, file)        
-        logger.info(
-            f"{file_name} is uploaded by the {current_user.username}.")
-
-        return ingested_documents
-
-    except HTTPException:
-        print(traceback.print_exc())
-        raise
-
-    except Exception as e:
-        print(traceback.print_exc())
-        raise HTTPException(
-            status_code=500,
-            detail="Internal Server Error: Unable to ingest file.",
-        )
 
 
 async def ingest(request: Request, file_path: str) -> IngestResponse:

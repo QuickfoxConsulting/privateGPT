@@ -387,32 +387,59 @@ async def upload_documents(
         file = departments.file
         original_filename = file.filename
         category = departments.category
+        version_type = departments.version_type
+        previous_document_id = departments.previous_document_id
+
         if original_filename is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No file name provided",
             )
+
+        # Define the upload path for the file
         upload_path = Path(f"{UNCHECKED_DIR}/{original_filename}")
+
         try:
+            # Save the file to the specified upload path
             contents = await file.read()
             async with aiofiles.open(upload_path, 'wb') as f:
                 await f.write(contents)
-
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal Server Error: Unable to ingest file.",
             )
-        document = await create_documents(db, original_filename, category, current_user, departments, log_audit)
+
+        # Create a new document record in the database
+        document = await create_documents(
+            db=db,
+            file_name=original_filename,
+            category=category,
+            current_user=current_user,
+            departments=departments,
+            log_audit=log_audit,
+            version_type=version_type,
+            previous_document_id=previous_document_id
+        )
+
         logger.info(
-            f"{original_filename} is uploaded by {current_user.username} in {departments.departments_ids}")
-        
+            f"{original_filename} uploaded by {current_user.username} in {departments.departments_ids} as a {version_type} document."
+        )
+
+        # If Maker-Checker is disabled, automatically approve the document
         if not ENABLE_MAKER_CHECKER:
             checker_in = schemas.DocumentUpdate(
                 id=document.id,
                 status=MakerCheckerStatus.APPROVED.value
             )
-            await verify_documents(request=request, checker_in=checker_in, db=db, log_audit=log_audit, current_user=current_user)
+            await verify_documents(
+                request=request,
+                checker_in=checker_in,
+                db=db,
+                log_audit=log_audit,
+                current_user=current_user
+            )
+
         return document
 
     except HTTPException:
@@ -497,7 +524,6 @@ async def verify_documents(
                 return await process_ocr(request, unchecked_path)
             else:
                 return await ingest(request, unchecked_path) # For pdf
-            
             
         elif checker_in.status == MakerCheckerStatus.REJECTED.value:
             checker = schemas.DocumentCheckerUpdate(
@@ -590,7 +616,6 @@ async def get_documents(
         raise HTTPException(status_code=500, detail="Internal server error")
     
 
-
 @router.post('/document_update', response_model=schemas.DocumentList)
 def update_document_associations(
     request: Request,
@@ -603,7 +628,8 @@ def update_document_associations(
     )
 ):
     """
-    Update the department and category lists for the document
+    Update the department and category lists for the document.
+    Only updates the departments or categories if they are provided.
     """
     try:
         document = crud.documents.get_by_filename(db, file_name=document_in.filename)
@@ -612,18 +638,25 @@ def update_document_associations(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Document with this filename doesn't exist!",
             )
+
         old_departments = [dept.id for dept in document.departments]
-        document.departments = []
-        for department_id in document_in.departments:
-            department = db.query(models.Department).get(department_id)
-            if department:
-                document.departments.append(department)
         old_categories = [cat.id for cat in document.categories]
-        document.categories = []
-        for category_id in document_in.categories:
-            category = db.query(models.Category).get(category_id)
-            if category:
-                document.categories.append(category)
+
+        # Update departments only if provided
+        if document_in.departments is not None:
+            document.departments = []
+            for department_id in document_in.departments:
+                department = db.query(models.Department).get(department_id)
+                if department:
+                    document.departments.append(department)
+
+        # Update categories only if provided
+        if document_in.categories is not None:
+            document.categories = []
+            for category_id in document_in.categories:
+                category = db.query(models.Category).get(category_id)
+                if category:
+                    document.categories.append(category)
 
         db.commit()
 
@@ -632,8 +665,8 @@ def update_document_associations(
             action='update',
             details={
                 'detail': f'{document_in.filename} updated. '
-                          f'Departments: {old_departments} -> {document_in.departments}, '
-                          f'Categories: {old_categories} -> {document_in.categories}'
+                          f'Departments: {old_departments} -> {document_in.departments or old_departments}, '
+                          f'Categories: {old_categories} -> {document_in.categories or old_categories}'
             },
             user_id=current_user.id
         )
