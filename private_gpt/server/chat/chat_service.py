@@ -6,10 +6,9 @@ from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
 from llama_index.core.indices import VectorStoreIndex
-from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor
-from llama_index.core.llms import ChatMessage, MessageRole
+from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor
+from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
-    SentenceTransformerRerank,
     SimilarityPostprocessor,
     rankGPT_rerank
 )
@@ -75,10 +74,9 @@ class SimilarityPostprocessorWithAtLeastOneResult(SimilarityPostprocessor):
         query_bundle: Optional[QueryBundle] = None,
     ) -> List[NodeWithScore]:
         """Postprocess nodes."""
-        # Call parent class's _postprocess_nodes method first
         new_nodes = super()._postprocess_nodes(nodes, query_bundle)
 
-        if not new_nodes:  # If the result is empty
+        if not new_nodes: 
             return [max(nodes, key=lambda x: x.score)] if nodes else []
 
         return new_nodes
@@ -164,6 +162,7 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
+                TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(

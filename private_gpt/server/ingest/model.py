@@ -23,7 +23,7 @@ class IngestedDoc(BaseModel):
         for key in ["doc_id", "window", "original_text"]:
             metadata.pop(key, None)
         return metadata
-
+    
     @staticmethod
     def from_document(document: Document) -> "IngestedDoc":
         return IngestedDoc(

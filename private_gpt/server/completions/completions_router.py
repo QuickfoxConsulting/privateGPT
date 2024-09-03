@@ -150,7 +150,6 @@ async def prompt_completion(
     
     service = request.state.injector.get(IngestService)
     try:
-        print("TESTTTTTTTT")
         department = crud.department.get_by_id(
             db, id=current_user.department_id)
         if not department:
@@ -160,12 +159,11 @@ async def prompt_completion(
         documents = crud.documents.get_enabled_documents_by_departments(
             db, department_id=department.id, category_ids=body.category_id)
         
-        # if not documents:
-        #     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-        #                         detail=f"No documents uploaded for your department.")
+        if not documents:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail=f"No documents uploaded for your department. Please upload documents to chat.")
         
         docs_list = [document.filename for document in documents]
-        print("DOCUMENTS ENABLED ARE: ", docs_list)
         docs_ids = []
         for filename in docs_list:
             doc_id = service.get_doc_ids_by_filename(filename)

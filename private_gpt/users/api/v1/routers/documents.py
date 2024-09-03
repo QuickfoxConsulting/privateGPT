@@ -565,7 +565,7 @@ async def verify_documents(
         )
 
 
-@router.get('/filter', response_model=List[schemas.DocumentView])
+@router.get('/filter', response_model=Page[schemas.DocumentView])
 async def get_documents(
     document_filter: schemas.DocumentFilter = Depends(),
     db: Session = Depends(deps.get_db),
@@ -610,7 +610,7 @@ async def get_documents(
                 )
                 for doc in docs
             ]
-        return documents
+        return paginate(documents)
     except Exception as e:
         print(traceback.print_exc())
         raise HTTPException(status_code=500, detail="Internal server error")

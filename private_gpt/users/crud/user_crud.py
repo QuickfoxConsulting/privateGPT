@@ -47,8 +47,8 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
     def get_multi(
         self, db: Session,
     ) -> List[User]:
-        return db.query(self.model).all()
-
+        return db.query(self.model)
+    
     def authenticate(
         self, db: Session, *, email: str, password: str
     ) -> Optional[User]:
@@ -82,7 +82,6 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             .join(User.user_role)
             .filter(UserRole.company_id == company_id)
             .options(joinedload(User.user_role).joinedload(UserRole.role))
-            .all()
         )
 
     def get_by_name(self, db: Session, *, name: str) -> Optional[User]:

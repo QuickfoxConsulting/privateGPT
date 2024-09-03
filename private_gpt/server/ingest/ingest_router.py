@@ -252,7 +252,6 @@ async def create_documents(
 async def ingest(request: Request, file_path: str) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
-
     try:
         with open(file_path, 'rb') as file:
             file_name = Path(file_path).name
@@ -269,10 +268,7 @@ async def ingest(request: Request, file_path: str) -> IngestResponse:
 
     finally:
         upload_path.unlink(missing_ok=True)
-
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
-
-
 
 @ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
 async def ingest_file(

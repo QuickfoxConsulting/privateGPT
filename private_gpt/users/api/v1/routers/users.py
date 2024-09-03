@@ -37,24 +37,34 @@ def log_audit_user(
         print(traceback.format_exc())
 
 
+from fastapi import Query
+
 @router.get("", response_model=Page[schemas.User])
 def read_users(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,
-        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]], 
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
     ),
+    filter: str = Query(None, alias="filter"),  # Add a filter query parameter
 ) -> Any:
-    """                                 
-    Retrieve all users.
+    """
+    Retrieve all users with optional filtering.
     """
     role = current_user.user_role.role.name if current_user.user_role else None
-    if role == "ADMIN":
-        users = crud.user.get_by_department_id(db=db, department_id=current_user.department_id)
-    else:
-        users = crud.user.get_multi(db)
-    return paginate(users)
 
+    if role == "ADMIN":
+        users_query = crud.user.get_by_department_id(db=db, department_id=current_user.department_id)
+    else:
+        users_query = crud.user.get_multi(db)
+
+    if filter:
+        users_query = users_query.filter(
+            models.User.username.ilike(f"%{filter}%") |  
+            models.User.email.ilike(f"%{filter}%")
+        )
+
+    return paginate(users_query.all())
 
 @router.get("/company/{company_id}", response_model=Page[schemas.User])
 def read_users_by_company(
@@ -333,7 +343,7 @@ def admin_update_user(
                 )
 
         role = crud.role.get_by_name(db, name=user_update.role)
-        if (role.id == 1) or (role.id == 3): # role id for SUPER_ADMIN and OPERATOR 
+        if (role.id == 1): # role id for SUPER_ADMIN and OPERATOR 
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Cannot create SUPER ADMIN!",
