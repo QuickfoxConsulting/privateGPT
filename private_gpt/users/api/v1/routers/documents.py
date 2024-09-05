@@ -468,7 +468,7 @@ async def verify_documents(
             ],
     )
 ):
-    """Upload the documents."""
+    """Verify and Ingest the documents."""
     try:
         document = crud.documents.get_by_id(db, id=checker_in.id)
         if not document:
@@ -520,10 +520,12 @@ async def verify_documents(
                 user_id=current_user.id
             )
 
-            if document.doc_type_id == 2:  # For OCR
-                return await process_ocr(request, unchecked_path)
+            if document.doc_type_id == 2:
+                return await process_ocr(request, unchecked_path) # For Scanned using DocTR
+                # return await process_ocr(request, unchecked_path, True) # For Scanned with Marker (GPU Memory full)
             else:
                 return await ingest(request, unchecked_path) # For pdf
+                # return await process_ocr(request, unchecked_path, False) # For pdf with Marker (GPU Memory full)
             
         elif checker_in.status == MakerCheckerStatus.REJECTED.value:
             checker = schemas.DocumentCheckerUpdate(

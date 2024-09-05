@@ -1,15 +1,14 @@
 import os
 import logging
 import traceback
-
+import json
 import aiofiles
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
 
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File, status, Security, Body, Form
 from pydantic import BaseModel, Field
 
 from private_gpt.users import crud, models, schemas
@@ -34,6 +33,17 @@ class IngestTextBody(BaseModel):
             "Chinese martial arts."
         ]
     )
+    metadata: dict[str, Any] = Field(
+        None,
+        examples=[
+            {
+                "title": "Avatar: The Last Airbender",
+                "author": "Michael Dante DiMartino, Bryan Konietzko",
+                "year": "2005",
+            }
+        ],
+    )
+
 
 
 class IngestResponse(BaseModel):
@@ -54,9 +64,14 @@ class DeleteFilename(BaseModel):
 
 
 @ingest_router.post("/ingest/file1", tags=["Ingestion"])
-def ingest_file(request: Request, file: UploadFile = File(...)) -> IngestResponse:
+def ingest_file(request: Request, file: UploadFile = File(...),  metadata: str = Form(None)) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context.
-
+    
+    metadata: Optional metadata to be associated with the file.
+    You do not have to specify this field if not needed.
+    The metadata needs to be in JSON format.
+    e.g. {"title": "Avatar: The Last Airbender", "year": "2005"}
+    
     The context obtained from files is later used in
     `/chat/completions`, `/completions`, and `/chunks` APIs.
 
@@ -78,7 +93,8 @@ def ingest_file(request: Request, file: UploadFile = File(...)) -> IngestRespons
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
         with open(upload_path, "rb") as f:
-            ingested_documents = service.ingest_bin_data(file.filename, f)
+            metadata_dict = None if metadata is None else json.loads(metadata)
+            ingested_documents = service.ingest_bin_data(file.filename, f, metadata_dict)
     except Exception as e:
         return {"message": f"There was an error uploading the file(s)\n {e}"}
     finally:
@@ -102,7 +118,7 @@ def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
     service = request.state.injector.get(IngestService)
     if len(body.file_name) == 0:
         raise HTTPException(400, "No file name provided")
-    ingested_documents = service.ingest_text(body.file_name, body.text)
+    ingested_documents = service.ingest_text(body.file_name, body.text, body.metadata)
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 

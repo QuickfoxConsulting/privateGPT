@@ -40,7 +40,7 @@ class BaseIngestComponent(abc.ABC):
         self.transformations = transformations
 
     @abc.abstractmethod
-    def ingest(self, file_name: str, file_data: Path) -> list[Document]:
+    def ingest(self, file_name: str, file_data: Path, file_metadata: dict[str, Any]) -> list[Document]:
         pass
 
     @abc.abstractmethod
@@ -117,9 +117,11 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
     ) -> None:
         super().__init__(storage_context, embed_model, transformations, *args, **kwargs)
 
-    def ingest(self, file_name: str, file_data: Path) -> list[Document]:
+    def ingest(self, file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None,) -> list[Document]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = IngestionHelper.transform_file_into_documents(file_name, file_data)
+        documents = IngestionHelper.transform_file_into_documents(
+            file_name, file_data, file_metadata
+        )
         logger.info(
             "Transformed file=%s into count=%s documents", file_name, len(documents)
         )
@@ -175,9 +177,9 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
             processes=self.count_workers
         )
 
-    def ingest(self, file_name: str, file_data: Path) -> list[Document]:
+    def ingest(self, file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None,) -> list[Document]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = IngestionHelper.transform_file_into_documents(file_name, file_data)
+        documents = IngestionHelper.transform_file_into_documents(file_name, file_data, file_metadata)
         logger.info(
             "Transformed file=%s into count=%s documents", file_name, len(documents)
         )
@@ -257,12 +259,12 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
             processes=self.count_workers
         )
 
-    def ingest(self, file_name: str, file_data: Path) -> list[Document]:
+    def ingest(self, file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None,) -> list[Document]:
         logger.info("Ingesting file_name=%s", file_name)
         # Running in a single (1) process to release the current
         # thread, and take a dedicated CPU core for computation
         documents = self._file_to_documents_work_pool.apply(
-            IngestionHelper.transform_file_into_documents, (file_name, file_data)
+            IngestionHelper.transform_file_into_documents, (file_name, file_data, file_metadata)
         )
         logger.info(
             "Transformed file=%s into count=%s documents", file_name, len(documents)
@@ -459,8 +461,8 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         self.node_q.put(("flush", None, None, None))
         self.node_q.join()
 
-    def ingest(self, file_name: str, file_data: Path) -> list[Document]:
-        documents = IngestionHelper.transform_file_into_documents(file_name, file_data)
+    def ingest(self, file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None) -> list[Document]:
+        documents = IngestionHelper.transform_file_into_documents(file_name, file_data, file_metadata)
         self.doc_q.put(("process", file_name, documents))
         self._flush()
         return documents

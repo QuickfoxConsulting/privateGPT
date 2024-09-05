@@ -1,0 +1,286 @@
+{
+    "languages": null,
+    "filetype": "pdf",
+    "toc": [
+        {
+            "title": "Abstract",
+            "level": 0,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 0,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                604.6649780273438,
+                0.0
+            ]
+        },
+        {
+            "title": "1 Introduction",
+            "level": 0,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 0,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                494.41400146484375,
+                0.0
+            ]
+        },
+        {
+            "title": "2 Related Work",
+            "level": 0,
+            "is_closed": false,
+            "n_kids": 3,
+            "page_index": 1,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                665.9330444335938,
+                0.0
+            ]
+        },
+        {
+            "title": "2.1 Detection-based Methods",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 1,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                652.18798828125,
+                0.0
+            ]
+        },
+        {
+            "title": "2.2 Regression-based Methods",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 1,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                522.2030029296875,
+                0.0
+            ]
+        },
+        {
+            "title": "2.3 CNN-based Methods",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 1,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                405.0769958496094,
+                0.0
+            ]
+        },
+        {
+            "title": "3 Multi-column Mutual Learning",
+            "level": 0,
+            "is_closed": false,
+            "n_kids": 5,
+            "page_index": 2,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                464.9700012207031,
+                0.0
+            ]
+        },
+        {
+            "title": "3.1 Problem Formulation",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 2,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                399.1940002441406,
+                0.0
+            ]
+        },
+        {
+            "title": "3.2 Overview of McML",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 2,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                399.2610168457031,
+                0.0
+            ]
+        },
+        {
+            "title": "3.3 Mutual Information Estimation",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 3,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                473.2560119628906,
+                0.0
+            ]
+        },
+        {
+            "title": "3.4 Mutual Learning Scheme",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 4,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                298.4369812011719,
+                0.0
+            ]
+        },
+        {
+            "title": "3.5 Network Architectures",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 4,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                379.0220031738281,
+                0.0
+            ]
+        },
+        {
+            "title": "4 Experiment",
+            "level": 0,
+            "is_closed": false,
+            "n_kids": 4,
+            "page_index": 5,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                289.2610168457031,
+                0.0
+            ]
+        },
+        {
+            "title": "4.1 Experiment Settings",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 5,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                275.5610046386719,
+                0.0
+            ]
+        },
+        {
+            "title": "4.2 Ablation Studies",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 5,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                298.4369812011719,
+                0.0
+            ]
+        },
+        {
+            "title": "4.3 Comparisons with State-of-the-art",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 6,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                363.6300048828125,
+                0.0
+            ]
+        },
+        {
+            "title": "4.4 Why does McML Work",
+            "level": 1,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 7,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                349.5639953613281,
+                0.0
+            ]
+        },
+        {
+            "title": "5 Conclusion",
+            "level": 0,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 7,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                389.281005859375,
+                0.0
+            ]
+        },
+        {
+            "title": "6 ACKNOWLEDGEMENTS",
+            "level": 0,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 7,
+            "view_mode": "XYZ",
+            "view_pos": [
+                317.9549865722656,
+                237.57101440429688,
+                0.0
+            ]
+        },
+        {
+            "title": "References",
+            "level": 0,
+            "is_closed": null,
+            "n_kids": 0,
+            "page_index": 8,
+            "view_mode": "XYZ",
+            "view_pos": [
+                53.79800033569336,
+                695.4860229492188,
+                0.0
+            ]
+        }
+    ],
+    "pages": 10,
+    "ocr_stats": {
+        "ocr_pages": 0,
+        "ocr_failed": 0,
+        "ocr_success": 0,
+        "ocr_engine": "none"
+    },
+    "block_stats": {
+        "header_footer": 0,
+        "code": 0,
+        "table": 5,
+        "equations": {
+            "successful_ocr": 13,
+            "unsuccessful_ocr": 0,
+            "equations": 13
+        }
+    },
+    "postprocess_stats": {
+        "edit": {}
+    }
+}

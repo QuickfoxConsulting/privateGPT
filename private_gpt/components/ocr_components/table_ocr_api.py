@@ -13,22 +13,6 @@ from private_gpt.server.ingest.ingest_router import IngestResponse, ingest
 pdf_router = APIRouter(prefix="/v1", tags=["ocr"])
 
 
-async def save_uploaded_file(file: UploadFile, upload_dir: str):
-    file_path = os.path.join(upload_dir, file.filename)
-    try:
-        contents = await file.read()
-        async with aiofiles.open(file_path, 'wb') as f:
-            await f.write(contents)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"There was an error uploading the file."
-        )
-    finally:
-        await file.close()    
-    return file_path
-
-
 async def process_images_and_generate_doc(request: Request, pdf_path: str, upload_dir: str):
     ocr = request.state.injector.get(GetOCRText)
     # img_tab = request.state.injector.get(ImageToTable)

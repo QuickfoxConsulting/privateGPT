@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, ContextChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
@@ -10,7 +10,7 @@ from llama_index.core.indices.postprocessor import MetadataReplacementPostProces
 from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
     SimilarityPostprocessor,
-    rankGPT_rerank
+    rankGPT_rerank,
 )
 from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
@@ -185,7 +185,6 @@ class ChatService:
                 retriever=vector_index_retriever,
                 response_synthesizer=response_synthesizer
             )
-            
             return ContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
