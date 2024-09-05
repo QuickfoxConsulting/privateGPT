@@ -84,8 +84,17 @@ vectorstore:
 nodestore:
   database: simple
 
+graphstore:
+  database: neo4j
+
 qdrant:
   path: local_data/private_gpt/qdrant
+
+neo4j:
+  url: bolt://localhost:7687/
+  username: neo4j
+  password: quickfox@123
+  database: neo4j
 
 postgres:
   host: localhost

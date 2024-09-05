@@ -8,6 +8,7 @@ from llama_index.core.node_parser import SemanticSplitterNodeParser, SentenceSpl
 from llama_index.core.storage import StorageContext
 from llama_index.core.schema import BaseNode , ObjectType , TextNode
 
+from private_gpt.components.graph_store.graph_store_component import GraphStoreComponent
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.ingest.ingest_component import get_ingestion_component
 from private_gpt.components.llm.llm_component import LLMComponent
@@ -60,10 +61,12 @@ class IngestService:
         vector_store_component: VectorStoreComponent,
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
+        graph_store_component: GraphStoreComponent,
     ) -> None:
         self.llm_service = llm_component
         self.storage_context = StorageContext.from_defaults(
             vector_store=vector_store_component.vector_store,
+            graph_store=graph_store_component.graph_store,
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )       
@@ -86,6 +89,7 @@ class IngestService:
                 embedding_component.embedding_model,
             ],
             settings=settings(),
+            llm=self.llm_service.llm,
         )
 
     def _ingest_data(self, file_name: str, file_data: AnyStr, file_metadata: dict[str, str] | None = None,) -> list[IngestedDoc]:

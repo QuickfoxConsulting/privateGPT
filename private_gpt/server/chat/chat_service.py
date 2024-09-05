@@ -19,6 +19,13 @@ from pydantic import BaseModel
 from llama_index.core import get_response_synthesizer
 from llama_index.core.query_engine import RetrieverQueryEngine
 
+# HYBRID GRAPH RAG
+from llama_index.core.retrievers.router_retriever import RouterRetriever
+from llama_index.core.selectors import LLMSingleSelector
+from llama_index.core.tools.retriever_tool import RetrieverTool
+from private_gpt.components.graph_store.graph_store_component import GraphStoreComponent
+
+
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
@@ -123,13 +130,18 @@ class ChatService:
         vector_store_component: VectorStoreComponent,
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
+        graph_store_component: GraphStoreComponent,
     ) -> None:
         self.settings = settings
         self.llm_component = llm_component
         self.embedding_component = embedding_component
         self.vector_store_component = vector_store_component
+        self.graph_store_component = graph_store_component
+        self.knowledge_graph_index = graph_store_component.graph_store
+
         self.storage_context = StorageContext.from_defaults(
             vector_store=vector_store_component.vector_store,
+            graph_store=graph_store_component.graph_store,
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )
@@ -154,6 +166,11 @@ class ChatService:
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
             )
+            graph_knowledge_retrevier = self.graph_store_component.get_knowledge_graph(
+                llm=self.llm_component.llm,
+                storage_context=self.storage_context,
+            )
+
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -175,19 +192,32 @@ class ChatService:
                 # )
                 node_postprocessors.append(rerank_postprocessor)
             
+            retrievers = [
+                r for r in [vector_index_retriever, graph_knowledge_retrevier] if r
+            ]
             response_synthesizer = get_response_synthesizer(
                 response_mode="tree_summarize", 
                 llm=self.llm_component.llm,
                 # structured_answer_filtering=True
             )
             
-            custom_query_engine = RetrieverQueryEngine(
-                retriever=vector_index_retriever,
-                response_synthesizer=response_synthesizer
+            # custom_query_engine = RetrieverQueryEngine(
+            #     retriever=vector_index_retriever,
+            #     response_synthesizer=response_synthesizer
+            # )
+            retriever = RouterRetriever.from_defaults(
+                retriever_tools=[
+                    RetrieverTool.from_defaults(retriever) for retriever in retrievers
+                ],
+                llm=self.llm_component.llm,
+                selector=LLMSingleSelector.from_defaults(
+                    llm=self.llm_component.llm
+                ),  # TODO: Could be LLMMultiSelector if needed
+                select_multi=len(retrievers) > 1,
             )
             return ContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
-                retriever=custom_query_engine,
+                retriever=retriever,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
                 # condense_prompt=CONDENSE_PROMPT_TEMPLATE,

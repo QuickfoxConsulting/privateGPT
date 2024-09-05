@@ -7,6 +7,7 @@ from llama_index.core.storage import StorageContext
 from pydantic import BaseModel, Field
 
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
+from private_gpt.components.graph_store.graph_store_component import GraphStoreComponent
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 from private_gpt.components.vector_store.vector_store_component import (
@@ -62,6 +63,7 @@ class ChunksService:
         vector_store_component: VectorStoreComponent,
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
+        graph_store_component: GraphStoreComponent,
     ) -> None:
         self.vector_store_component = vector_store_component
         self.llm_component = llm_component
@@ -70,6 +72,7 @@ class ChunksService:
             vector_store=vector_store_component.vector_store,
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
+            graph_store=graph_store_component.graph_store
         )
 
     def _get_sibling_nodes_text(
