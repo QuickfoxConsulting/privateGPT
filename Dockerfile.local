@@ -1,121 +1,86 @@
-# Base image with Python and CUDA dependencies if needed
-FROM python:3.11.6-slim-bookworm as base
+# Base image with Python
+FROM python:3.11.6-slim-bookworm
 
-# Set noninteractive mode
-ENV DEBIAN_FRONTEND noninteractive
+# Set noninteractive mode and install essential packages
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    wget \
+    curl \
+    git \
+    jq \
+    ghostscript \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install poetry
-RUN pip install pipx
-RUN python3 -m pipx ensurepath
-RUN pipx install poetry
 ENV PATH="/root/.local/bin:$PATH"
+RUN pip install --no-cache-dir pipx && \
+    pipx ensurepath && \
+    pipx install poetry
+
+# Configure poetry
+ENV POETRY_VIRTUALENVS_IN_PROJECT=true
 ENV PATH=".venv/bin/:$PATH"
 
-# Install necessary dependencies including CMake, GCC, and CUDA if needed
-RUN apt-get update && apt-get install -y \
-        libopenblas-dev \
-        ninja-build \
-        build-essential \
-        graphicsmagick \
-        pkg-config \
-        wget \
-        libgl1-mesa-glx \
-        python3-opencv \
-        curl \
-        git \
-        jq && \
-    python -m pip install --upgrade pip huggingface_hub && \
-    huggingface-cli login --token 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 && \
-    apt clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# https://python-poetry.org/docs/configuration/#virtualenvsin-project
-ENV POETRY_VIRTUALENVS_IN_PROJECT=true
-
-# Copy CUDA dependencies from the CUDA base image if needed
-# COPY --from=cuda_base /usr/local/cuda /usr/local/cuda
-
-# Set environment variables for CUDA if needed
-# ENV PATH="/usr/local/cuda/bin:${PATH}"
-# ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
-
-# Continue with the rest of your Dockerfile
-FROM base as dependencies
+# Set up the working directory
 WORKDIR /home/worker/app
-COPY pyproject.toml poetry.lock ./
 
-# Copy C++ source code and CMakeLists.txt
+# Copy necessary files
+COPY pyproject.toml poetry.lock ./
 COPY CMakeLists.txt ./
 COPY src/ src/
 
 # Build C++ code
 RUN mkdir build && cd build && cmake .. && make
 
-# Install Python dependencies including C++ extensions
+# Install Python dependencies
 RUN poetry install --extras "ui embeddings-huggingface llms-llama-cpp vector-stores-qdrant"
 RUN poetry run python scripts/setup
 
-FROM base as app
-
+# Set up environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PORT=80
-EXPOSE 80
+ENV PORT=8000
+EXPOSE 8000
 
 # Prepare a non-root user
-RUN adduser --group worker
-RUN adduser --system --ingroup worker worker
-WORKDIR /home/worker/app
+RUN adduser --system --group worker
 
-ARG CMAKE_ARGS='-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR="OpenBLAS" -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_F16C=OFF -DLLAMA_FMA=OFF'
+# Set ownership and permissions
+RUN chown -R worker:worker /home/worker/app && \
+    mkdir -p local_data models/cache .config/matplotlib && \
+    chown -R worker:worker /home/worker/app
 
-# Copy from dependencies
-COPY --chown=worker --from=dependencies /home/worker/app/ ./
-RUN mkdir -p local_data models/cache .config/matplotlib && \
-    chown -R worker:nogroup /home/worker/app && \
-    pip install doc2text docx2txt EbookLib html2text python-pptx Pillow torch sentence-transformers && \
-    FORCE_CMAKE=1 CMAKE_ARGS="${CMAKE_ARGS}" \
-    /home/worker/app/.venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python && \
-    huggingface-cli logout
+# Install additional Python packages
+RUN pip install --no-cache-dir doc2text docx2txt EbookLib html2text python-pptx Pillow torch sentence-transformers camelot-py pytesseract
 
-RUN mkdir local_data; chown worker local_data
-RUN mkdir models; chown worker models
-RUN mkdir tiktoken_cache; chown worker tiktoken_cache
-RUN mkdir static; chown worker static
-RUN mkdir static/unchecked; chown worker static/unchecked
-RUN mkdir static/checked; chown worker static/checked
-RUN mkdir uploads; chown worker uploads
-COPY --chown=worker --from=dependencies /home/worker/app/.venv/ .venv
+# Install llama-cpp-python without CUDA support
+RUN pip install --no-cache-dir llama-cpp-python
+
+# Create necessary directories
+RUN mkdir -p local_data models tiktoken_cache static/unchecked static/checked uploads && \
+    chown -R worker:worker /home/worker/app
+
+# Copy application files
 COPY --chown=worker private_gpt/ private_gpt
 COPY --chown=worker alembic/ alembic
 COPY --chown=worker fern/ fern
-COPY --chown=worker *.yaml *.md ./
+COPY --chown=worker *.yaml *.md *.ini ./
 COPY --chown=worker scripts/ scripts
-COPY --chown=worker *.ini ./ 
+COPY --chown=worker docker-entrypoint.sh ./
+RUN chmod +x /home/worker/app/docker-entrypoint.sh
 
+# Set up environment
 ENV PYTHONPATH="$PYTHONPATH:/private_gpt/"
+ENV TOKENIZERS_PARALLELISM=false
 
+# Set volumes
 VOLUME /home/worker/app/local_data
 VOLUME /home/worker/app/models
 
-# Copy the docker-entrypoint.sh file and make it executable
-COPY --chown=worker docker-entrypoint.sh /home/worker/app/
-RUN chmod +x /home/worker/app/docker-entrypoint.sh
-
-########################################
-#### ---- Set up NVIDIA-Docker ---- ####
-########################################
-## ref: https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(Native-GPU-Support)#usage
-ENV TOKENIZERS_PARALLELISM=false
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-
-# Set the user to run the container
+# Switch to non-root user
 USER worker
 
-# Expose port
-EXPOSE 8000
-
-# Copy the rest of the application code into the container
-COPY --chown=worker . /home/worker/app
 # Set the entrypoint
 ENTRYPOINT ["/home/worker/app/docker-entrypoint.sh"]

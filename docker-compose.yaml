@@ -11,6 +11,7 @@ services:
       - 80:80
     depends_on:
       - private-gpt
+      - frontend 
 
   private-gpt:
     build:
@@ -31,14 +32,44 @@ services:
       PGPT_MODE: ollama
       DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${DB_NAME}
 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [ "gpu" ]
-              count: all
-    
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           capabilities: [ "gpu" ]
+    #           count: all
+
+  frontend:
+    build:
+      context: ./frontend  # Make sure to put your React app in the 'frontend' folder
+      dockerfile: Dockerfile.frontend
+    volumes:
+      - ./frontend:/app  # Share local frontend folder
+      - /app/node_modules  # To avoid conflicts between host and container node_modules
+    ports:
+      - 3000:3000  # Vite dev server runs on port 3000
+    environment:
+      - CHOKIDAR_USEPOLLING=true  # Fixes file watching issues in Docker
+    depends_on:
+      - private-gpt  # Ensure private-gpt is running before starting the frontend
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    container_name: db
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    restart: always
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - 5433:${DB_PORT}
+
   # ollama:
   #   image: ollama/ollama:latest
   #   container_name: ollama
@@ -57,21 +88,5 @@ services:
   #             capabilities: [ "gpu" ]
   #             count: all
 
-  db:
-    image: postgres:15-alpine
-    container_name: db
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
-      # POSTGRES_HOST_AUTH_METHOD: trust
-    restart: always
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    ports:
-      - 5433:${DB_PORT}
-  
 volumes:
   postgres-data:

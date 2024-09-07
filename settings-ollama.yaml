@@ -11,8 +11,8 @@ embedding:
   mode: ollama
 
 ollama:
-  llm_model: openhermes
-  embedding_model: mxbai-embed-large
+  llm_model: gemma2:2b
+  embedding_model: nomic-embed-text
   api_base: http://localhost:11434
   embedding_api_base: http://localhost:11434  # change if your embedding model runs on another ollama
   keep_alive: 5m

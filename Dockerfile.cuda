@@ -1,0 +1,104 @@
+# Base image with Python and CUDA dependencies if needed
+FROM python:3.11.6-slim-bookworm as base
+
+# Set noninteractive mode and install essential packages
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas-dev \
+    ninja-build \
+    build-essential \
+    graphicsmagick \
+    pkg-config \
+    wget \
+    libgl1-mesa-glx \
+    python3-opencv \
+    curl \
+    git \
+    jq \
+    ghostscript \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install poetry
+ENV PATH="/root/.local/bin:$PATH"
+RUN pip install --no-cache-dir pipx && \
+    pipx ensurepath && \
+    pipx install poetry
+
+# Configure poetry
+ENV POETRY_VIRTUALENVS_IN_PROJECT=true
+ENV PATH=".venv/bin/:$PATH"
+
+# Install Hugging Face CLI and login
+RUN pip install --no-cache-dir --upgrade pip huggingface_hub && \
+    huggingface-cli login --token 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
+
+# Set up the working directory
+WORKDIR /home/worker/app
+
+# Copy necessary files
+COPY pyproject.toml poetry.lock ./
+COPY CMakeLists.txt ./
+COPY src/ src/
+
+# Build C++ code
+RUN mkdir build && cd build && cmake .. && make
+
+# Install Python dependencies
+RUN poetry install --extras "ui embeddings-huggingface llms-llama-cpp vector-stores-qdrant"
+RUN poetry run python scripts/setup
+
+# Set up environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PORT=80
+EXPOSE 80
+
+# Prepare a non-root user
+RUN adduser --system --group worker
+
+# Set ownership and permissions
+RUN chown -R worker:worker /home/worker/app && \
+    mkdir -p local_data models/cache .config/matplotlib && \
+    chown -R worker:worker /home/worker/app
+
+# Install additional Python packages
+RUN pip install --no-cache-dir doc2text docx2txt EbookLib html2text python-pptx Pillow torch sentence-transformers
+
+# Install llama-cpp-python with specific CMAKE args
+ARG CMAKE_ARGS='-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR="OpenBLAS" -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_F16C=OFF -DLLAMA_FMA=OFF'
+RUN FORCE_CMAKE=1 CMAKE_ARGS="${CMAKE_ARGS}" pip install --force-reinstall --no-cache-dir llama-cpp-python
+
+# Logout from Hugging Face CLI
+RUN huggingface-cli logout
+
+# Create necessary directories
+RUN mkdir -p local_data models tiktoken_cache static/unchecked static/checked uploads && \
+    chown -R worker:worker /home/worker/app
+
+# Copy application files
+COPY --chown=worker private_gpt/ private_gpt
+COPY --chown=worker alembic/ alembic
+COPY --chown=worker fern/ fern
+COPY --chown=worker *.yaml *.md *.ini ./
+COPY --chown=worker scripts/ scripts
+COPY --chown=worker docker-entrypoint.sh ./
+RUN chmod +x /home/worker/app/docker-entrypoint.sh
+
+# Set up environment
+ENV PYTHONPATH="$PYTHONPATH:/private_gpt/"
+ENV TOKENIZERS_PARALLELISM=false
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+# Set volumes
+VOLUME /home/worker/app/local_data
+VOLUME /home/worker/app/models
+
+# Switch to non-root user
+USER worker
+
+# Expose port
+EXPOSE 8000
+
+# Set the entrypoint
+ENTRYPOINT ["/home/worker/app/docker-entrypoint.sh"]
