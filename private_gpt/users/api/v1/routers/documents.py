@@ -32,14 +32,18 @@ def get_id(db, username):
     name = crud.user.get_by_name(db=db, name=username)
     return name
 
+
+from fastapi import Query
 @router.get("")
 def list_files(
     request: Request,
     db: Session = Depends(deps.get_db),
+    filter: str = Query(None, alias="filter"), 
     current_user: models.User = Security(
         deps.get_current_user,
         scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]], 
     )
+    
 )-> Page[schemas.DocumentView]:
     """
     List the documents based on the role. 
@@ -48,12 +52,18 @@ def list_files(
     try:
         role = current_user.user_role.role.name if current_user.user_role else None
         if (role == "SUPER_ADMIN") or (role == "OPERATOR"):
-            docs = crud.documents.get_multi_documents(db)
+            docs_query = crud.documents.get_multi_documents(db)
         else:
-            docs = crud.documents.get_documents_by_departments(
+            docs_query = crud.documents.get_documents_by_departments(
                                                             db, 
                                                             department_id=current_user.department_id
                                                         )
+        if filter:
+            docs_query = docs_query.filter(
+                models.Document.filename.ilike(f"%{filter}%")
+            ).all()
+        else:
+            docs_query = docs_query.all()
         documents = [
             schemas.DocumentView(
                 id=doc.id,
@@ -72,7 +82,7 @@ def list_files(
                     for cat in doc.categories  
                 ]
             )
-            for doc in docs
+            for doc in docs_query
         ]
         return paginate(documents)
     except Exception as e:

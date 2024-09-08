@@ -57,7 +57,7 @@ def read_users(
         users_query = crud.user.get_by_department_id(db=db, department_id=current_user.department_id)
     else:
         users_query = crud.user.get_multi(db)
-
+    
     if filter:
         users_query = users_query.filter(
             models.User.username.ilike(f"%{filter}%") |  

@@ -26,7 +26,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
             db.query(self.model)
             .options(joinedload(Document.categories))  
             .order_by(desc(getattr(Document, 'uploaded_at')))
-            .all()
+            # .all()
         )
 
     def get_documents_by_departments(
@@ -49,7 +49,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
                 )
             )
             .order_by(desc(getattr(Document, 'uploaded_at')))
-            .all()
+            # .all()
         )
     
     def get_files_to_verify(
