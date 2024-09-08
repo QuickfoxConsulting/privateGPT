@@ -29,15 +29,13 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
         from llama_index.readers.file.video_audio import (  # type: ignore
             VideoAudioReader,
         )
-        # from private_gpt.components.readers.rdfreader import (  # type: ignore
-        #     RDFReader,
-        # )
+        from private_gpt.components.parser.CustomPDFReader import CustomRAGPDFParser
     except ImportError as e:
         raise ImportError("`llama-index-readers-file` package not found") from e
 
     default_file_reader_cls: dict[str, type[BaseReader]] = {
         ".hwp": HWPReader,
-        ".pdf": LlamaMarkdownReader,
+        ".pdf": CustomRAGPDFParser,
         ".docx": DocxReader,
         ".pptx": PptxReader,
         ".ppt": PptxReader,
