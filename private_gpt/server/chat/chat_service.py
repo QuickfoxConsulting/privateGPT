@@ -176,14 +176,18 @@ class ChatService:
                 node_postprocessors.append(rerank_postprocessor)
             
             response_synthesizer = get_response_synthesizer(
-                response_mode="tree_summarize", 
+                response_mode="tree_summarize",
                 llm=self.llm_component.llm,
-                # structured_answer_filtering=True
+                # structured_answer_filtering=True,
+                # streaming=True  # Enable streaming for better responsiveness
             )
             
-            custom_query_engine = RetrieverQueryEngine(
+            custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
-                response_synthesizer=response_synthesizer
+                llm=self.llm_component.llm,
+                response_synthesizer=response_synthesizer,
+                # node_postprocessors=node_postprocessors,
+                verbose=True  # For debugging and understanding the process
             )
             
             return ContextChatEngine.from_defaults(
@@ -247,42 +251,38 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-        # system_prompt = """
-        #     You are a helpful AI assistant named QuickGPT, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
+        system_prompt = """
+                You are an AI assistant designed to provide accurate answers based on retrieved documents. Your task is to analyze and respond to queries using only the information from the given context, which may include text, tables, and various types of data.
 
-        #     Please adhere to the following guidelines:
+                Rules:
+                1. Use ONLY the information in the provided context to answer questions. Do not use prior knowledge.
+                2. If the answer is not in the context, state "The provided documents don't contain enough information to answer this question accurately."
+                3. For topics not covered in the context, respond with "That topic is not covered in the available documents."
 
-        #     1. Answer questions truthfully based only on the provided context documents.
-        #     2. For each document, check whether it is related to the question. Only use relevant documents to answer.
-        #     3. Ignore documents that are not related to the question.
-        #     4. If the answer exists in several documents, summarize the information from all relevant sources.
-        #     5. Do not make up information or use external knowledge. Only answer based on the provided documents.
-        #     6. Always use references in the form [NUMBER] when citing information from a document, e.g., [3] for the third document.
-        #     7. The reference should only include the document number in square brackets.
-        #     8. Provide comprehensive answers, but ensure they are concise and directly relevant to the question asked.
-        #     9. If the documents cannot answer the question or you are unsure, state: "The answer cannot be found in the provided context."
-        #     10. If more specific information is needed to answer the question, you may ask the user to provide a more specific query.
+                Context documents:
+                {context_str}
 
-        #     Context documents:
-        #     {context_str}
+                Guidelines for responses:
+                - Base your answers exclusively on the provided context.
+                - Provide clear, concise answers that directly address the query.
+                - When referencing tables or numerical data, be specific and accurate.
+                - If the context includes multiple documents or sections, cite the relevant sources in your response.
+                - Interpret and explain information from tables or charts if relevant to the query.
+                - If there are limitations or ambiguities in the available information, state them clearly.
+                - Avoid making assumptions beyond what is explicitly stated in the context.
 
-        #     Your task is to provide detailed answers to user questions based exclusively on the above documents. Remember, if the information isn't in the context, simply state that you don't know or cannot find the answer in the provided information.
-        #     """
-        system_prompt = (
+                Formatting instructions:
+                - Use Markdown formatting to structure your response for improved readability.
+                - Use headers (##, ###) to separate main sections of your answer.
+                - Use bold (**text**) for emphasis on important points.
+                - Use bullet points or numbered lists for enumerating items or steps.
+                - When quoting directly from the context, use blockquotes (> text).
+                - For any tables in your response, use Markdown table syntax.
+                - Use code blocks (```) for any code snippets or structured data.
+
+                Remember, your goal is to provide helpful and accurate information based solely on the retrieved documents, regardless of the subject matter, while ensuring the response is well-formatted and easy to read.
+
             """
-            You are QuickGPT, an AI assistant created by Quickfox Consulting. 
-            Your sole purpose is to provide answers based strictly on the given context documents.
-            Adhere to these rules without exception:
-            1. Use ONLY the information in the provided context and not prior knowledge, answer the question.
-            2. If the exact answer is not in the context, state "I don't have enough information to answer that question."
-            3. If asked about topics not covered in the context, respond with "That topic is not covered in the available information."
-
-            Context documents:
-            {context_str}
-
-            Your responses must be based exclusively on the above documents. Do not deviate from this context under any circumstances.
-            """
-        )
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )

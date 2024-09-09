@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CHUNK_SIZE = 520
+DEFAULT_CHUNK_SIZE = 384
 SENTENCE_CHUNK_OVERLAP = 50
 
 class SafeSemanticSplitter(SemanticSplitterNodeParser):
