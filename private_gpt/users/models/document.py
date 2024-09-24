@@ -83,14 +83,14 @@ class Document(Base):
     previous_document_id = Column(Integer, ForeignKey("document.id"), nullable=True)
     previous_document = relationship("Document", remote_side=[id], backref="next_documents")
 
-
+# ## 
+# from sqlalchemy.orm import object_session
 # def get_associated_department_ids(session: Session, document_id: int) -> list:
 #     """Get the department IDs associated with a given document."""
 #     department_ids = session.query(document_department_association.c.department_id).filter(
 #         document_department_association.c.document_id == document_id
 #     ).all()
-    
-#     # Flatten the list of tuples returned by the query
+#     print("DEPARTMENT: ", department_ids)
 #     return [dept_id for dept_id, in department_ids]
 
 # @event.listens_for(Document, 'after_insert')
@@ -99,15 +99,15 @@ class Document(Base):
 #     session = Session(bind=connection)
 #     try:
 #         # Get the department IDs associated with the target document
+#         print("Targets", target)
 #         associated_department_ids = get_associated_department_ids(session, target.id)
-        
 #         # Update total_documents for each associated department
 #         for department_id in associated_department_ids:
 #             total_documents = session.query(func.count()).select_from(document_department_association).filter(
 #                 document_department_association.c.department_id == department_id
 #             ).scalar()
             
-#             department = session.query(Department).get(department_id)
+#             department = session.get(Department, department_id)
 #             if department:
 #                 department.total_documents = total_documents
         
@@ -117,3 +117,20 @@ class Document(Base):
 #         raise
 #     finally:
 #         session.close()
+
+# # Proposed fix:
+# @event.listens_for(Document, 'after_insert')
+# def update_total_documents_after_insert(mapper, connection, target):
+#     session = object_session(target)
+#     if session and target.departments:
+#         for department in target.departments:
+#             department.total_documents = department.total_documents + 1
+#         session.commit()
+
+# @event.listens_for(Document, 'after_delete')
+# def update_total_documents_after_delete(mapper, connection, target):
+#     session = object_session(target)
+#     if session and target.departments:
+#         for department in target.departments:
+#             department.total_documents = department.total_documents - 1
+#         session.commit()

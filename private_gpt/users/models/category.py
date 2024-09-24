@@ -14,6 +14,11 @@ class Category(Base):
     name = Column(String, index=True, unique=True)
 
     documents = relationship("Document", secondary="document_category_association", back_populates="categories")
+    @property
+    def total_documents(self):
+        """Return the total number of documents associated with this category."""
+        return len(self.documents)
+    
     
 document_category_association = Table(
     "document_category_association",

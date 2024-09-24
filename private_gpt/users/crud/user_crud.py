@@ -93,7 +93,6 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         return (
             db.query(self.model)
             .filter(User.department_id == department_id)
-            .all()
         )
     
     def get_by_id(self, db: Session, *, id: int) -> Optional[User]:

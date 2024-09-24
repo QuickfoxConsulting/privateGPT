@@ -23,3 +23,11 @@ class Department(Base):
 
     total_users = Column(Integer, default=0)
     total_documents = Column(Integer, default=0)
+
+    @property
+    def calculated_total_users(self):
+        return len(self.users)
+
+    @property
+    def calculated_total_documents(self):
+        return len(self.documents)

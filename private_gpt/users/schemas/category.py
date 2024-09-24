@@ -18,7 +18,7 @@ class CategoryInDBBase(CategoryBase):
         orm_mode = True
 
 class Category(CategoryInDBBase):
-    pass
+    total_documents: Optional[int]
 
 class CategoryInDB(CategoryInDBBase):
     pass

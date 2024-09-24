@@ -43,7 +43,7 @@ llm:
   max_new_tokens: 1024
   context_window: 8192
   tokenizer: meta-llama/Meta-Llama-3-8B-Instruct
-  temperature: 0.1      # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
+  temperature: 0.0      # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 
 rag:
   similarity_top_k: 10

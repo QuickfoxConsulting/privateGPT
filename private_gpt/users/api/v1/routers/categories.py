@@ -29,7 +29,15 @@ def list_categories(
     Retrieve a list of categories with pagination support.
     """
     categories = crud.category.get_multi(db)
-    return paginate(categories)
+    cat = [
+        schemas.Category(
+            id=cat.id,
+            name=cat.name,
+            total_documents=cat.total_documents
+        )
+        for cat in categories
+    ]
+    return paginate(cat)
 
 
 @router.post("/create", response_model=schemas.Category)

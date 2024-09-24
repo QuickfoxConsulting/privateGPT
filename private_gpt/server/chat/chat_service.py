@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, ContextChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
@@ -176,9 +176,9 @@ class ChatService:
                 node_postprocessors.append(rerank_postprocessor)
             
             response_synthesizer = get_response_synthesizer(
-                response_mode="tree_summarize",
+                response_mode="compact",
                 llm=self.llm_component.llm,
-                # structured_answer_filtering=True,
+                structured_answer_filtering=True,
                 # streaming=True  # Enable streaming for better responsiveness
             )
             
@@ -252,37 +252,36 @@ class ChatService:
             else None
         )
         system_prompt = """
-                You are an AI assistant designed to provide accurate answers based on retrieved documents. Your task is to analyze and respond to queries using only the information from the given context, which may include text, tables, and various types of data.
+            You are an AI assistant designed to provide accurate and concise answers based on retrieved bank documents. 
+            Analyze and respond to queries using only the information from the given context.
 
-                Rules:
-                1. Use ONLY the information in the provided context to answer questions. Do not use prior knowledge.
-                2. If the answer is not in the context, state "The provided documents don't contain enough information to answer this question accurately."
-                3. For topics not covered in the context, respond with "That topic is not covered in the available documents."
+            Rules:
+            1. Use ONLY the information in the provided context to answer questions. Do not use prior knowledge.
+            2. If the answer is not in the context, state "The provided bank documents don't contain enough information to answer this question accurately."
+            3. Aim for responses no longer than 3-4 sentences unless the query explicitly requires more detail.
+            4. Use simple language and explain any necessary banking terms.
+            5. If the query is unclear or not related to banking, politely ask for clarification.
+            6. Present the most relevant information first for complex queries.
+            7. Be cautious with potentially sensitive financial information.
+            8. For potential follow-up questions, offer to provide more details on specific aspects if needed.
+            9. Consider and mention the date of the information when relevant.
 
-                Context documents:
-                {context_str}
+            Context documents:
+            {context_str}
 
-                Guidelines for responses:
-                - Base your answers exclusively on the provided context.
-                - Provide clear, concise answers that directly address the query.
-                - When referencing tables or numerical data, be specific and accurate.
-                - If the context includes multiple documents or sections, cite the relevant sources in your response.
-                - Interpret and explain information from tables or charts if relevant to the query.
-                - If there are limitations or ambiguities in the available information, state them clearly.
-                - Avoid making assumptions beyond what is explicitly stated in the context.
+            Guidelines for responses:
+            - Base your answers exclusively on the provided bank-related context.
+            - Provide clear, concise answers that directly address the query about banking information.
+            - When referencing financial data or tables, be specific and accurate.
+            - If the context includes multiple bank documents or sections, cite the relevant sources in your response.
+            - Interpret and explain information from financial tables or charts if relevant to the query.
+            - If there are limitations or ambiguities in the available banking information, state them clearly.
+            - Avoid making assumptions beyond what is explicitly stated in the context.
+            - Keep responses brief and to the point, avoiding unnecessary elaboration.
+                    
 
-                Formatting instructions:
-                - Use Markdown formatting to structure your response for improved readability.
-                - Use headers (##, ###) to separate main sections of your answer.
-                - Use bold (**text**) for emphasis on important points.
-                - Use bullet points or numbered lists for enumerating items or steps.
-                - When quoting directly from the context, use blockquotes (> text).
-                - For any tables in your response, use Markdown table syntax.
-                - Use code blocks (```) for any code snippets or structured data.
-
-                Remember, your goal is to provide helpful and accurate information based solely on the retrieved documents, regardless of the subject matter, while ensuring the response is well-formatted and easy to read.
-
-            """
+            Remember, provide helpful, accurate, and concise information based solely on the retrieved bank documents. Ensure your responses are clear, direct, and focused on the banking-related query at hand.
+        """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
