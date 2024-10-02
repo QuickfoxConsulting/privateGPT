@@ -15,7 +15,7 @@ from private_gpt.constants import UNCHECKED_DIR
 from private_gpt.users.constants.role import Role
 from private_gpt.users.core.config import settings
 from private_gpt.users import crud, models, schemas
-from private_gpt.server.ingest.ingest_router import create_documents, ingest
+from private_gpt.server.ingest.ingest_router import create_documents, ingest, create_url_documents, ingest_url
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 from private_gpt.components.ocr_components.table_ocr_api import process_ocr
 
@@ -449,7 +449,6 @@ async def upload_documents(
                 log_audit=log_audit,
                 current_user=current_user
             )
-
         return document
 
     except HTTPException:
@@ -463,6 +462,73 @@ async def upload_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error: Unable to upload file.",
         )
+
+
+@router.post('/upload-url', response_model=schemas.Document)
+async def upload_documents(
+    request: Request,
+    url: schemas.UrlUpload,
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.ADMIN["name"],
+                Role.SUPER_ADMIN["name"], 
+                Role.OPERATOR["name"]],
+    )
+):
+    """Upload the documents."""
+    try:
+        category = url.category
+        if  url.url is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No URL is provided",
+            )
+
+        # Create a new document record in the database
+        document = await create_url_documents(
+            db=db,
+            file_name=url.url,
+            category=category,
+            current_user=current_user,
+            departments=url.departments_ids,
+            log_audit=log_audit,
+        )
+        checker = schemas.DocumentCheckerUpdate(
+            action_type=MakerCheckerActionType.UPDATE,
+            status=MakerCheckerStatus.APPROVED,
+            is_enabled=True,
+            verified_at=datetime.now(),
+            verified_by=current_user.id,
+            verified=True,
+        )
+        crud.documents.update(db=db, db_obj=document, obj_in=checker)
+        
+        log_audit(
+            model='Document',
+            action='update',
+            details={
+                'filename': f'{url.url}',
+                'approved': f'{current_user.id}'
+            },
+            user_id=current_user.id
+        )
+        return await ingest_url(request, url.url)
+        # return document
+
+    except HTTPException:
+        print(traceback.print_exc())
+        raise
+
+    except Exception as e:
+        print(traceback.print_exc())
+        logger.error(f"There was an error uploading the file(s): {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error: Unable to upload file.",
+        )
+
 
 @router.post('/verify')
 async def verify_documents(

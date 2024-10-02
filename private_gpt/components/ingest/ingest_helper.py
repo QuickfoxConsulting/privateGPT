@@ -91,9 +91,11 @@ class IngestionHelper:
                 extension,
             )
             # Read as a plain text
-            string_reader = StringIterableReader()
-            return string_reader.load_data([file_data.read_text()])
-
+            try:
+                string_reader = StringIterableReader()
+                return string_reader.load_data([file_data.read_text()])
+            except:
+                return file_data
         logger.debug("Specific reader found for extension=%s", extension)
         return reader_cls().load_data(file_data)
 

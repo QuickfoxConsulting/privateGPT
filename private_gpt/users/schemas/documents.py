@@ -49,13 +49,18 @@ class Document(BaseModel):
 class DocumentMakerChecker(DocumentCreate):
     action_type: str
     status: str
-    doc_type_id: int
+    doc_type_id: Optional[int]
     version_type: Optional[str]
     previous_document_id: Optional[int]
 
 class DocumentMakerCreate(DocumentMakerChecker):
     pass
 
+class UrlMakerChecker(BaseModel):
+    filename: str
+    uploaded_by: int
+    action_type: str
+    status: str
 
 class DocumentCheckerUpdate(BaseModel):
     action_type: str
@@ -73,6 +78,10 @@ class DocumentDepartmentList(BaseModel):
     version_type: str = Form(...)  
     previous_document_id: Optional[int] = Form(None) 
 
+class UrlUpload(BaseModel):
+    departments_ids: str = Form(...)
+    category: int = Form(...)
+    url: str = Form(...)
 
 class DocumentView(BaseModel):
     id: int

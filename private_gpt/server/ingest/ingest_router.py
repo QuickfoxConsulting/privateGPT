@@ -4,7 +4,7 @@ import traceback
 
 import aiofiles
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
@@ -247,6 +247,86 @@ async def create_documents(
         user_id=current_user.id
     )
     return document
+
+async def create_url_documents(
+    db: Session, 
+    file_name: str = None, 
+    category: int = None,
+    current_user: models.User = None,
+    departments: str = None,
+    log_audit: models.Audit = None,
+):
+    """
+    Create documents in the `Document` table and update the
+    `Document Department Association` table with the department IDs for the documents.
+    """
+    department_ids = departments
+    file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
+    if file_ingested:
+        raise HTTPException(
+            status_code=409,
+            detail="File already exists. Choose a different file.",
+        )
+
+    print(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
+
+    docs_in = schemas.UrlMakerChecker(
+        filename=file_name, 
+        uploaded_by=current_user.id, 
+        action_type=MakerCheckerActionType.INSERT,
+        status=MakerCheckerStatus.PENDING,
+    )
+    
+    document = crud.documents.create(db=db, obj_in=docs_in)
+    department_ids = department_ids if department_ids else "1"
+    department_ids = [int(number) for number in department_ids.split(",")]
+
+    for department_id in department_ids:
+        db.execute(
+            models.document_department_association.insert().values(
+                document_id=document.id, 
+                department_id=department_id
+            )
+        )
+    if category:  
+        db.execute(
+            models.document_category_association.insert().values(
+                document_id=document.id, 
+                category_id=category
+            )
+        )
+    log_audit(
+        model='Document', 
+        action='create',
+        details={
+            'filename': f"{file_name}", 
+            'user': f"{current_user.username}",
+            'departments': f"{department_ids}",
+            'categories': f"{category}",
+        }, 
+        user_id=current_user.id
+    )
+    return document
+
+from langchain_community.document_loaders import WebBaseLoader
+from llama_index.core.schema import Document
+async def ingest_url(request: Request, url: str) -> IngestResponse:
+    """Ingests and processes a file, storing its chunks to be used as context."""
+    service = request.state.injector.get(IngestService)
+    try:
+        # documents = SimpleWebPageReader(html_to_text=True).load_data(
+        #     [url]
+        # )
+        loader = WebBaseLoader(url)
+        langchain_docs = loader.load()        
+        llamaindex_docs: List[Document] = [
+            Document.from_langchain_format(doc) for doc in langchain_docs
+        ]        
+        ingested_documents = await service.ingest_url(url, llamaindex_docs)
+    except Exception as e:
+        print(traceback.print_exc())
+        return {"message": f"There was an error uploading the file(s)\n {e}"}
+    return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 
 async def ingest(request: Request, file_path: str) -> IngestResponse:

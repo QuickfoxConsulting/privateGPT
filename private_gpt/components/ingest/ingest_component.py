@@ -40,6 +40,10 @@ class BaseIngestComponent(abc.ABC):
         self.transformations = transformations
 
     @abc.abstractmethod
+    def ingest_url(self, file_name: str, file_data: Path) -> list[Document]:
+        pass
+
+    @abc.abstractmethod
     def ingest(self, file_name: str, file_data: Path) -> list[Document]:
         pass
 
@@ -134,6 +138,11 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
             )
             saved_documents.extend(self._save_docs(documents))
         return saved_documents
+    
+    def ingest_url(self, url: str, documents) -> list[Document]:
+        logger.info("Ingesting URL=%s", url)
+        logger.debug("Saving the documents in the index and doc store")
+        return self._save_docs(documents)
 
     def _save_docs(self, documents: list[Document]) -> list[Document]:
         logger.debug("Transforming count=%s documents into nodes", len(documents))
@@ -220,6 +229,8 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
             logger.debug("Persisted the index and nodes")
         return documents
 
+    def ingest_url(self, file_name: str, file_data: Path) -> list[Document]:
+        pass
 
 class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
     """Parallelize the file ingestion (file reading, embeddings, and index insertion).
@@ -314,6 +325,9 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         self._file_to_documents_work_pool.close()
         self._file_to_documents_work_pool.join()
         self._file_to_documents_work_pool.terminate()
+
+    def ingest_url(self, file_name: str, file_data: Path) -> list[Document]:
+        pass
 
 
 class PipelineIngestComponent(BaseIngestComponentWithIndex):
@@ -479,6 +493,8 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         self._flush()
         return docs
 
+    def ingest_url(self, file_name: str, file_data: Path) -> list[Document]:
+        pass
 
 def get_ingestion_component(
     storage_context: StorageContext,

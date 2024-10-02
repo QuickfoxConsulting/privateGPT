@@ -125,6 +125,11 @@ class IngestService:
         logger.debug("Ingesting binary data with file_name=%s", file_name)
         file_data = raw_file_data.read()
         return self._ingest_data(file_name, file_data)
+    
+    async def ingest_url(self, url: str, documents) -> list[IngestedDoc]:
+        logger.debug("Ingesting url=%s", url)
+        documents = self.ingest_component.ingest(url, documents)
+        return [IngestedDoc.from_document(document) for document in documents]
 
     def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[IngestedDoc]:
         logger.info("Ingesting file_names=%s", [f[0] for f in files])

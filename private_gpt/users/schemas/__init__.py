@@ -13,7 +13,7 @@ from .documents import (
     Document, DocumentCreate, DocumentsBase, DocumentUpdate, DocumentList, 
     DepartmentList, DocumentEnable, DocumentDepartmentUpdate, DocumentCheckerUpdate, 
     DocumentMakerCreate, DocumentDepartmentList, DocumentView, DocumentVerify, 
-    DocumentFilter, DocumentCategoryUpdate, DocCatUpdate
+    DocumentFilter, DocumentCategoryUpdate, DocCatUpdate, UrlUpload, UrlMakerChecker
 )
 from .department import (
     Department, DepartmentCreate, DepartmentUpdate, DepartmentAdminCreate, DepartmentDelete
