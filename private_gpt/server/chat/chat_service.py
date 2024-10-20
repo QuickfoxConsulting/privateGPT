@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, ContextChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, ContextChatEngine, CondensePlusContextChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
@@ -42,6 +42,9 @@ class Completion(BaseModel):
 class CompletionGen(BaseModel):
     response: TokenGen
     sources: list[Chunk] | None = None
+
+class TitleGeneration(BaseModel):
+    title: str
 
 reranker_path = models_path / 'reranker'
 
@@ -190,13 +193,20 @@ class ChatService:
                 verbose=True  # For debugging and understanding the process
             )
             
-            return ContextChatEngine.from_defaults(
+            return CondensePlusContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             )
+            # return ContextChatEngine.from_defaults(
+            #     system_prompt=system_prompt,
+            #     retriever=custom_query_engine,
+            #     llm=self.llm_component.llm,  # Takes no effect at the moment
+            #     node_postprocessors=node_postprocessors,
+            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            # )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -252,36 +262,16 @@ class ChatService:
             else None
         )
         system_prompt = """
-            You are an AI assistant designed to provide accurate and concise answers based on retrieved bank documents. 
-            Analyze and respond to queries using only the information from the given context.
-
-            Rules:
-            1. Use ONLY the information in the provided context to answer questions. Do not use prior knowledge.
-            2. If the answer is not in the context, state "The provided bank documents don't contain enough information to answer this question accurately."
-            3. Aim for responses no longer than 3-4 sentences unless the query explicitly requires more detail.
-            4. Use simple language and explain any necessary banking terms.
-            5. If the query is unclear or not related to banking, politely ask for clarification.
-            6. Present the most relevant information first for complex queries.
-            7. Be cautious with potentially sensitive financial information.
-            8. For potential follow-up questions, offer to provide more details on specific aspects if needed.
-            9. Consider and mention the date of the information when relevant.
-
-            Context documents:
-            {context_str}
-
-            Guidelines for responses:
-            - Base your answers exclusively on the provided bank-related context.
-            - Provide clear, concise answers that directly address the query about banking information.
-            - When referencing financial data or tables, be specific and accurate.
-            - If the context includes multiple bank documents or sections, cite the relevant sources in your response.
-            - Interpret and explain information from financial tables or charts if relevant to the query.
-            - If there are limitations or ambiguities in the available banking information, state them clearly.
-            - Avoid making assumptions beyond what is explicitly stated in the context.
-            - Keep responses brief and to the point, avoiding unnecessary elaboration.
-                    
-
-            Remember, provide helpful, accurate, and concise information based solely on the retrieved bank documents. Ensure your responses are clear, direct, and focused on the banking-related query at hand.
-        """
+            You are a helpful assistant designed to help users navigate a complex set of documents.
+            Answer the user's query based on the following context. Follow these rules:
+                Use only information from the provided context.
+                If the context doesn't adequately address the query, say: "Based on the available information, I cannot provide a complete answer to this question."
+                Give clear, and accurate responses. Explain complex terms if needed.
+                If the context contains conflicting information, point this out without attempting to resolve the conflict.
+                Don't use phrases like "according to the context," "as the context states,", "based on the provided context",s etc.
+            Remember, your purpose is to provide information based on the retrieved context,
+            not to offer original advice.
+            """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -306,3 +296,34 @@ class ChatService:
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
+
+    def generate_title(
+        self,
+        messages: str,
+        max_length: int = 30
+    ) -> TitleGeneration:
+        if not messages:
+            return TitleGeneration(title="No messages provided")
+
+        first_message = messages[0].content
+
+        system_prompt = f"""
+        You are a helpful assistant designed to generate concise and relevant titles.
+        Your task is to create a title based on the following message. Follow these rules:
+            - The title should be no longer than {max_length} characters.
+            - Capture the main topic or question from the message.
+            - Use clear and concise language.
+            - Do not use phrases like "Title:" or "Subject:" in your response.
+            - If the message is unclear, create a general title that reflects the apparent topic.
+        Remember, your purpose is to generate a title, not to answer or elaborate on the message content.
+        """
+
+        chat_engine = SimpleChatEngine.from_defaults(
+            system_prompt=system_prompt,
+            llm=self.llm_component.llm,
+        )
+        try:
+            response = chat_engine.chat(first_message)
+            return TitleGeneration(title=response.response)
+        except Exception as e:
+            return TitleGeneration(title=f"Error generating title: {str(e)}")

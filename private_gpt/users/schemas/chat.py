@@ -42,6 +42,7 @@ class ChatHistoryUpdate(ChatHistoryBase):
 class Chat(BaseModel):
     conversation_id: uuid.UUID
     title: Optional[str]
+    created_at: datetime
 
 class ChatHistory(ChatHistoryBase):
     conversation_id: uuid.UUID

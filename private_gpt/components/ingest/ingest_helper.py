@@ -28,6 +28,7 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
         from llama_index.readers.file.video_audio import (  # type: ignore
             VideoAudioReader,
         )
+        from llama_index.readers.file.tabular import PandasExcelReader
         # from private_gpt.components.parser.CustomPDFReader import CustomRAGPDFParser
     except ImportError as e:
         raise ImportError("`llama-index-readers-file` package not found") from e
@@ -49,6 +50,8 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
         ".md": MarkdownReader,
         ".mbox": MboxReader,
         ".ipynb": IPYNBReader,
+        ".xlsx": PandasExcelReader,
+        ".xls": PandasExcelReader,
     }
     return default_file_reader_cls
 

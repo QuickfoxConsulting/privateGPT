@@ -37,3 +37,6 @@ __pycache__/
 
 *.png
 *.csv
+*.xlsx
+*.xls
+*.md

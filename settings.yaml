@@ -82,7 +82,7 @@ vectorstore:
   database: qdrant
 
 nodestore:
-  database: simple
+  database: postgres
 
 qdrant:
   path: local_data/private_gpt/qdrant
@@ -90,9 +90,9 @@ qdrant:
 postgres:
   host: localhost
   port: 5432
-  database: postgres
+  database: QuickGpt
   user: postgres
-  password: postgres
+  password: admin
   schema_name: private_gpt
 
 sagemaker:

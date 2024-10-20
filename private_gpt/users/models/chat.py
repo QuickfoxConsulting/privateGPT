@@ -36,7 +36,7 @@ class ChatHistory(Base):
             print("Chat items: ", first_user_chat_item.content['text'])
             self.title = first_user_chat_item.content['text'][:30]
         else:
-            self.title = str(self.conversation_id)
+            self.title = "New Chat"
 
     def __repr__(self):
         """Returns string representation of model instance"""

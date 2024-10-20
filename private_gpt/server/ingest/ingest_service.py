@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, AnyStr, BinaryIO, Sequence, Any, List
 
 from injector import inject, singleton
-from llama_index.core.node_parser import SemanticSplitterNodeParser, SentenceSplitter, MarkdownNodeParser
+from llama_index.core.node_parser import SemanticSplitterNodeParser, SentenceSplitter, MarkdownNodeParser, SentenceWindowNodeParser
 from llama_index.core.storage import StorageContext
 from llama_index.core.schema import BaseNode , ObjectType , TextNode
 
@@ -73,15 +73,17 @@ class IngestService:
         #     include_metadata=True,
         #     include_prev_next_rel=True,
         # )
-        # node_parser =  SentenceWindowNodeParser.from_defaults(
-        #     window_size=5,
-        #     window_metadata_key="window",
-        #     original_text_metadata_key="original_text",
-        # )
-        node_parser = MarkdownNodeParser.from_defaults(
+        node_parser =  SentenceWindowNodeParser.from_defaults(
+            window_size=20,
+            window_metadata_key="window",
+            original_text_metadata_key="original_text",
             include_metadata=True,
             include_prev_next_rel=True
         )
+        # node_parser = MarkdownNodeParser.from_defaults(
+        #     include_metadata=True,
+        #     include_prev_next_rel=True
+        # )
         self.ingest_component = get_ingestion_component(
             self.storage_context,
             embed_model=embedding_component.embedding_model,
