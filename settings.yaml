@@ -42,7 +42,7 @@ llm:
   # Should be matching the selected model
   max_new_tokens: 1024
   context_window: 8192
-  tokenizer: meta-llama/Meta-Llama-3-8B-Instruct
+  tokenizer: meta-llama/Llama-3.2-1B-Instruct
   temperature: 0.0      # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 
 rag:
@@ -58,8 +58,8 @@ rag:
 llamacpp:
   # llm_hf_repo_id: bartowski/Llama-3-8B-Instruct-Gradient-1048k-GGUF
   # llm_hf_model_file: Llama-3-8B-Instruct-Gradient-1048k-Q5_K_S.gguf
-  llm_hf_repo_id: NousResearch/Meta-Llama-3-8B-Instruct-GGUF
-  llm_hf_model_file:  Meta-Llama-3-8B-Instruct-Q4_K_M.gguf
+  llm_hf_repo_id: unsloth/Llama-3.2-1B-Instruct-GGUF
+  llm_hf_model_file:  Llama-3.2-1B-Instruct-Q2_K.gguf
   # llm_hf_repo_id: qwp4w3hyb/Hermes-2-Pro-Llama-3-8B-iMat-GGUF
   # llm_hf_model_file:  hermes-2-pro-llama-3-8b-imat-Q4_K_S.gguf
   tfs_z: 1.0            # Tail free sampling is used to reduce the impact of less probable tokens from the output. A higher value (e.g., 2.0) will reduce the impact more, while a value of 1.0 disables this setting
@@ -75,14 +75,14 @@ embedding:
   embed_dim: 384 # 384 is for BAAI/bge-small-en-v1.5
 
 huggingface:
-  embedding_hf_model_name: mixedbread-ai/mxbai-embed-large-v1
+  embedding_hf_model_name: nomic-ai/nomic-embed-text-v1
   access_token: ${HUGGINGFACE_TOKEN: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}
 
 vectorstore:
   database: qdrant
 
 nodestore:
-  database: postgres
+  database: simple
 
 qdrant:
   path: local_data/private_gpt/qdrant

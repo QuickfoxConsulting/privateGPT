@@ -10,6 +10,9 @@
 ## Local installation
 `poetry install --extras "ui llms-llama-cpp embeddings-huggingface vector-stores-qdrant rerank-sentence-transformers vector-stores-postgres storage-nodestore-postgres"`
 
+# Postgres as vector store
+`poetry install --extras "ui llms-llama-cpp embeddings-huggingface rerank-sentence-transformers vector-stores-postgres storage-nodestore-postgres"`
+
 
 `pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
 

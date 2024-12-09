@@ -17,7 +17,7 @@ from private_gpt.users.core.config import settings
 from private_gpt.users import crud, models, schemas
 from private_gpt.server.ingest.ingest_router import create_documents, ingest, create_url_documents, ingest_url
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
-from private_gpt.components.ocr_components.table_ocr_api import process_ocr
+from private_gpt.components.ocr_components.marker_parser import process_ocr
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/documents', tags=['Documents'])
@@ -597,11 +597,9 @@ async def verify_documents(
             )
 
             if document.doc_type_id == 2:
-                return await process_ocr(request, unchecked_path) # For Scanned using DocTR
-                # return await process_ocr(request, unchecked_path, True) # For Scanned with Marker (GPU Memory full)
+                return await process_ocr(request, unchecked_path) # For Scanned with Marker (GPU Memory full)
             else:
                 return await ingest(request, unchecked_path) # For pdf
-                # return await process_ocr(request, unchecked_path, False) # For pdf with Marker (GPU Memory full)
             
         elif checker_in.status == MakerCheckerStatus.REJECTED.value:
             checker = schemas.DocumentCheckerUpdate(

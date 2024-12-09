@@ -92,7 +92,27 @@ class ChunksService:
             current_node = explored_node
 
         return explored_nodes_texts
-
+    
+    def _get_nodes_from_same_document(self, node_with_score: NodeWithScore) -> list[str]:
+        """
+        Retrieve text from other nodes with the same document ID
+        """
+        current_node = node_with_score.node
+        current_doc_id = current_node.metadata.get('doc_id')
+        
+        if not current_doc_id:
+            return []
+        
+        # Find nodes with the same doc_id
+        same_doc_nodes = []
+        for node_id, node_data in self.storage_context.docstore.docs.items():
+            if (node_data.metadata.get('doc_id') == current_doc_id and 
+                node_id != current_node.node_id):
+                same_doc_node = self.storage_context.docstore.get_node(node_id)
+                same_doc_nodes.append(same_doc_node.get_content())
+        
+        return same_doc_nodes
+    
     async def retrieve_relevant(
         self,
         text: str,

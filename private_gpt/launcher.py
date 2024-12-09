@@ -16,7 +16,7 @@ from private_gpt.server.chat.chat_router import chat_router
 from private_gpt.server.health.health_router import health_router
 from private_gpt.server.chunks.chunks_router import chunks_router
 from private_gpt.server.ingest.ingest_router import ingest_router
-from private_gpt.components.ocr_components.table_ocr_api import pdf_router
+# from private_gpt.components.ocr_components.table_ocr_api import pdf_router
 from private_gpt.server.completions.completions_router import completions_router
 from private_gpt.server.embeddings.embeddings_router import embeddings_router
 from private_gpt.server.recipes.summarize.summarize_router import summarize_router
@@ -39,7 +39,7 @@ def create_app(root_injector: Injector) -> FastAPI:
     app.include_router(summarize_router)
     app.include_router(health_router)
     app.include_router(api_router)
-    app.include_router(pdf_router)
+    # app.include_router(pdf_router)
     
     # Add LlamaIndex simple observability
     global_handler = create_global_handler("simple")
@@ -57,7 +57,7 @@ def create_app(root_injector: Injector) -> FastAPI:
                            "http://localhost:80", "http://192.168.1.131", 'http://192.168.1.131:3000'
                            , "http://192.168.1.65", 'http://192.168.1.65:3001'
                            , "http://192.168.1.109", 'http://192.168.1.109:3001'
-                           , "http://192.168.1.100", 'http://192.168.1.100:3000', "http://192.168.1.73", 'http://192.168.1.73:3000' 
+                           , "http://192.168.1.100", 'http://192.168.1.100:3000', "http://192.168.101.4", 'http://192.168.101.4:3000' 
                            ],
             allow_methods=["DELETE", "GET", "POST", "PUT", "OPTIONS", "PATCH"],
             allow_headers=["*"],
