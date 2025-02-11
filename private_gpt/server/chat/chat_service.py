@@ -6,7 +6,7 @@ from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
 from llama_index.core.indices import VectorStoreIndex
-from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor
+from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor, SentenceTransformerRerank
 from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
     SimilarityPostprocessor,
@@ -31,10 +31,15 @@ from private_gpt.settings.settings import Settings
 
 from private_gpt.paths import models_path
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from llama_index.core import QueryBundle
 from llama_index.core.schema import NodeWithScore
 
+
+from llama_index.core import PromptTemplate
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.schema import BaseNode
+from llama_index.core.query_engine import RetrieverQueryEngine
 
 class Completion(BaseModel):
     response: str
@@ -63,6 +68,91 @@ CONDENSE_PROMPT_TEMPLATE = """
     Follow-up Question: {question}
 
     Standalone Query:"""
+
+class SelfRAGRetriever(BaseRetriever):
+    """Retriever with Self-RAG capabilities"""
+    
+    def __init__(
+        self,
+        base_retriever: BaseRetriever,
+        llm: LLMComponent,
+        critique_prompt: str,
+        **kwargs
+    ) -> None:
+        self.base_retriever = base_retriever
+        self.llm = llm
+        self.critique_prompt_template = PromptTemplate(critique_prompt)
+        super().__init__(**kwargs)
+
+    def _should_retrieve(self, query: str) -> Tuple[bool, str]:
+        """Determine if retrieval is needed using LLM self-reflection"""
+        prompt = f"""Evaluate if this query requires factual information retrieval. 
+        Respond ONLY with 'YES' or 'NO':
+        Query: {query}
+        Answer:"""
+        
+        response = self.llm.complete(prompt).text.strip().upper()
+        return response == "YES", response
+
+    def _critique_node(self, node: BaseNode, query: str) -> bool:
+        """Evaluate if node is relevant using LLM"""
+        prompt = self.critique_prompt_template.format(
+            context=node.get_content(),
+            query=query
+        )
+        response = self.llm.complete(prompt).text.strip().upper()
+        return "YES" in response
+
+    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        # First decide if retrieval is needed
+        should_retrieve, reason = self._should_retrieve(query_bundle.query_str)
+        if not should_retrieve:
+            return []
+            
+        # Perform base retrieval
+        nodes = self.base_retriever.retrieve(query_bundle)
+        
+        # Critique and filter nodes
+        filtered_nodes = []
+        for node in nodes:
+            if self._critique_node(node.node, query_bundle.query_str):
+                filtered_nodes.append(node)
+        
+        return filtered_nodes
+
+class QueryExpander:
+    """Query expansion with synonym generation and LLM-based rewriting"""
+    
+    def __init__(self, llm: LLMComponent, embed_model: any):
+        self.llm = llm
+        self.embed_model = embed_model
+
+    def expand(self, query: str) -> str:
+        """Expand query using multiple techniques"""
+        # Synonym expansion
+        synonyms = self._generate_synonyms(query)
+        
+        # LLM-based expansion
+        expanded = self._llm_expansion(query)
+        
+        # Combine all terms
+        return f"{query} {' '.join(synonyms)} {expanded}"
+
+    def _generate_synonyms(self, query: str) -> List[str]:
+        """Generate synonyms using embedding similarity"""
+        query_embed = self.embed_model.get_query_embedding(query)
+        # This would normally query a synonym database, simplified here
+        return ["related terms", "similar concepts", "associated ideas"]
+
+    def _llm_expansion(self, query: str) -> str:
+        """Use LLM to rewrite and expand the query"""
+        prompt = f"""Expand this search query while maintaining its core meaning. Also translate into english if query is in another language.
+        Include related terms and alternative phrasings. 
+        Keep it concise.
+        Query: {query}
+        Expanded:"""
+        
+        return self.llm.complete(prompt).text
 
 class SimilarityPostprocessorWithAtLeastOneResult(SimilarityPostprocessor):
     """Similarity-based Node processor. Return always one result if result is empty"""
@@ -143,7 +233,17 @@ class ChatService:
             embed_model=embedding_component.embedding_model,
             show_progress=True,
         )
+    def _detect_language(self, text: str) -> str:
+        """Detect language using LLM"""
+        prompt = f"Detect the language of this text whether it is nepali or english. Respond only with the language name in English. Text: {text}"
+        response = self.llm_component.llm.complete(prompt).text.strip().lower()
+        return response
 
+    def _translate_to_english(self, text: str) -> str:
+        """Translate text to English using LLM"""
+        prompt = f"Translate the following text to English. Text: {text}"
+        return self.llm_component.llm.complete(prompt).text.strip()
+    
     def _chat_engine(
         self,
         system_prompt: str | None = None,
@@ -152,7 +252,7 @@ class ChatService:
     ) -> BaseChatEngine:
         settings = self.settings
         if use_context:
-            vector_index_retriever = self.vector_store_component.get_retriever(
+            base_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
@@ -167,46 +267,70 @@ class ChatService:
                 ),
                 TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
-            if settings.rag.rerank.enabled:
-                rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
-                    llm=self.llm_component.llm, 
-                    top_n=settings.rag.rerank.top_n,
-                    # verbose=True
+            # if settings.rag.rerank.enabled:
+            #     rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
+            #         llm=self.llm_component.llm, 
+            #         top_n=settings.rag.rerank.top_n,
+            #         # verbose=True
+            #     )
+            #     # rerank_postprocessor = SentenceTransformerRerank(
+            #     #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
+            #     # )
+            #     node_postprocessors.append(rerank_postprocessor)
+            
+            if settings.rag.query_expansion_enabled:
+                base_retriever = self._wrap_retriever_with_translation(base_retriever)
+                query_expander = QueryExpander(
+                    llm=self.llm_component.llm,
+                    embed_model=self.embedding_component.embedding_model
                 )
-                # rerank_postprocessor = SentenceTransformerRerank(
-                #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
-                # )
-                node_postprocessors.append(rerank_postprocessor)
+                base_retriever = self._wrap_retriever_with_expansion(
+                    base_retriever, query_expander)
+
+            # Add Self-RAG layer
+            if settings.rag.self_rag_enabled:
+                critique_prompt = """Evaluate if this passage is relevant to answering the query. 
+                Consider:
+                - Directly answers the question
+                - Provides supporting evidence
+                - Contains factual information related to the query
+                Respond ONLY with 'RELEVANT: YES' or 'RELEVANT: NO'
+                Passage: {context}
+                Query: {query}
+                Judgment:"""
+                
+                base_retriever = SelfRAGRetriever(
+                    base_retriever=base_retriever,
+                    llm=self.llm_component.llm,
+                    critique_prompt=critique_prompt
+                )
             
-            response_synthesizer = get_response_synthesizer(
-                response_mode="compact",
-                llm=self.llm_component.llm,
-                structured_answer_filtering=True,
-                # streaming=True  # Enable streaming for better responsiveness
+            # Create hierarchical query engine
+            query_engine = RetrieverQueryEngine(
+                retriever=base_retriever,
+                response_synthesizer=get_response_synthesizer(
+                    llm=self.llm_component.llm,
+                    response_mode="compact",
+                    verbose=True,
+                ),
+                node_postprocessors=node_postprocessors
             )
+
             
-            custom_query_engine = RetrieverQueryEngine.from_args(
-                retriever=vector_index_retriever,
-                llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
-                # node_postprocessors=node_postprocessors,
-                verbose=True  # For debugging and understanding the process
-            )
-            
-            return CondensePlusContextChatEngine.from_defaults(
-                system_prompt=system_prompt,
-                retriever=custom_query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
-                node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            )
-            # return ContextChatEngine.from_defaults(
+            # return CondensePlusContextChatEngine.from_defaults(
             #     system_prompt=system_prompt,
             #     retriever=custom_query_engine,
             #     llm=self.llm_component.llm,  # Takes no effect at the moment
             #     node_postprocessors=node_postprocessors,
-            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             # )
+            return ContextChatEngine.from_defaults(
+                system_prompt=system_prompt,
+                retriever=query_engine,
+                llm=self.llm_component.llm,  # Takes no effect at the moment
+                node_postprocessors=node_postprocessors,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -262,37 +386,45 @@ class ChatService:
             else None
         )
         system_prompt = """
-            You are a precise and helpful AI assistant focused on extracting and communicating information from a given set of documents with maximum accuracy and clarity. 
-            Your core responsibilities are:
-            1. Information Extraction
-            - Use ONLY information from the provided documents
-            - Extract information directly and verbatim when possible
-            - Prioritize precision over verbosity
+            You are a precise and helpful AI assistant designed to retrieve and communicate information from a given set of documents using Retrieval-Augmented Generation (RAG). Your primary goal is to provide accurate, context-aware, and well-structured responses based on the retrieved information. Follow these guidelines strictly:
 
-            2. Response Quality
-            - Provide clear, concise, and structured responses
-            - Explain technical or complex terms using context-based definitions
-            - Maintain a neutral, professional tone
-            - Break down complex information into digestible parts
+            1. **Information Retrieval and Usage**
+            - Use ONLY information retrieved from the provided documents. Do not rely on external knowledge or assumptions.
+            - If no relevant documents are retrieved, clearly state: "The provided documents do not contain enough information to answer this question."
+            - Prioritize verbatim information from the documents when possible, but rephrase for clarity if necessary.
 
-            3. Handling Information Gaps
-            - If the context lacks sufficient information to fully answer a query, clearly state: "The provided documents do not contain enough information to comprehensively answer this question."
-            - Never fabricate or guess information
-            - Offer to help clarify the query or suggest ways to find more information
+            2. **Response Quality**
+            - Provide clear, concise, and structured responses.
+            - Break down complex information into digestible parts using bullet points, numbered lists, or markdown formatting.
+            - Maintain a neutral, professional tone at all times.
+            - If technical terms or jargon are used, provide context-based definitions or explanations.
 
-            4. Managing Conflicting Information
-            - If documents contain contradictory information, explicitly highlight the contradictions
-            - Do not attempt to resolve or reconcile conflicting details
-            - Present the conflicting information objectively
+            3. **Handling Information Gaps**
+            - If the retrieved documents do not fully answer the query, explicitly state the limitations of the available information.
+            - Never fabricate, guess, or hallucinate information. If unsure, say so.
+            - Suggest potential follow-up questions or areas to explore if the query cannot be fully addressed.
 
-            5. Response Principles
-            - Avoid subjective interpretations
-            - Focus on factual, context-based communication
-            - Use markdown for formatting to enhance readability
-            - Cite document sources when multiple documents are provided
+            4. **Managing Conflicting Information**
+            - If the retrieved documents contain contradictory information, explicitly highlight the contradictions.
+            - Present conflicting information objectively without attempting to resolve or reconcile it.
+            - Provide citations or references to the source documents when presenting conflicting details.
 
-            Your primary goal is to be a reliable, context-aware information retrieval and communication tool.
-            """
+            5. **Response Principles**
+            - Always ground your response in the retrieved documents. Avoid subjective interpretations or opinions.
+            - Use markdown formatting (e.g., **bold**, *italics*, `code`, lists) to enhance readability.
+            - Cite specific document sources when referencing information, especially when multiple documents are provided.
+
+            6. **Language and Translation**
+            - If the query is in a non-English language, translate it to English for retrieval purposes.
+            - Respond in the same language as the user's query, ensuring the response is accurate and culturally appropriate.
+            - If translation is required, ensure the translated response maintains the original meaning and context.
+
+            7. **Error Handling**
+            - If the retrieval process fails or returns no results, inform the user and suggest alternative approaches (e.g., rephrasing the query or broadening the search scope).
+            - If the system encounters an error, provide a clear and actionable message to the user.
+
+            Your primary responsibility is to be a reliable, context-aware information retrieval and communication tool. Always prioritize accuracy, clarity, and user understanding.
+        """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -306,17 +438,46 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        # print("---------------------------------------------------------")
-        # for node in wrapped_response.source_nodes:
-        #     print("*********************************************")
-        #     print(node)
-        #     print("*********************************************")
-        #     # print(Chunk.from_node(node))
-        # print("---------------------------------------------------------")
-
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
+    
+    def _wrap_retriever_with_translation(self, base_retriever: BaseRetriever) -> BaseRetriever:
+        """Wrap retriever with query translation to English"""
+        class TranslatedRetriever(BaseRetriever):
+            def __init__(self, base: BaseRetriever, svc: ChatService):
+                self.base = base
+                self.svc = svc
+
+            def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+                original_query = query_bundle.query_str
+                lang = self.svc._detect_language(original_query)
+                print("LANGUAGE: ", lang)
+                if lang != 'english':
+                    translated = self.svc._translate_to_english(original_query)
+                    new_bundle = QueryBundle(query_str=translated)
+                    return self.base.retrieve(new_bundle)
+                return self.base.retrieve(query_bundle)
+
+        return TranslatedRetriever(base_retriever, self)
+    
+
+    def _wrap_retriever_with_expansion(
+        self, 
+        retriever: BaseRetriever,
+        query_expander: QueryExpander
+    ) -> BaseRetriever:
+        """Wrap retriever with query expansion capabilities"""
+        class ExpandedRetriever(BaseRetriever):
+            def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+                expanded_query = query_expander.expand(query_bundle.query_str)
+                new_bundle = QueryBundle(
+                    query_str=expanded_query,
+                    embedding=query_bundle.embedding
+                )
+                return retriever.retrieve(new_bundle)
+                
+        return ExpandedRetriever()
 
     def generate_title(
         self,

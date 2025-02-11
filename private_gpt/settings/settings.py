@@ -321,8 +321,15 @@ class RagSettings(BaseModel):
         description="If set, any documents retrieved from the RAG must meet a certain match score. Acceptable values are between 0 and 1.",
     )
     rerank: RerankSettings
-
-
+    self_rag_enabled: bool = Field(
+        False,
+        description="This value controls whether a self RAG should be included in the RAG pipeline.",
+    )
+    query_expansion_enabled: bool = Field(
+        False,
+        description="This value controls whether a query expansion should be included in the RAG pipeline.",
+    )
+    
 class PostgresSettings(BaseModel):
     host: str = Field(
         "localhost",

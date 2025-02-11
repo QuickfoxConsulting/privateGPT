@@ -195,6 +195,7 @@ async def create_documents(
     Create documents in the `Document` table and update the
     `Document Department Association` table with the department IDs for the documents.
     """
+    print(departments)
     department_ids = departments.departments_ids
     file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
     if file_ingested:
