@@ -66,9 +66,9 @@ class DeleteUser(BaseModel):
 
 class UserAdminUpdate(BaseModel):
 	id: int
-	username: str
-	role: str
-	department_id: int
+	username: Optional[str] = None
+	role: Optional[str] = None
+	department_id: Optional[int] = None
 
 class UserAdmin(BaseModel):
 	username: str

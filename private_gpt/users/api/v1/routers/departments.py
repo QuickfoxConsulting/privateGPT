@@ -58,8 +58,8 @@ def list_departments(
             schemas.Department(
                 id=dep.id,
                 name=dep.name,
-                total_users=dep.calculated_total_users,
-                total_documents=dep.calculated_total_documents,
+                total_users=dep.user_count,
+                total_documents=dep.document_count,
             )
             for dep in deps
         ]

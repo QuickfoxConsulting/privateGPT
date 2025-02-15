@@ -1,161 +1,188 @@
 import os
-import re
 from typing import Dict, List, Optional, Tuple
-
+import fitz  # PyMuPDF
 import pymupdf4llm
-from langchain_text_splitters import MarkdownHeaderTextSplitter, TokenTextSplitter
+from difflib import SequenceMatcher
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
-from pathlib import Path
+from chonkie import LateChunker
 
 class CustomPDFReader(BaseReader):
     """
-    A class to convert PDF files to markdown chunks with metadata.
-    
-    Attributes:
-        CHUNK_SIZE (int): Size of text chunks.
-        CHUNK_OVERLAP_SIZE (int): Overlap between text chunks.
-        HEADERS_TO_SPLIT_ON (List[Tuple[str, str]]): Markdown headers to split on.
+    A class to convert PDF files to markdown chunks with accurate page mapping,
+    using LateChunker for intelligent chunking.
     """
     
-    CHUNK_SIZE = 1000
-    CHUNK_OVERLAP_SIZE = 100
     HEADERS_TO_SPLIT_ON = [
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
         ("####", "Header 4"),
+        ("#####", "Header 5"),
     ]
 
-    def __init__(self, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP_SIZE):
+    def __init__(
+        self,
+        embedding_model: str = "all-MiniLM-L6-v2",
+        mode: str = "sentence",
+        chunk_size: int = 1024,
+        min_sentences_per_chunk: int = 1,
+        min_characters_per_sentence: int = 12
+    ):
         """
-        Initialize the PDF to Markdown chunker.
+        Initialize the PDF reader with LateChunker configuration.
         
         Args:
-            chunk_size (int, optional): Size of text chunks. Defaults to 250.
-            chunk_overlap (int, optional): Overlap between text chunks. Defaults to 50.
+            embedding_model (str): Name of the embedding model to use
+            mode (str): Chunking mode ("sentence" or "word")
+            chunk_size (int): Maximum size of chunks
+            min_sentences_per_chunk (int): Minimum number of sentences per chunk
+            min_characters_per_sentence (int): Minimum characters per sentence
         """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-
-    def _preprocess_markdown(self, md_text: str) -> str:
-        """
-        Preprocess the markdown text by cleaning and standardizing.
-        
-        Args:
-            md_text (str): Raw markdown text.
-        
-        Returns:
-            str: Preprocessed markdown text.
-        """
-        md_text = re.sub(r'\n+', '\n', md_text)
-        md_text = '\n'.join(line.strip() for line in md_text.split('\n'))
-        return md_text
-
-    def _get_page_indexes(self, md_text: str, page_break: str = '-----') -> List[Tuple[int, int]]:
-        """
-        Get page index ranges in the markdown text.
-        
-        Args:
-            md_text (str): Preprocessed markdown text.
-            page_break (str, optional): Page break separator. Defaults to '-----'.
-        
-        Returns:
-            List[Tuple[int, int]]: List of page start and end indexes.
-        """
-        page_split_indexes = [0]
-        page_split_indexes.extend(
-            [match.start() + len(page_break) for match in re.finditer(re.escape(page_break), md_text)]
+        self.chunker = LateChunker(
+            embedding_model=embedding_model,
+            mode=mode,
+            chunk_size=chunk_size,
+            min_sentences_per_chunk=min_sentences_per_chunk,
+            min_characters_per_sentence=min_characters_per_sentence,
         )
-        
-        page_indexes = []
-        for n, idx in enumerate(page_split_indexes):
-            try:
-                page_indexes.append((idx, page_split_indexes[n+1]-1))
-            except IndexError:
-                page_indexes.append((idx, len(md_text)))
-        
-        return page_indexes
 
-    def _assign_page_metadata(self, chunks: List[Document], md_text: str, page_indexes: List[Tuple[int, int]], filename: str) -> List[Document]:
+    def _extract_pdf_text_with_pages(self, pdf_path: str) -> List[Dict]:
         """
-        Assign page metadata to markdown chunks.
-        
-        Args:
-            chunks (List[Document]): List of markdown chunks.
-            md_text (str): Full markdown text.
-            page_indexes (List[Tuple[int, int]]): Page index ranges.
-            filename (str): PDF filename.
-        
-        Returns:
-            List[Document]: Chunks with page metadata added.
-        """
-        for chunk in chunks:
-            start = md_text.find(chunk.text)
-            end = start + len(chunk.text)
-            
-            page_coverage = []
-            for page_number, (page_start_idx, page_end_idx) in enumerate(page_indexes, start=1):
-                if page_start_idx <= start <= page_end_idx:
-                    page_coverage.append(page_number)
-                    break
-            
-            for page_number, (page_start_idx, page_end_idx) in enumerate(page_indexes, start=1):
-                if page_start_idx <= end <= page_end_idx:
-                    if page_number not in page_coverage:
-                        page_coverage.append(page_number)
-                    break
-            
-            if len(page_coverage) > 1:
-                page_coverage = list(range(page_coverage[0], page_coverage[1] + 1))            
-            chunk.metadata['page'] = page_coverage
-        
-        return chunks
-
-    def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
-        """
-        Load and chunk PDF data into markdown documents.
+        Extract text content with page numbers, maintaining sequence for multi-page detection.
         
         Args:
             pdf_path (str): Path to the PDF file.
-            extra_info (Optional[Dict], optional): Additional metadata. Defaults to None.
+            
+        Returns:
+            List[Dict]: List of text blocks with their page numbers and positions.
+        """
+        text_blocks = []
+        doc = fitz.open(pdf_path)
         
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            blocks = page.get_text("blocks")
+            
+            for block in blocks:
+                # Each block contains (x0, y0, x1, y1, text, block_no, block_type)
+                text_blocks.append({
+                    'page_num': page_num + 1,
+                    'text': block[4].strip(),
+                    'position': (block[0], block[1], block[2], block[3])
+                })
+        
+        doc.close()
+        return text_blocks
+
+    def _find_matching_pages(self, chunk_text: str, text_blocks: List[Dict], 
+                           min_match_length: int = 50) -> List[int]:
+        """
+        Find all pages that contain parts of the given chunk text.
+        
+        Args:
+            chunk_text (str): The text chunk to locate.
+            text_blocks (List[Dict]): List of text blocks with page numbers.
+            min_match_length (int): Minimum length of text to consider a match.
+            
+        Returns:
+            List[int]: List of page numbers containing the chunk text.
+        """
+        matching_pages = set()
+        chunk_text = chunk_text.strip()
+        
+        # Split chunk into smaller segments for better matching
+        sentences = chunk_text.split('.')
+        segments = [sent.strip() for sent in sentences if len(sent.strip()) > min_match_length]
+        
+        for segment in segments:
+            for block in text_blocks:
+                block_text = block['text']
+                
+                # Check if this block contains the segment
+                if (segment in block_text or 
+                    SequenceMatcher(None, segment, block_text).ratio() > 0.8):
+                    matching_pages.add(block['page_num'])
+                    
+                    # Check adjacent blocks for continuation
+                    block_idx = text_blocks.index(block)
+                    if block_idx > 0:
+                        matching_pages.add(text_blocks[block_idx-1]['page_num'])
+                    if block_idx < len(text_blocks) - 1:
+                        matching_pages.add(text_blocks[block_idx+1]['page_num'])
+        
+        # If we found no matches but the chunk is substantial, 
+        # try a more lenient matching approach
+        if not matching_pages and len(chunk_text) > min_match_length:
+            for block in text_blocks:
+                if any(phrase in block['text'] for phrase in chunk_text.split('\n') 
+                       if len(phrase.strip()) > min_match_length):
+                    matching_pages.add(block['page_num'])
+        
+        return sorted(list(matching_pages))
+
+    def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
+        """
+        Load and chunk PDF data into markdown documents with accurate page mapping.
+        
+        Args:
+            pdf_path (str): Path to the PDF file.
+            extra_info (Optional[Dict]): Additional metadata.
+            
         Returns:
             List[Document]: List of markdown chunks with metadata.
         """
-        # Validate extra_info
         if extra_info is not None and not isinstance(extra_info, dict):
             raise TypeError("extra_info must be a dictionary.")
+        
+        # Extract text blocks with page numbers
+        text_blocks = self._extract_pdf_text_with_pages(pdf_path)
         
         # Convert PDF to markdown
         filename = os.path.basename(pdf_path)
         md_text = pymupdf4llm.to_markdown(pdf_path)
         
-        # Optional: Save markdown to file
-        # Path("internship.md").write_bytes(md_text.encode())
-        
-        md_text = self._preprocess_markdown(md_text)
-        page_indexes = self._get_page_indexes(md_text)
-        
+        # Split by headers
         markdown_splitter = MarkdownHeaderTextSplitter(
             self.HEADERS_TO_SPLIT_ON, 
             strip_headers=False
         )
         md_header_splits = markdown_splitter.split_text(md_text)
         
-        text_splitter = TokenTextSplitter(
-            chunk_size=self.chunk_size, 
-            chunk_overlap=self.chunk_overlap
-        )
-        
         chunks = []
-        for chunk in md_header_splits:
-            metadata = chunk.metadata
-            for chunk_split in text_splitter.split_text(chunk.page_content):
+        for header_chunk in md_header_splits:
+            metadata = header_chunk.metadata
+            
+            # Use LateChunker to split the text
+            text_chunks = self.chunker(header_chunk.page_content)
+            
+            for chunk in text_chunks:
+                # Find all pages containing parts of this chunk
+                page_numbers = self._find_matching_pages(chunk.text, text_blocks)
+                
+                # Ensure we always have at least one page number
+                if not page_numbers:
+                    # If no match found, use textual analysis to estimate page range
+                    text_position = md_text.find(chunk.text)
+                    if text_position != -1:
+                        # Estimate page based on position in full text
+                        estimated_page = (text_position // 3000) + 1  # Rough estimate
+                        page_numbers = [min(estimated_page, len(text_blocks))]
+                
+                # Create document with combined metadata
+                chunk_metadata = {
+                    **metadata,
+                    'page': page_numbers,
+                    'filename': filename
+                }
+                if extra_info:
+                    chunk_metadata.update(extra_info)
+                    
                 doc = Document(
-                    text=chunk_split,
-                    metadata=metadata
+                    text=chunk.text,
+                    metadata=chunk_metadata
                 )
                 chunks.append(doc)
         
-        return self._assign_page_metadata(chunks, md_text, page_indexes, filename)
+        return chunks

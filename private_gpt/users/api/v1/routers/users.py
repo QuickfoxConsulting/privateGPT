@@ -2,6 +2,7 @@ import traceback
 from typing import Any, List
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi_pagination import Page, paginate
@@ -307,7 +308,6 @@ def delete_user(
         content={"message": "User deleted successfully"},
     )
 
-
 @router.post("/update_user")
 def admin_update_user(
     *,
@@ -320,64 +320,87 @@ def admin_update_user(
     ),
 ) -> Any:
     """
-    Update the user by the Admin/Super_ADMIN/Operator
+    Update the user by the Admin/Super_ADMIN.
+    Uses a database transaction to ensure atomicity.
     """
     try:
         existing_user = crud.user.get_by_id(db, id=user_update.id)
-        if existing_user is None:
+        if not existing_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User not found with id: {user_update.id}",
             )
+
         old_detail = {
             'username': existing_user.username,
-            'role': existing_user.user_role.role.name,
+            'role': existing_user.user_role.role.name if existing_user.user_role else None,
             'department': existing_user.department_id
         }
-        if not (existing_user.username == user_update.username):
-            username = crud.user.get_by_name(db, name=user_update.username)
-            if username:
+
+        if user_update.username and existing_user.username != user_update.username:
+            username_exists = crud.user.get_by_name(db, name=user_update.username)
+            if username_exists:
                 raise HTTPException(
-                    status_code=409,
+                    status_code=status.HTTP_409_CONFLICT,
                     detail="The user with this username already exists!",
                 )
 
-        role = crud.role.get_by_name(db, name=user_update.role)
-        if (role.id == 1): # role id for SUPER_ADMIN and OPERATOR 
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Cannot create SUPER ADMIN!",
-            )
+        if user_update.role:
+            role = crud.role.get_by_name(db, name=user_update.role)
+            if not role:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid role provided.",
+                )
 
-        user_role = crud.user_role.get_by_user_id(db, user_id=existing_user.id)
-        role_in = schemas.UserRoleUpdate(
-            user_id=existing_user.id,
-            role_id=role.id,
-        )
-        role = crud.user_role.update(db, db_obj=user_role, obj_in=role_in)
-        user_update_in = schemas.UserAdmin(username=user_update.username, department_id=user_update.department_id)
+            user_role = crud.user_role.get_by_user_id(db, user_id=existing_user.id)
+            role_in = schemas.UserRoleUpdate(
+                user_id=existing_user.id,
+                role_id=role.id,
+            )
+            crud.user_role.update(db, db_obj=user_role, obj_in=role_in)
+
+        # Update User Details
+        update_data = {}
+        if user_update.username:
+            update_data["username"] = user_update.username
+        if user_update.department_id:
+            update_data["department_id"] = user_update.department_id
+
+        if update_data:
+            crud.user.update(db, db_obj=existing_user, obj_in=update_data)
 
         new_detail = {
-            'username': user_update.username,
-            'role': user_update.role,
-            'department': user_update.department_id
+            'username': user_update.username or existing_user.username,
+            'role': user_update.role or old_detail['role'],
+            'department': user_update.department_id or old_detail['department']
         }
+
         details = {
             'before': old_detail,
             'after': new_detail,
         }
+
         log_audit_user(request, db, current_user, 'update', details)
-        user = crud.user.get_by_id(db, id=existing_user.id)
-        crud.user.update(db, db_obj=user, obj_in=user_update_in)
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={"message": "User updated successfully"}
         )
-    
-    except Exception as e:
-        print(traceback.print_exc())
-        return HTTPException(
+
+    except HTTPException:
+        raise  # Rethrow FastAPI HTTP errors
+
+    except SQLAlchemyError:
+        traceback.print_exc()
+        raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Unable to update user'
+            detail="Database error: Unable to update user."
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error: Unable to update user."
         )

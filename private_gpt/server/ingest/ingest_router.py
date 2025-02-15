@@ -6,7 +6,7 @@ import aiofiles
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
+from private_gpt.users.models.document import DocumentVersion, MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
 from fastapi.responses import JSONResponse
@@ -43,6 +43,7 @@ class IngestResponse(BaseModel):
 
 class DeleteFilename(BaseModel):
     filename: str
+    version_id: Optional[str] = None
 
 # @ingest_router.post("/ingest", tags=["Ingestion"], deprecated=True)
 # def ingest(request: Request, file: UploadFile) -> IngestResponse:
@@ -128,6 +129,7 @@ def delete_ingested(request: Request, doc_id: str) -> None:
     service = request.state.injector.get(IngestService)
     service.delete(doc_id)
 
+from pathlib import Path
 
 @ingest_router.post("/ingest/file/delete", tags=["Ingestion"])
 def delete_file(
@@ -138,65 +140,72 @@ def delete_file(
         current_user: models.User = Security(
             deps.get_current_user,
             scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
-
         )) -> dict:
-    """Delete the specified filename.
-
-    The `filename` can be obtained from the `GET /ingest/list` endpoint.
-    The document will be effectively deleted from your storage context.
-    """
+    """Delete the specified filename and all related data."""
     filename = delete_input.filename    
     service = request.state.injector.get(IngestService)
     try:
-        document = crud.documents.get_by_filename(db,file_name=filename)
+        document = crud.documents.get_by_filename(db, file_name=filename)
         if document:
-            doc_ids = service.get_doc_ids_by_filename(filename)
-            try:
+            document_versions = crud.document_versions.get_by_document_id(db, document_id=document.id)
+            for version in document_versions:
+                upload_path = version.file_path
+                logger.info(f"Deleting file at: {upload_path}")
+                filename = os.path.basename(upload_path)
+                doc_ids = service.get_doc_ids_by_filename(filename)
                 if doc_ids:
                     for doc_id in doc_ids:
                         service.delete(doc_id)
-                    upload_path = Path(f"{UPLOAD_DIR}/{filename}")
-                    os.remove(upload_path)
-            except:
-                print("Unable to delete file from the static directory")
+                try:
+                    if upload_path.exists():
+                        os.remove(upload_path)
+                except Exception as e:
+                    print(f"Error deleting file from static directory: {e}")
+                        
+            db.execute(
+                models.document_department_association.delete().where(
+                    models.document_department_association.c.document_id == document.id
+                )
+            )            
+            db.execute(
+                models.document_category_association.delete().where(
+                    models.document_category_association.c.document_id == document.id
+                )
+            )            
+            crud.documents.remove(db=db, id=document.id)
+            db.commit()
             log_audit(
                 model='Document', 
                 action='delete',
                 details={
                     "detail": f"{filename}",
                     'user': current_user.username,
-                    }, 
+                }, 
                 user_id=current_user.id
             )
-            crud.documents.remove(db=db, id=document.id)
-            db.execute(models.document_department_association.delete().where(
-                            models.document_department_association.c.document_id == document.id
-                        ))
-        return {"status": "SUCCESS", "message": f"{filename}' deleted successfully."}
+            
+        return {"status": "SUCCESS", "message": f"{filename} deleted successfully."}
     except Exception as e:
-        print(traceback.print_exc())
-        logger.error(
-            f"Unexpected error deleting documents with filename '{filename}': {str(e)}")
+        print(traceback.format_exc())
+        logger.error(f"Error deleting document '{filename}': {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
-
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Internal Server Error"
+        )
 
 async def create_documents(
     db: Session, 
     file_name: str = None, 
     category: int = None,
     current_user: models.User = None,
-    departments: schemas.DocumentDepartmentList = Depends(),
+    departments: schemas.DocumentUpload = Depends(),
     log_audit: models.Audit = None,
-    version_type: str = "NEW",
-    previous_document_id: Optional[int] = None,
 ):
     """
     Create documents in the `Document` table and update the
     `Document Department Association` table with the department IDs for the documents.
     """
-    print(departments)
-    department_ids = departments.departments_ids
+    department_ids = departments.departments
     file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
     if file_ingested:
         raise HTTPException(
@@ -204,19 +213,33 @@ async def create_documents(
             detail="File already exists. Choose a different file.",
         )
 
-    print(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
+    logger.info(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
 
     docs_in = schemas.DocumentMakerCreate(
         filename=file_name, 
         uploaded_by=current_user.id, 
-        action_type=MakerCheckerActionType.INSERT,
-        status=MakerCheckerStatus.PENDING,
-        doc_type_id=departments.doc_type_id,
-        version_type=version_type,
-        previous_document_id=previous_document_id,
+        tags=departments.tags
     )
     
+    # Create the document
     document = crud.documents.create(db=db, obj_in=docs_in)
+
+    # Create the initial document version
+    version_in = schemas.DocumentVersionCreate(
+        document_id=document.id,
+        version_number=1,
+        status=MakerCheckerStatus.PENDING,
+        action_type=MakerCheckerActionType.INSERT,
+        file_path="",  # This will be updated later
+        uploaded_by=current_user.id,
+    )
+    document_version = crud.document_versions.create(db=db, obj_in=version_in)
+
+    # Update the document with the current version
+    document.current_version_id = document_version.id
+    db.commit()
+
+    # Associate departments
     department_ids = department_ids if department_ids else "1"
     department_ids = [int(number) for number in department_ids.split(",")]
 
@@ -227,6 +250,8 @@ async def create_documents(
                 department_id=department_id
             )
         )
+
+    # Associate category if provided
     if category:  
         db.execute(
             models.document_category_association.insert().values(
@@ -234,6 +259,7 @@ async def create_documents(
                 category_id=category
             )
         )
+
     log_audit(
         model='Document', 
         action='create',
@@ -242,12 +268,11 @@ async def create_documents(
             'user': f"{current_user.username}",
             'departments': f"{department_ids}",
             'categories': f"{category}",
-            'version_type': f"{version_type}",
-            'previous_document_id': f"{previous_document_id}" if previous_document_id else "None"
         }, 
         user_id=current_user.id
     )
     return document
+
 
 async def create_url_documents(
     db: Session, 
@@ -351,56 +376,56 @@ async def ingest(request: Request, file_path: str) -> IngestResponse:
         upload_path.unlink(missing_ok=True)
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
-@ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
-async def ingest_file(
-        request: Request,
-        departments: schemas.DocumentDepartmentList = Depends(),
-        file: UploadFile = File(...),
-        log_audit: models.Audit = Depends(deps.get_audit_logger),
-        db: Session = Depends(deps.get_db),
-        current_user: models.User = Security(
-            deps.get_current_user,
-            scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
-)) -> IngestResponse:
-    """Ingests and processes a file, storing its chunks to be used as context."""
-    service = request.state.injector.get(IngestService)
-    try:
-        original_filename = file.filename
-        print("Original file name is:", original_filename)
-        if original_filename is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No file name provided",
-            )
-        upload_path = Path(f"{UPLOAD_DIR}/{original_filename}")
-        try:
-            contents = await file.read()
-            async with aiofiles.open(upload_path, 'wb') as f:
-                await f.write(contents)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Internal Server Error: Unable to ingest file.",
-            )
+# @ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
+# async def ingest_file(
+#         request: Request,
+#         departments: schemas.DocumentUpload = Depends(),
+#         file: UploadFile = File(...),
+#         log_audit: models.Audit = Depends(deps.get_audit_logger),
+#         db: Session = Depends(deps.get_db),
+#         current_user: models.User = Security(
+#             deps.get_current_user,
+#             scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+# )) -> IngestResponse:
+#     """Ingests and processes a file, storing its chunks to be used as context."""
+#     service = request.state.injector.get(IngestService)
+#     try:
+#         original_filename = file.filename
+#         print("Original file name is:", original_filename)
+#         if original_filename is None:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="No file name provided",
+#             )
+#         upload_path = Path(f"{UPLOAD_DIR}/{original_filename}")
+#         try:
+#             contents = await file.read()
+#             async with aiofiles.open(upload_path, 'wb') as f:
+#                 await f.write(contents)
+#         except Exception as e:
+#             raise HTTPException(
+#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#                 detail="Internal Server Error: Unable to ingest file.",
+#             )
 
-        await create_documents(db, original_filename, current_user, departments, log_audit)
-        with open(upload_path, "rb") as f:
-            ingested_documents = service.ingest_bin_data(original_filename, f)
+#         await create_documents(db, original_filename, current_user, departments, log_audit)
+#         with open(upload_path, "rb") as f:
+#             ingested_documents = service.ingest_bin_data(original_filename, f)
 
-        logger.info(f"{original_filename} is uploaded by {current_user.username} in {departments.departments_ids}")
-        response = IngestResponse(
-            object="list", model="private-gpt", data=ingested_documents
-        )
-        return response
+#         logger.info(f"{original_filename} is uploaded by {current_user.username} in {departments.departments_ids}")
+#         response = IngestResponse(
+#             object="list", model="private-gpt", data=ingested_documents
+#         )
+#         return response
 
-    except HTTPException:
-        print(traceback.print_exc())
-        raise
+#     except HTTPException:
+#         print(traceback.print_exc())
+#         raise
 
-    except Exception as e:
-        print(traceback.print_exc())
-        logger.error(f"There was an error uploading the file(s): {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal Server Error: Unable to ingest file.",
-        )
+#     except Exception as e:
+#         print(traceback.print_exc())
+#         logger.error(f"There was an error uploading the file(s): {str(e)}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Internal Server Error: Unable to ingest file.",
+#         )

@@ -1,33 +1,48 @@
-from sqlalchemy import ForeignKey, event
-from sqlalchemy.orm import relationship, Session
-from sqlalchemy import Column, Integer, String, Table
-
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy import select, func
+from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, ForeignKey
 from private_gpt.users.db.base_class import Base
-from private_gpt.users.models.document_department import document_department_association
-
 
 class Department(Base):
-    """Models a Department table."""
-
+    """Models a Department table with document and user associations, and dynamic counts."""
+    
     __tablename__ = "departments"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, unique=True)
 
+    # Foreign key to Company
     company_id = Column(Integer, ForeignKey('companies.id'))
     company = relationship("Company", back_populates="departments")
 
+    # Relationships
     users = relationship("User", back_populates="department")
+    documents = relationship("Document", secondary="document_department_association", back_populates="departments")
 
-    documents = relationship("Document", secondary=document_department_association, back_populates="departments")
-
-    total_users = Column(Integer, default=0)
-    total_documents = Column(Integer, default=0)
-
-    @property
-    def calculated_total_users(self):
+    # Hybrid properties for dynamic counts
+    @hybrid_property
+    def user_count(self):
+        """Return the total number of users in this department."""
         return len(self.users)
+    
+    @user_count.expression
+    def user_count(cls):
+        """SQL expression for user count."""
+        from private_gpt.users.models.user import User
+        return select([func.count(User.id)])\
+            .where(User.department_id == cls.id)\
+            .label("user_count")
 
-    @property
-    def calculated_total_documents(self):
+    @hybrid_property
+    def document_count(self):
+        """Return the total number of documents associated with this department."""
         return len(self.documents)
+    
+    @document_count.expression
+    def document_count(cls):
+        """SQL expression for document count."""
+        from private_gpt.users.models.document_department import document_department_association
+        return select([func.count(document_department_association.c.document_id)])\
+            .where(document_department_association.c.department_id == cls.id)\
+            .label("document_count")

@@ -3,16 +3,16 @@ server:
 
 llm:
   mode: ollama
-  max_new_tokens: 512
-  context_window: 3900
+  max_new_tokens: 768
+  context_window: 8192
   temperature: 0.1     #The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 
 embedding:
   mode: ollama
 
 ollama:
-  llm_model: gemma2:2b
-  embedding_model: nomic-embed-text:latest
+  llm_model: llama3.2
+  embedding_model: mxbai-embed-large
   api_base: http://localhost:11434
   embedding_api_base: http://localhost:11434  # change if your embedding model runs on another ollama
   keep_alive: 5m

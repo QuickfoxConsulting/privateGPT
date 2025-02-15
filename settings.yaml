@@ -42,8 +42,8 @@ llm:
   # Should be matching the selected model
   max_new_tokens: 1024
   context_window: 8192
-  tokenizer: meta-llama/Llama-3.2-1B-Instruct
-  temperature: 0.0      # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
+  tokenizer: meta-llama/Llama-3.2-3B-Instruct
+  temperature: 0.1     # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 
 rag:
   similarity_top_k: 10
@@ -54,7 +54,7 @@ rag:
     enabled: true
     model: sentence-transformers/all-MiniLM-L6-v2
     top_n: 5
-  self_rag_enabled: true
+  self_rag_enabled: false
   query_expansion_enabled: true  
 
 llamacpp:
@@ -77,7 +77,7 @@ embedding:
   embed_dim: 384 # 384 is for BAAI/bge-small-en-v1.5
 
 huggingface:
-  embedding_hf_model_name: nomic-ai/nomic-embed-text-v1
+  embedding_hf_model_name: mixedbread-ai/mxbai-embed-large-v1
   access_token: ${HUGGINGFACE_TOKEN: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}
 
 vectorstore:

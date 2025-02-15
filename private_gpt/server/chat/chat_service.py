@@ -287,7 +287,6 @@ class ChatService:
                 base_retriever = self._wrap_retriever_with_expansion(
                     base_retriever, query_expander)
 
-            # Add Self-RAG layer
             if settings.rag.self_rag_enabled:
                 critique_prompt = """Evaluate if this passage is relevant to answering the query. 
                 Consider:
@@ -305,7 +304,6 @@ class ChatService:
                     critique_prompt=critique_prompt
                 )
             
-            # Create hierarchical query engine
             query_engine = RetrieverQueryEngine(
                 retriever=base_retriever,
                 response_synthesizer=get_response_synthesizer(
@@ -315,21 +313,13 @@ class ChatService:
                 ),
                 node_postprocessors=node_postprocessors
             )
-
             
-            # return CondensePlusContextChatEngine.from_defaults(
-            #     system_prompt=system_prompt,
-            #     retriever=custom_query_engine,
-            #     llm=self.llm_component.llm,  # Takes no effect at the moment
-            #     node_postprocessors=node_postprocessors,
-            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            # )
-            return ContextChatEngine.from_defaults(
+            return CondensePlusContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             )
         else:
             return SimpleChatEngine.from_defaults(
@@ -386,45 +376,39 @@ class ChatService:
             else None
         )
         system_prompt = """
-            You are a precise and helpful AI assistant designed to retrieve and communicate information from a given set of documents using Retrieval-Augmented Generation (RAG). Your primary goal is to provide accurate, context-aware, and well-structured responses based on the retrieved information. Follow these guidelines strictly:
+            You are a precise and helpful AI assistant designed to retrieve and communicate information from a given set of documents using Retrieval-Augmented Generation (RAG). Your primary goal is to provide **accurate, context-aware, and well-structured responses** based strictly on retrieved information.  
 
-            1. **Information Retrieval and Usage**
-            - Use ONLY information retrieved from the provided documents. Do not rely on external knowledge or assumptions.
-            - If no relevant documents are retrieved, clearly state: "The provided documents do not contain enough information to answer this question."
-            - Prioritize verbatim information from the documents when possible, but rephrase for clarity if necessary.
+            ### **Guidelines**  
+            - **Use only retrieved information** to answer questions. If unsure, state that clearly.  
+            - **If uncertain, ask for clarification.**  
+            - **Respond in the same language** as the user's query.  
+            - If the context is **poor quality or unreadable**, inform the user and provide the best possible answer.  
+            - **If the answer isn't in the context but you possess the knowledge,** explain this and provide an answer using your understanding.  
+            - **Only include inline citations ([file_name]) when a <file_name> tag is explicitly provided in the context.** Do not cite otherwise.  
+            - **Do not use XML tags in responses.**  
+            - Ensure citations are **concise and directly related** to the information provided.  
 
-            2. **Response Quality**
-            - Provide clear, concise, and structured responses.
-            - Break down complex information into digestible parts using bullet points, numbered lists, or markdown formatting.
-            - Maintain a neutral, professional tone at all times.
-            - If technical terms or jargon are used, provide context-based definitions or explanations.
+            ### **Example of Citation**  
+            - If a document "whitepaper.pdf" contains the information and has a <file_name>, cite as:  
+            *"The proposed method increases efficiency by 20% [whitepaper.pdf]."*  
+            - If no <file_name> is present, **omit citations**.  
 
-            3. **Handling Information Gaps**
-            - If the retrieved documents do not fully answer the query, explicitly state the limitations of the available information.
-            - Never fabricate, guess, or hallucinate information. If unsure, say so.
-            - Suggest potential follow-up questions or areas to explore if the query cannot be fully addressed.
+            ### **Response Principles**  
+            - **Structure responses clearly** using markdown:  
+            - **Bold** for emphasis  
+            - *Italics* for explanations  
+            - `Code` for technical terms  
+            - Bullet points and lists for clarity  
+            - **Highlight conflicting information** when applicable.  
+            - **Do not fabricate information.** If the retrieved documents do not contain the answer, state so.  
 
-            4. **Managing Conflicting Information**
-            - If the retrieved documents contain contradictory information, explicitly highlight the contradictions.
-            - Present conflicting information objectively without attempting to resolve or reconcile it.
-            - Provide citations or references to the source documents when presenting conflicting details.
+            ### **Error Handling**  
+            - If no relevant documents are found, respond:  
+            _"The provided documents do not contain enough information to answer this question."_  
+            - If a retrieval error occurs, suggest alternative approaches (e.g., rephrasing the query).  
 
-            5. **Response Principles**
-            - Always ground your response in the retrieved documents. Avoid subjective interpretations or opinions.
-            - Use markdown formatting (e.g., **bold**, *italics*, `code`, lists) to enhance readability.
-            - Cite specific document sources when referencing information, especially when multiple documents are provided.
-
-            6. **Language and Translation**
-            - If the query is in a non-English language, translate it to English for retrieval purposes.
-            - Respond in the same language as the user's query, ensuring the response is accurate and culturally appropriate.
-            - If translation is required, ensure the translated response maintains the original meaning and context.
-
-            7. **Error Handling**
-            - If the retrieval process fails or returns no results, inform the user and suggest alternative approaches (e.g., rephrasing the query or broadening the search scope).
-            - If the system encounters an error, provide a clear and actionable message to the user.
-
-            Your primary responsibility is to be a reliable, context-aware information retrieval and communication tool. Always prioritize accuracy, clarity, and user understanding.
-        """
+            **Your primary responsibility is to be a reliable, context-aware retrieval assistant.** Prioritize **accuracy, clarity, and appropriate citation** in all responses.
+           """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -452,7 +436,6 @@ class ChatService:
             def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
                 original_query = query_bundle.query_str
                 lang = self.svc._detect_language(original_query)
-                print("LANGUAGE: ", lang)
                 if lang != 'english':
                     translated = self.svc._translate_to_english(original_query)
                     new_bundle = QueryBundle(query_str=translated)
@@ -479,33 +462,51 @@ class ChatService:
                 
         return ExpandedRetriever()
 
+
     def generate_title(
         self,
         messages: str,
-        max_length: int = 30
     ) -> TitleGeneration:
+        '''
+        Generates a concise, 3-5 word title with an emoji summarizing the chat history.
+        '''
+        DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task:
+            Generate a concise, 3-5 word title with an emoji summarizing the chat history.
+            
+            ### Guidelines:
+            - The title should clearly represent the main theme or subject of the conversation.
+            - Use emojis that enhance understanding of the topic, but avoid quotation marks or special formatting.
+            - Write the title in the chat's primary language; default to English if multilingual.
+            - Prioritize accuracy over excessive creativity; keep it clear and simple.
+            
+            ### Output:
+            JSON format: { "title": "your concise title here" }
+            
+            ### Examples:
+            - { "title": "📉 Stock Market Trends" },
+            - { "title": "🍪 Perfect Chocolate Chip Recipe" },
+            - { "title": "Evolution of Music Streaming" },
+            - { "title": "Remote Work Productivity Tips" },
+            - { "title": "Artificial Intelligence in Healthcare" },
+            - { "title": "🎮 Video Game Development Insights" }
+            
+            ### Chat History:
+            <chat_history>
+            {{MESSAGES:END:2}}
+            </chat_history>"""
+        
         if not messages:
             return TitleGeneration(title="No messages provided")
-
-        first_message = messages[0].content
-
-        system_prompt = f"""
-        You are a helpful assistant designed to generate concise and relevant titles.
-        Your task is to create a title based on the following message. Follow these rules:
-            - The title should be no longer than {max_length} characters.
-            - Capture the main topic or question from the message.
-            - Use clear and concise language.
-            - Do not use phrases like "Title:" or "Subject:" in your response.
-            - If the message is unclear, create a general title that reflects the apparent topic.
-        Remember, your purpose is to generate a title, not to answer or elaborate on the message content.
-        """
-
+        
+        chat_history = "\n".join([msg.content for msg in messages[-2:]])
+        prompt = DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE.replace("{{MESSAGES:END:2}}", chat_history)
+        
         chat_engine = SimpleChatEngine.from_defaults(
-            system_prompt=system_prompt,
+            system_prompt=prompt,
             llm=self.llm_component.llm,
         )
         try:
-            response = chat_engine.chat(first_message)
+            response = chat_engine.chat(chat_history)
             return TitleGeneration(title=response.response)
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")

@@ -39,7 +39,7 @@ dev-windows:
 	(set PGPT_PROFILES=local & poetry run python -m uvicorn private_gpt.main:app --reload --port 8001)
 
 dev:
-	PYTHONUNBUFFERED=1 PGPT_PROFILES=local poetry run python -m uvicorn private_gpt.main:app --reload --port 8001
+	PYTHONUNBUFFERED=1 PGPT_PROFILES=ollama poetry run python -m uvicorn private_gpt.main:app --reload --port 8000 --workers 2
 
 ########################################################################################################################
 # Misc

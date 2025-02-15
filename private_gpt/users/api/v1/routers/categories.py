@@ -33,7 +33,7 @@ def list_categories(
         schemas.Category(
             id=cat.id,
             name=cat.name,
-            total_documents=cat.total_documents
+            total_documents=cat.document_count
         )
         for cat in categories
     ]
