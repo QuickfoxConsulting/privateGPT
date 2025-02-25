@@ -5,22 +5,19 @@ from sqlalchemy import Column, Integer, String, ForeignKey
 from private_gpt.users.db.base_class import Base
 
 class Department(Base):
-    """Models a Department table with document and user associations, and dynamic counts."""
+    """Models a Department table with document and user associations"""
     
     __tablename__ = "departments"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, unique=True)
 
-    # Foreign key to Company
     company_id = Column(Integer, ForeignKey('companies.id'))
     company = relationship("Company", back_populates="departments")
 
-    # Relationships
     users = relationship("User", back_populates="department")
     documents = relationship("Document", secondary="document_department_association", back_populates="departments")
 
-    # Hybrid properties for dynamic counts
     @hybrid_property
     def user_count(self):
         """Return the total number of users in this department."""

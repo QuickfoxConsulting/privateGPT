@@ -1,19 +1,117 @@
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set
 import fitz  # PyMuPDF
 import pymupdf4llm
-from difflib import SequenceMatcher
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 from chonkie import LateChunker
+import unicodedata
+import re
+from docling.document_converter import DocumentConverter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from dataclasses import dataclass
+from collections import defaultdict
 
-class CustomPDFReader(BaseReader):
-    """
-    A class to convert PDF files to markdown chunks with accurate page mapping,
-    using LateChunker for intelligent chunking.
-    """
+@dataclass
+class TextBlock:
+    text: str
+    page_num: int
+    block_index: int
+    metadata: Dict = None
+
+
+class TextMatcher:
+    def __init__(self, similarity_threshold: float = 0.75, overlap_threshold: float = 0.3):
+        self.similarity_threshold = similarity_threshold
+        self.overlap_threshold = overlap_threshold
+        self.vectorizer = TfidfVectorizer(
+            analyzer='word',
+            ngram_range=(1, 2),
+            min_df=1,
+            strip_accents='unicode'
+        )
     
+    def preprocess_text(self, text: str) -> str:
+        """Enhanced text preprocessing."""
+        text = unicodedata.normalize('NFKC', text)
+        text = re.sub(r'-+\n', ' ', text) 
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'[^\w\s]', '', text)
+        return text.strip().lower()
+    
+    def calculate_text_overlap(self, text1: str, text2: str) -> float:
+        """Calculate character-level overlap between two texts."""
+        text1_chars = set(self.preprocess_text(text1))
+        text2_chars = set(self.preprocess_text(text2))
+        overlap = len(text1_chars.intersection(text2_chars))
+        total = len(text1_chars.union(text2_chars))
+        return overlap / total if total > 0 else 0
+
+    def find_page_ranges(self, chunk_text: str, text_blocks: List[TextBlock]) -> List[int]:
+        """Find page ranges for a chunk using multiple matching strategies."""
+        chunk_text = self.preprocess_text(chunk_text)
+        
+        # Strategy 1: Exact substring matching (highest priority)
+        matched_pages = set()
+        chunk_sentences = chunk_text.split('.')
+        for sentence in chunk_sentences:
+            if len(sentence.strip()) < 20:  # Skip very short sentences
+                continue
+            for block in text_blocks:
+                if sentence.strip() in self.preprocess_text(block.text):
+                    matched_pages.add(block.page_num)
+        
+        if matched_pages:
+            # Fill gaps in page ranges
+            page_list = sorted(matched_pages)
+            if len(page_list) > 1:
+                full_range = set(range(min(page_list), max(page_list) + 1))
+                matched_pages.update(full_range)
+            return sorted(matched_pages)
+        
+        # Strategy 2: TF-IDF similarity with sliding window
+        block_texts = [self.preprocess_text(block.text) for block in text_blocks]
+        if not block_texts or not chunk_text:
+            return [1]
+        
+        # Create overlapping windows of text to better match chunks that cross page boundaries
+        window_size = 2
+        windowed_texts = []
+        windowed_pages = []
+        for i in range(len(block_texts)):
+            window_text = ' '.join(block_texts[max(0, i-window_size):min(len(block_texts), i+window_size+1)])
+            windowed_texts.append(window_text)
+            windowed_pages.append(text_blocks[i].page_num)
+        
+        tfidf_matrix = self.vectorizer.fit_transform(windowed_texts + [chunk_text])
+        similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])[0]
+        
+        # Find all matches above threshold
+        matched_indices = np.where(similarities >= self.similarity_threshold)[0]
+        if len(matched_indices) > 0:
+            matched_pages = {windowed_pages[i] for i in matched_indices}
+            # Fill gaps in page ranges
+            page_list = sorted(matched_pages)
+            if len(page_list) > 1:
+                full_range = set(range(min(page_list), max(page_list) + 1))
+                matched_pages.update(full_range)
+            return sorted(matched_pages)
+        
+        # Fallback: Take the best match and its neighbors
+        best_match_idx = np.argmax(similarities)
+        matched_pages = {windowed_pages[best_match_idx]}
+        if best_match_idx > 0:
+            matched_pages.add(windowed_pages[best_match_idx - 1])
+        if best_match_idx < len(windowed_pages) - 1:
+            matched_pages.add(windowed_pages[best_match_idx + 1])
+        
+        return sorted(matched_pages)
+    
+class CustomPDFReader(BaseReader):
+
     HEADERS_TO_SPLIT_ON = [
         ("#", "Header 1"),
         ("##", "Header 2"),
@@ -22,167 +120,154 @@ class CustomPDFReader(BaseReader):
         ("#####", "Header 5"),
     ]
 
-    def __init__(
-        self,
-        embedding_model: str = "all-MiniLM-L6-v2",
-        mode: str = "sentence",
-        chunk_size: int = 1024,
-        min_sentences_per_chunk: int = 1,
-        min_characters_per_sentence: int = 12
-    ):
-        """
-        Initialize the PDF reader with LateChunker configuration.
-        
-        Args:
-            embedding_model (str): Name of the embedding model to use
-            mode (str): Chunking mode ("sentence" or "word")
-            chunk_size (int): Maximum size of chunks
-            min_sentences_per_chunk (int): Minimum number of sentences per chunk
-            min_characters_per_sentence (int): Minimum characters per sentence
-        """
-        self.chunker = LateChunker(
-            embedding_model=embedding_model,
-            mode=mode,
-            chunk_size=chunk_size,
-            min_sentences_per_chunk=min_sentences_per_chunk,
-            min_characters_per_sentence=min_characters_per_sentence,
-        )
-
-    def _extract_pdf_text_with_pages(self, pdf_path: str) -> List[Dict]:
-        """
-        Extract text content with page numbers, maintaining sequence for multi-page detection.
-        
-        Args:
-            pdf_path (str): Path to the PDF file.
-            
-        Returns:
-            List[Dict]: List of text blocks with their page numbers and positions.
-        """
-        text_blocks = []
-        doc = fitz.open(pdf_path)
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            blocks = page.get_text("blocks")
-            
-            for block in blocks:
-                # Each block contains (x0, y0, x1, y1, text, block_no, block_type)
-                text_blocks.append({
-                    'page_num': page_num + 1,
-                    'text': block[4].strip(),
-                    'position': (block[0], block[1], block[2], block[3])
-                })
-        
-        doc.close()
-        return text_blocks
-
-    def _find_matching_pages(self, chunk_text: str, text_blocks: List[Dict], 
-                           min_match_length: int = 50) -> List[int]:
-        """
-        Find all pages that contain parts of the given chunk text.
-        
-        Args:
-            chunk_text (str): The text chunk to locate.
-            text_blocks (List[Dict]): List of text blocks with page numbers.
-            min_match_length (int): Minimum length of text to consider a match.
-            
-        Returns:
-            List[int]: List of page numbers containing the chunk text.
-        """
-        matching_pages = set()
-        chunk_text = chunk_text.strip()
-        
-        # Split chunk into smaller segments for better matching
-        sentences = chunk_text.split('.')
-        segments = [sent.strip() for sent in sentences if len(sent.strip()) > min_match_length]
-        
-        for segment in segments:
-            for block in text_blocks:
-                block_text = block['text']
-                
-                # Check if this block contains the segment
-                if (segment in block_text or 
-                    SequenceMatcher(None, segment, block_text).ratio() > 0.8):
-                    matching_pages.add(block['page_num'])
-                    
-                    # Check adjacent blocks for continuation
-                    block_idx = text_blocks.index(block)
-                    if block_idx > 0:
-                        matching_pages.add(text_blocks[block_idx-1]['page_num'])
-                    if block_idx < len(text_blocks) - 1:
-                        matching_pages.add(text_blocks[block_idx+1]['page_num'])
-        
-        # If we found no matches but the chunk is substantial, 
-        # try a more lenient matching approach
-        if not matching_pages and len(chunk_text) > min_match_length:
-            for block in text_blocks:
-                if any(phrase in block['text'] for phrase in chunk_text.split('\n') 
-                       if len(phrase.strip()) > min_match_length):
-                    matching_pages.add(block['page_num'])
-        
-        return sorted(list(matching_pages))
-
-    def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
-        """
-        Load and chunk PDF data into markdown documents with accurate page mapping.
-        
-        Args:
-            pdf_path (str): Path to the PDF file.
-            extra_info (Optional[Dict]): Additional metadata.
-            
-        Returns:
-            List[Document]: List of markdown chunks with metadata.
-        """
-        if extra_info is not None and not isinstance(extra_info, dict):
-            raise TypeError("extra_info must be a dictionary.")
-        
-        # Extract text blocks with page numbers
-        text_blocks = self._extract_pdf_text_with_pages(pdf_path)
-        
-        # Convert PDF to markdown
-        filename = os.path.basename(pdf_path)
-        md_text = pymupdf4llm.to_markdown(pdf_path)
-        
-        # Split by headers
-        markdown_splitter = MarkdownHeaderTextSplitter(
+    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.75):
+        # self.chunker = LateChunker(chunk_size=chunk_size, mode="sentence")
+        self.converter = DocumentConverter()
+        self.markdown_splitter = MarkdownHeaderTextSplitter(
             self.HEADERS_TO_SPLIT_ON, 
             strip_headers=False
         )
-        md_header_splits = markdown_splitter.split_text(md_text)
+        self.text_matcher = TextMatcher(similarity_threshold=similarity_threshold)
+
+    def _extract_pdf_metadata(self, doc: fitz.Document) -> Dict:
+        """Extract comprehensive metadata from PDF."""
+        metadata = {
+            'title': doc.metadata.get('title', ''),
+            'author': doc.metadata.get('author', ''),
+            'subject': doc.metadata.get('subject', ''),
+            'keywords': doc.metadata.get('keywords', ''),
+            'total_pages': len(doc),
+        }
         
+        # Add creation and modification dates if available
+        if doc.metadata.get('creationDate'):
+            metadata['creation_date'] = doc.metadata['creationDate']
+        if doc.metadata.get('modDate'):
+            metadata['modification_date'] = doc.metadata['modDate']
+            
+        return metadata
+
+    def _extract_page_metadata(self, page: fitz.Page) -> Dict:
+        """Extract metadata for a specific page."""
+        return {
+            'page_number': page.number + 1,
+            'width': page.rect.width,
+            'height': page.rect.height,
+            'rotation': page.rotation,
+            'has_images': len(page.get_images()) > 0,
+            'has_tables': bool(page.find_tables()), # if using PyMuPDF >= 1.23.0
+        }
+
+    def _extract_block_metadata(self, block: tuple, page_num: int) -> Dict:
+        """Extract metadata from a text block."""
+        x0, y0, x1, y1, text, block_type, block_no = block
+        return {
+            'block_type': block_type,
+            'block_number': block_no,
+            'position': {
+                'x0': x0, 'y0': y0,
+                'x1': x1, 'y1': y1
+            },
+            'location': 'top' if y0 < 100 else 'bottom' if y1 > 700 else 'middle',
+            'is_header': y0 < 100 and len(text.strip()) < 200,
+            'is_footer': y1 > 700 and len(text.strip()) < 200,
+        }
+
+    def _extract_pdf_text_with_pages(self, pdf_path: str) -> List[TextBlock]:
+        """Extracts text and metadata from a PDF while preserving page numbers."""
+        text_blocks = []
+        doc = fitz.open(pdf_path)
+        pdf_metadata = self._extract_pdf_metadata(doc)
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            page_metadata = self._extract_page_metadata(page)
+            blocks = page.get_text("blocks")
+            
+            for idx, block in enumerate(blocks):
+                block_metadata = self._extract_block_metadata(block, page_num)
+                text_blocks.append(
+                    TextBlock(
+                        text=block[4].strip(),
+                        page_num=page_num + 1,
+                        block_index=idx,
+                        metadata={
+                            **pdf_metadata,
+                            **page_metadata,
+                            **block_metadata
+                        }
+                    )
+                )
+        doc.close()
+        return text_blocks
+
+    def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
+        text_blocks = self._extract_pdf_text_with_pages(pdf_path)
+        filename = os.path.basename(pdf_path)
+        
+        try:
+            result = self.converter.convert(pdf_path)
+            md_text = result.document.export_to_markdown()
+            # md_text = pymupdf4llm.to_markdown(pdf_path)
+        except Exception:
+            md_text = "\n\n".join(block.text for block in text_blocks)
+        
+        blocks_by_page = defaultdict(list)
+        for block in text_blocks:
+            blocks_by_page[block.page_num].append(block)
+        
+        try:
+            markdown_splitter = MarkdownHeaderTextSplitter(
+                self.HEADERS_TO_SPLIT_ON, 
+                strip_headers=False
+            )
+            md_header_splits = markdown_splitter.split_text(md_text)
+        except Exception as e:
+            md_header_splits = [Document(page_content=md_text, metadata={})]
+            
         chunks = []
         for header_chunk in md_header_splits:
-            metadata = header_chunk.metadata
+            metadata = header_chunk.metadata if hasattr(header_chunk, 'metadata') else {}
+            content = header_chunk.page_content if hasattr(header_chunk, 'page_content') else str(header_chunk)
             
             # Use LateChunker to split the text
-            text_chunks = self.chunker(header_chunk.page_content)
+            # text_chunks = self.chunker(content)
             
-            for chunk in text_chunks:
-                # Find all pages containing parts of this chunk
-                page_numbers = self._find_matching_pages(chunk.text, text_blocks)
+            # for chunk in text_chunks:
+            page_numbers = self.text_matcher.find_page_ranges(content, text_blocks)
+            
+            # Aggregate metadata from relevant blocks
+            chunk_metadata = {
+                **metadata,
+                'filename': filename,
+                'page': page_numbers,
+                'total_pages': max(block.metadata['total_pages'] for block in text_blocks),
+                'title': next(iter(text_blocks)).metadata.get('title', ''), 
+                'author': next(iter(text_blocks)).metadata.get('author', ''),
+
+            }
+            
+            # # Add location-based metadata
+            # relevant_blocks = [
+            #     block for block in text_blocks 
+            #     if block.page_num in page_numbers
+            # ]
+            # if relevant_blocks:
+            #     chunk_metadata.update({
+            #         'contains_header': any(block.metadata['is_header'] for block in relevant_blocks),
+            #         'contains_footer': any(block.metadata['is_footer'] for block in relevant_blocks),
+            #         'has_images': any(block.metadata['has_images'] for block in relevant_blocks),
+            #         'has_tables': any(block.metadata['has_tables'] for block in relevant_blocks),
+            #     })
+            
+            # if extra_info:
+            #     chunk_metadata.update(extra_info)
                 
-                # Ensure we always have at least one page number
-                if not page_numbers:
-                    # If no match found, use textual analysis to estimate page range
-                    text_position = md_text.find(chunk.text)
-                    if text_position != -1:
-                        # Estimate page based on position in full text
-                        estimated_page = (text_position // 3000) + 1  # Rough estimate
-                        page_numbers = [min(estimated_page, len(text_blocks))]
-                
-                # Create document with combined metadata
-                chunk_metadata = {
-                    **metadata,
-                    'page': page_numbers,
-                    'filename': filename
-                }
-                if extra_info:
-                    chunk_metadata.update(extra_info)
-                    
-                doc = Document(
-                    text=chunk.text,
-                    metadata=chunk_metadata
-                )
-                chunks.append(doc)
+            doc = Document(
+                text=content,
+                metadata=chunk_metadata
+            )
+            chunks.append(doc)
         
         return chunks
+

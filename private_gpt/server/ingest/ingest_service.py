@@ -9,6 +9,7 @@ from llama_index.core.storage import StorageContext
 from llama_index.core.schema import BaseNode , ObjectType , TextNode
 
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
+from private_gpt.components.extractor.documentcontextextractor import DocumentContextExtractor
 from private_gpt.components.ingest.ingest_component import get_ingestion_component
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
@@ -17,7 +18,6 @@ from private_gpt.components.vector_store.vector_store_component import (
 )
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.settings.settings import settings
-
 
 if TYPE_CHECKING:
     from llama_index.core.storage.docstore.types import RefDocInfo
@@ -67,19 +67,19 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )       
-        # node_parser = SafeSemanticSplitter.from_defaults(
-        #     embed_model=embedding_component.embedding_model,
-        #     breakpoint_percentile_threshold=95,
-        #     include_metadata=True,
-        #     include_prev_next_rel=True,
-        # )
-        node_parser =  SentenceWindowNodeParser.from_defaults(
-            window_size=20,
-            window_metadata_key="window",
-            original_text_metadata_key="original_text",
+        node_parser = SafeSemanticSplitter.from_defaults(
+            embed_model=embedding_component.embedding_model,
+            breakpoint_percentile_threshold=95,
             include_metadata=True,
-            include_prev_next_rel=True
+            include_prev_next_rel=True,
         )
+        # node_parser =  SentenceWindowNodeParser.from_defaults(
+        #     window_size=15,
+        #     window_metadata_key="window",
+        #     original_text_metadata_key="original_text",
+        #     include_metadata=True,
+        #     include_prev_next_rel=True
+        # )
         self.ingest_component = get_ingestion_component(
             self.storage_context,
             embed_model=embedding_component.embedding_model,
@@ -90,7 +90,12 @@ class IngestService:
             settings=settings(),
         )
 
-    def _ingest_data(self, file_name: str, file_data: AnyStr) -> list[IngestedDoc]:
+    def _ingest_data(
+        self,
+        file_name: str,
+        file_data: AnyStr,
+        file_metadata: dict[str, str] | None = None,
+    ) -> list[IngestedDoc]:
         logger.debug("Got file data of size=%s to ingest", len(file_data))
         # llama-index mainly supports reading from files, so
         # we have to create a tmp file to read for it to work
@@ -102,27 +107,37 @@ class IngestService:
                     path_to_tmp.write_bytes(file_data)
                 else:
                     path_to_tmp.write_text(str(file_data))
-                return self.ingest_file(file_name, path_to_tmp)
+                return self.ingest_file(file_name, path_to_tmp, file_metadata)
             finally:
                 tmp.close()
                 path_to_tmp.unlink()
 
-    def ingest_file(self, file_name: str, file_data: Path) -> list[IngestedDoc]:
+    def ingest_file(
+        self,
+        file_name: str,
+        file_data: Path,
+        file_metadata: dict[str, str] | None = None,
+    ) -> list[IngestedDoc]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = self.ingest_component.ingest(file_name, file_data)
+        documents = self.ingest_component.ingest(file_name, file_data, file_metadata)
         logger.info("Finished ingestion file_name=%s", file_name)
         return [IngestedDoc.from_document(document) for document in documents]
 
-    def ingest_text(self, file_name: str, text: str) -> list[IngestedDoc]:
+    def ingest_text(
+        self, file_name: str, text: str, metadata: dict[str, str] | None = None
+    ) -> list[IngestedDoc]:
         logger.debug("Ingesting text data with file_name=%s", file_name)
-        return self._ingest_data(file_name, text)
+        return self._ingest_data(file_name, text, metadata)
 
     async def ingest_bin_data(
-        self, file_name: str, raw_file_data: BinaryIO
+        self,
+        file_name: str,
+        raw_file_data: BinaryIO,
+        file_metadata: dict[str, str] | None = None,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting binary data with file_name=%s", file_name)
         file_data = raw_file_data.read()
-        return self._ingest_data(file_name, file_data)
+        return self._ingest_data(file_name, file_data, file_metadata)
     
     async def ingest_url(self, url: str, documents) -> list[IngestedDoc]:
         logger.debug("Ingesting url=%s", url)
@@ -187,3 +202,38 @@ class IngestService:
         logger.debug("Found count=%s doc_ids for filename '%s'",
                      len(doc_ids), filename)
         return doc_ids
+
+
+    def get_doc_ids_by_filename_pattern(self, pattern: str) -> list[str]:
+        """
+        Get document IDs matching a filename pattern.
+        
+        Args:
+            pattern (str): Pattern to match against filenames
+            
+        Returns:
+            list[str]: List of document IDs matching the pattern
+        """
+        doc_ids: set[str] = set()
+        
+        try:
+            docstore = self.storage_context.docstore
+            for node in docstore.docs.values():
+                if (node.metadata is not None and 
+                    node.metadata.get("file_name") is not None and 
+                    pattern in node.metadata["file_name"]):
+                    doc_ids.add(node.ref_doc_id)
+        except ValueError:
+            logger.warning(
+                "Got an exception when getting doc_ids by filename pattern",
+                exc_info=True
+            )
+            pass
+        
+        logger.debug(
+            "Found count=%s doc_ids for filename pattern '%s'",
+            len(doc_ids),
+            pattern
+        )
+        
+        return list(doc_ids)

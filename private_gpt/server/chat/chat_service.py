@@ -14,6 +14,9 @@ from llama_index.core.postprocessor import (
 )
 from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
+from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
+from private_gpt.server.chat.query_expansion import QueryExpander
+from private_gpt.server.chat.self_retriever import SelfRAGRetriever
 from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
@@ -41,6 +44,8 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import BaseNode
 from llama_index.core.query_engine import RetrieverQueryEngine
 
+
+
 class Completion(BaseModel):
     response: str
     sources: list[Chunk] | None = None
@@ -54,125 +59,24 @@ class TitleGeneration(BaseModel):
 reranker_path = models_path / 'reranker'
 
 
-CONDENSE_PROMPT_TEMPLATE = """
-    Given the following conversation between a user and an AI assistant, along with a follow-up question from the user, rephrase the follow-up question into a standalone query. The new query should:
+CONDENSE_PROMPT_TEMPLATE = """Your task is to refine a query to ensure it is highly effective for retrieving relevant search results.
+        Analyze the given input to grasp the core semantic intent or meaning. Identify the key concepts and technical terms. If the query is not in English, translate it while preserving any technical terms or proper nouns.
+        Original Query:
+        ------- 
+        {question}
+        ------- 
 
-    1. Capture the core intent of the user's follow-up question
-    2. Incorporate relevant context from the conversation history
-    3. Be self-contained and understandable without requiring knowledge of the previous conversation
-    4. Be concise and focused
+        Guidelines for optimization:
+        - Remove filler words, unnecessary context, and redundancies
+        - Preserve specific technical terms or unique identifiers
+        - Ensure the query is specific enough to return relevant results
+        - Limit the optimized query to 10-15 words when possible
+        - For ambiguous queries, choose the most likely intent based on context
 
-    Conversation History:
-    {chat_history}
+        If the original query is already optimal, return it unchanged.
 
-    Follow-up Question: {question}
-
-    Standalone Query:"""
-
-class SelfRAGRetriever(BaseRetriever):
-    """Retriever with Self-RAG capabilities"""
-    
-    def __init__(
-        self,
-        base_retriever: BaseRetriever,
-        llm: LLMComponent,
-        critique_prompt: str,
-        **kwargs
-    ) -> None:
-        self.base_retriever = base_retriever
-        self.llm = llm
-        self.critique_prompt_template = PromptTemplate(critique_prompt)
-        super().__init__(**kwargs)
-
-    def _should_retrieve(self, query: str) -> Tuple[bool, str]:
-        """Determine if retrieval is needed using LLM self-reflection"""
-        prompt = f"""Evaluate if this query requires factual information retrieval. 
-        Respond ONLY with 'YES' or 'NO':
-        Query: {query}
-        Answer:"""
-        
-        response = self.llm.complete(prompt).text.strip().upper()
-        return response == "YES", response
-
-    def _critique_node(self, node: BaseNode, query: str) -> bool:
-        """Evaluate if node is relevant using LLM"""
-        prompt = self.critique_prompt_template.format(
-            context=node.get_content(),
-            query=query
-        )
-        response = self.llm.complete(prompt).text.strip().upper()
-        return "YES" in response
-
-    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-        # First decide if retrieval is needed
-        should_retrieve, reason = self._should_retrieve(query_bundle.query_str)
-        if not should_retrieve:
-            return []
-            
-        # Perform base retrieval
-        nodes = self.base_retriever.retrieve(query_bundle)
-        
-        # Critique and filter nodes
-        filtered_nodes = []
-        for node in nodes:
-            if self._critique_node(node.node, query_bundle.query_str):
-                filtered_nodes.append(node)
-        
-        return filtered_nodes
-
-class QueryExpander:
-    """Query expansion with synonym generation and LLM-based rewriting"""
-    
-    def __init__(self, llm: LLMComponent, embed_model: any):
-        self.llm = llm
-        self.embed_model = embed_model
-
-    def expand(self, query: str) -> str:
-        """Expand query using multiple techniques"""
-        # Synonym expansion
-        synonyms = self._generate_synonyms(query)
-        
-        # LLM-based expansion
-        expanded = self._llm_expansion(query)
-        
-        # Combine all terms
-        return f"{query} {' '.join(synonyms)} {expanded}"
-
-    def _generate_synonyms(self, query: str) -> List[str]:
-        """Generate synonyms using embedding similarity"""
-        query_embed = self.embed_model.get_query_embedding(query)
-        # This would normally query a synonym database, simplified here
-        return ["related terms", "similar concepts", "associated ideas"]
-
-    def _llm_expansion(self, query: str) -> str:
-        """Use LLM to rewrite and expand the query"""
-        prompt = f"""Expand this search query while maintaining its core meaning. Also translate into english if query is in another language.
-        Include related terms and alternative phrasings. 
-        Keep it concise.
-        Query: {query}
-        Expanded:"""
-        
-        return self.llm.complete(prompt).text
-
-class SimilarityPostprocessorWithAtLeastOneResult(SimilarityPostprocessor):
-    """Similarity-based Node processor. Return always one result if result is empty"""
-
-    @classmethod
-    def class_name(cls) -> str:
-        return "SimilarityPostprocessorWithAtLeastOneResult"
-
-    def _postprocess_nodes(
-        self,
-        nodes: List[NodeWithScore],
-        query_bundle: Optional[QueryBundle] = None,
-    ) -> List[NodeWithScore]:
-        """Postprocess nodes."""
-        new_nodes = super()._postprocess_nodes(nodes, query_bundle)
-
-        if not new_nodes: 
-            return [max(nodes, key=lambda x: x.score)] if nodes else []
-
-        return new_nodes
+        Respond with the optimized query only, without explanations or additional text.
+        Standalone question:"""
 
 @dataclass
 class ChatEngineInput:
@@ -233,6 +137,7 @@ class ChatService:
             embed_model=embedding_component.embedding_model,
             show_progress=True,
         )
+
     def _detect_language(self, text: str) -> str:
         """Detect language using LLM"""
         prompt = f"Detect the language of this text whether it is nepali or english. Respond only with the language name in English. Text: {text}"
@@ -243,7 +148,7 @@ class ChatService:
         """Translate text to English using LLM"""
         prompt = f"Translate the following text to English. Text: {text}"
         return self.llm_component.llm.complete(prompt).text.strip()
-    
+
     def _chat_engine(
         self,
         system_prompt: str | None = None,
@@ -252,6 +157,56 @@ class ChatService:
     ) -> BaseChatEngine:
         settings = self.settings
         if use_context:
+            # vector_index_retriever = self.vector_store_component.get_retriever(
+            #     index=self.index,
+            #     context_filter=context_filter,
+            #     similarity_top_k=self.settings.rag.similarity_top_k,
+            # )
+            
+            # node_postprocessors = [
+            #     MetadataReplacementPostProcessor(target_metadata_key="window"),
+            #     SimilarityPostprocessor(
+            #         similarity_cutoff=settings.rag.similarity_value,
+            #         filter_empty=True,
+            #         filter_duplicates=True,
+            #         filter_similar=True
+            #     ),
+            #     TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
+            # ]
+            # if settings.rag.rerank.enabled:
+            #     rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
+            #         llm=self.llm_component.llm, 
+            #         top_n=settings.rag.rerank.top_n,
+            #         verbose=True
+            #     )
+            #     # rerank_postprocessor = SentenceTransformerRerank(
+            #     #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
+            #     # )
+            #     node_postprocessors.append(rerank_postprocessor)
+            
+            # response_synthesizer = get_response_synthesizer(
+            #     response_mode="compact_accumulate",
+            #     llm=self.llm_component.llm,
+            #     structured_answer_filtering=True,
+            #     # streaming=True  # Enable streaming for better responsiveness
+            # )
+            
+            # custom_query_engine = RetrieverQueryEngine.from_args(
+            #     retriever=vector_index_retriever,
+            #     llm=self.llm_component.llm,
+            #     response_synthesizer=response_synthesizer,
+            #     # node_postprocessors=node_postprocessors,
+            #     verbose=True  # For debugging and understanding the process
+            # )
+            
+            # return ContextChatEngine.from_defaults(
+            #     system_prompt=system_prompt,
+            #     retriever=custom_query_engine,
+            #     llm=self.llm_component.llm,  # Takes no effect at the moment
+            #     node_postprocessors=node_postprocessors,
+            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            # )
+            
             base_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
@@ -267,58 +222,51 @@ class ChatService:
                 ),
                 TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
-            # if settings.rag.rerank.enabled:
-            #     rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
-            #         llm=self.llm_component.llm, 
-            #         top_n=settings.rag.rerank.top_n,
-            #         # verbose=True
-            #     )
-            #     # rerank_postprocessor = SentenceTransformerRerank(
-            #     #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
-            #     # )
-            #     node_postprocessors.append(rerank_postprocessor)
-            
+            if settings.rag.rerank.enabled:
+                rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
+                    llm=self.llm_component.llm, 
+                    top_n=settings.rag.rerank.top_n,
+                    # verbose=True
+                )
+                # rerank_postprocessor = SentenceTransformerRerank(
+                #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
+                # )
+                node_postprocessors.append(rerank_postprocessor)
+
             if settings.rag.query_expansion_enabled:
                 base_retriever = self._wrap_retriever_with_translation(base_retriever)
                 query_expander = QueryExpander(
                     llm=self.llm_component.llm,
-                    embed_model=self.embedding_component.embedding_model
+                    embed_model=self.embedding_component.embedding_model,
                 )
                 base_retriever = self._wrap_retriever_with_expansion(
-                    base_retriever, query_expander)
-
+                    base_retriever, query_expander
+                )
             if settings.rag.self_rag_enabled:
-                critique_prompt = """Evaluate if this passage is relevant to answering the query. 
-                Consider:
-                - Directly answers the question
-                - Provides supporting evidence
-                - Contains factual information related to the query
-                Respond ONLY with 'RELEVANT: YES' or 'RELEVANT: NO'
-                Passage: {context}
-                Query: {query}
-                Judgment:"""
-                
                 base_retriever = SelfRAGRetriever(
                     base_retriever=base_retriever,
                     llm=self.llm_component.llm,
-                    critique_prompt=critique_prompt
+                    node_postprocessors=node_postprocessors,
                 )
-            
-            query_engine = RetrieverQueryEngine(
-                retriever=base_retriever,
-                response_synthesizer=get_response_synthesizer(
-                    llm=self.llm_component.llm,
-                    response_mode="compact",
-                    verbose=True,
-                ),
-                node_postprocessors=node_postprocessors
+            response_synthesizer = get_response_synthesizer(
+                response_mode="compact",
+                llm=self.llm_component.llm,
+                structured_answer_filtering=True,
+                # streaming=True  # Enable streaming for better responsiveness
             )
             
+            custom_query_engine = RetrieverQueryEngine.from_args(
+                retriever=base_retriever,
+                llm=self.llm_component.llm,
+                response_synthesizer=response_synthesizer,
+                # node_postprocessors=node_postprocessors,
+                verbose=True  # For debugging and understanding the process
+            )
+
             return CondensePlusContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
-                retriever=query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
-                node_postprocessors=node_postprocessors,
+                retriever=custom_query_engine,
+                llm=self.llm_component.llm,
                 condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             )
         else:
@@ -375,6 +323,13 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
+        '''
+                    ### **Example of Citation**  
+            - If a document "whitepaper.pdf" contains the information and has a {file_name}, cite as:  
+            *"The proposed method increases efficiency by 20% [whitepaper.pdf]."*  
+            - If no {file_name} is present, **omit citations**. 
+        '''
+    
         system_prompt = """
             You are a precise and helpful AI assistant designed to retrieve and communicate information from a given set of documents using Retrieval-Augmented Generation (RAG). Your primary goal is to provide **accurate, context-aware, and well-structured responses** based strictly on retrieved information.  
 
@@ -384,14 +339,9 @@ class ChatService:
             - **Respond in the same language** as the user's query.  
             - If the context is **poor quality or unreadable**, inform the user and provide the best possible answer.  
             - **If the answer isn't in the context but you possess the knowledge,** explain this and provide an answer using your understanding.  
-            - **Only include inline citations ([file_name]) when a <file_name> tag is explicitly provided in the context.** Do not cite otherwise.  
+            - **Only include inline citations ([file_name]) when a {file_name} tag is explicitly provided in the context.** Do not cite otherwise.  
             - **Do not use XML tags in responses.**  
             - Ensure citations are **concise and directly related** to the information provided.  
-
-            ### **Example of Citation**  
-            - If a document "whitepaper.pdf" contains the information and has a <file_name>, cite as:  
-            *"The proposed method increases efficiency by 20% [whitepaper.pdf]."*  
-            - If no <file_name> is present, **omit citations**.  
 
             ### **Response Principles**  
             - **Structure responses clearly** using markdown:  
@@ -425,7 +375,7 @@ class ChatService:
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
-    
+
     def _wrap_retriever_with_translation(self, base_retriever: BaseRetriever) -> BaseRetriever:
         """Wrap retriever with query translation to English"""
         class TranslatedRetriever(BaseRetriever):
@@ -436,41 +386,39 @@ class ChatService:
             def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
                 original_query = query_bundle.query_str
                 lang = self.svc._detect_language(original_query)
-                if lang != 'english':
+                if lang != "english":
                     translated = self.svc._translate_to_english(original_query)
                     new_bundle = QueryBundle(query_str=translated)
                     return self.base.retrieve(new_bundle)
                 return self.base.retrieve(query_bundle)
 
         return TranslatedRetriever(base_retriever, self)
-    
 
     def _wrap_retriever_with_expansion(
-        self, 
-        retriever: BaseRetriever,
-        query_expander: QueryExpander
+        self, retriever: BaseRetriever, query_expander: QueryExpander
     ) -> BaseRetriever:
         """Wrap retriever with query expansion capabilities"""
         class ExpandedRetriever(BaseRetriever):
+            def __init__(self, base: BaseRetriever, expander: QueryExpander):
+                self.base = base
+                self.expander = expander
+
             def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-                expanded_query = query_expander.expand(query_bundle.query_str)
+                expanded_query = self.expander.expand(query_bundle.query_str)
                 new_bundle = QueryBundle(
                     query_str=expanded_query,
-                    embedding=query_bundle.embedding
+                    embedding=query_bundle.embedding,
                 )
-                return retriever.retrieve(new_bundle)
-                
-        return ExpandedRetriever()
+                return self.base.retrieve(new_bundle)
 
+        return ExpandedRetriever(retriever, query_expander)
 
-    def generate_title(
+    async def generate_title(
         self,
-        messages: str,
+        messages: list[ChatMessage],
     ) -> TitleGeneration:
-        '''
-        Generates a concise, 3-5 word title with an emoji summarizing the chat history.
-        '''
-        DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task:
+        """Generates a concise, 3-5 word title with an emoji summarizing the chat history."""
+        DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task: You are a title generator.
             Generate a concise, 3-5 word title with an emoji summarizing the chat history.
             
             ### Guidelines:
@@ -480,7 +428,7 @@ class ChatService:
             - Prioritize accuracy over excessive creativity; keep it clear and simple.
             
             ### Output:
-            JSON format: { "title": "your concise title here" }
+            Strict JSON format: { "title": "your concise title here" }
             
             ### Examples:
             - { "title": "📉 Stock Market Trends" },
@@ -494,19 +442,26 @@ class ChatService:
             <chat_history>
             {{MESSAGES:END:2}}
             </chat_history>"""
-        
+
         if not messages:
             return TitleGeneration(title="No messages provided")
-        
-        chat_history = "\n".join([msg.content for msg in messages[-2:]])
-        prompt = DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE.replace("{{MESSAGES:END:2}}", chat_history)
-        
+
+        chat_history = "\n".join([msg.content['text'] for msg in messages])
+        prompt = DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE.replace(
+            "{{MESSAGES:END:2}}", chat_history
+        )
+
         chat_engine = SimpleChatEngine.from_defaults(
             system_prompt=prompt,
             llm=self.llm_component.llm,
         )
         try:
-            response = chat_engine.chat(chat_history)
-            return TitleGeneration(title=response.response)
+            response = await chat_engine.achat(chat_history)
+            import json
+            try:
+                title_data = json.loads(response.response)
+                return TitleGeneration(title=title_data["title"])
+            except json.JSONDecodeError:
+                return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")

@@ -121,9 +121,10 @@ class VectorStoreComponent:
                         client=client,
                         collection_name="make_this_parameterizable_per_api_call",
                         enable_hybrid=True, 
-                        batch_size=20,
-                        sparse_doc_fn=sparse_doc_vectors,
-                        sparse_query_fn=sparse_query_vectors,
+                        fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
+                        # batch_size=20,
+                        # sparse_doc_fn=sparse_doc_vectors,
+                        # sparse_query_fn=sparse_query_vectors,
                         use_async=True,
                         # hybrid_fusion_fn=relative_score_fusion,
                     ),  # TODO
@@ -153,7 +154,7 @@ class VectorStoreComponent:
             sparse_top_k=12, 
             vector_store_query_mode="hybrid",
             alpha=0.5,
-            vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
+            # vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
         )
 
     def close(self) -> None:

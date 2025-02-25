@@ -31,6 +31,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
             .order_by(desc(Document.uploaded_at))
             # .all()
         )
+    
     def get_documents_by_departments(
             self, db: Session, *, department_id: int
         ) -> List[Document]:

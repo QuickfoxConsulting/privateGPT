@@ -1,9 +1,10 @@
 import logging
 import traceback
 import uuid
+from private_gpt.server.chat.chat_service import ChatService
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Depends, HTTPException, status, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Security
 from fastapi_pagination import Page, paginate
 
 from private_gpt.users.api import deps
@@ -124,3 +125,38 @@ def delete_chat_history(
         )
 
 
+@router.get("/{conversation_id}/title")
+async def create_chat_history_title(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+    ),
+) -> schemas.ChatHistory:
+    """
+    Create a title for a chat history by ID
+    """
+    service = request.state.injector.get(ChatService)
+    try:
+        chat_history = crud.chat.get_by_id(db, id=conversation_id)
+        if chat_history is None or chat_history.user_id != current_user.id:
+            raise HTTPException(
+                status_code=404, detail="Chat history not found")
+        
+        first_user_chat_item = [item for item in chat_history.chat_items if item.sender == "user"][0]
+
+        logger.info(f"Chat items: {first_user_chat_item.content}")
+        title = await service.generate_title([first_user_chat_item])
+        logger.info(f"Title: {title}")
+        chat_history.title = title.title
+        db.commit()
+        db.refresh(chat_history)
+        return chat_history
+    except Exception as e:
+        print(traceback.format_exc())
+        logger.error(f"Error getting chat history title: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error",
+        )

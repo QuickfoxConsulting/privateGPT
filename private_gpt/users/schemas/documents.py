@@ -53,6 +53,7 @@ class UrlMakerChecker(BaseModel):
     status: str
 
 class DocumentCheckerUpdate(BaseModel):
+    filename: Optional[str] = None
     is_enabled: bool
     verified_at: datetime
     verified_by: int
@@ -199,3 +200,8 @@ class DocumentUpload(BaseModel):
 class DocumentCategoryUpdate(BaseModel):
     filename: str
     categories: List[int]
+
+
+class DocumentFilePath(BaseModel):
+    filename: str
+    file_path: str

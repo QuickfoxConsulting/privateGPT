@@ -1,10 +1,11 @@
+import json
 import os
 import logging
 import traceback
 
 import aiofiles
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from private_gpt.users.models.document import DocumentVersion, MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
@@ -34,6 +35,18 @@ class IngestTextBody(BaseModel):
             "Chinese martial arts."
         ]
     )
+    metadata: Optional[dict[str, Any]] = Field(
+        None,
+        examples=[
+            {
+                "title": "Avatar: The Last Airbender",
+                "author": "Michael Dante DiMartino, Bryan Konietzko",
+                "year": "2005",
+                "tags": "#scifi,#avatar",
+                "description": "Movie about ....",
+            }
+        ],
+    )
 
 
 class IngestResponse(BaseModel):
@@ -55,7 +68,9 @@ class DeleteFilename(BaseModel):
 
 
 @ingest_router.post("/ingest/file1", tags=["Ingestion"])
-def ingest_file(request: Request, file: UploadFile = File(...)) -> IngestResponse:
+def ingest_file(
+    request: Request, file: UploadFile = File(...), metadata: str = Form(None)
+    ) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context.
 
     The context obtained from files is later used in
@@ -79,7 +94,8 @@ def ingest_file(request: Request, file: UploadFile = File(...)) -> IngestRespons
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
         with open(upload_path, "rb") as f:
-            ingested_documents = service.ingest_bin_data(file.filename, f)
+            metadata_dict = None if metadata is None else json.loads(metadata)
+            ingested_documents = service.ingest_bin_data(file.filename, f, metadata_dict)
     except Exception as e:
         return {"message": f"There was an error uploading the file(s)\n {e}"}
     finally:
@@ -103,9 +119,8 @@ def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
     service = request.state.injector.get(IngestService)
     if len(body.file_name) == 0:
         raise HTTPException(400, "No file name provided")
-    ingested_documents = service.ingest_text(body.file_name, body.text)
+    ingested_documents = service.ingest_text(body.file_name, body.text, body.metadata)
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
-
 
 @ingest_router.get("/ingest/list", tags=["Ingestion"])
 def list_ingested(request: Request) -> IngestResponse:
@@ -196,7 +211,6 @@ def delete_file(
 async def create_documents(
     db: Session, 
     file_name: str = None, 
-    category: int = None,
     current_user: models.User = None,
     departments: schemas.DocumentUpload = Depends(),
     log_audit: models.Audit = None,
@@ -252,11 +266,11 @@ async def create_documents(
         )
 
     # Associate category if provided
-    if category:  
+    if departments.category:  
         db.execute(
             models.document_category_association.insert().values(
                 document_id=document.id, 
-                category_id=category
+                category_id=departments.category
             )
         )
 
@@ -267,8 +281,8 @@ async def create_documents(
             'filename': f"{file_name}", 
             'user': f"{current_user.username}",
             'departments': f"{department_ids}",
-            'categories': f"{category}",
-        }, 
+            'categories': f"{departments.category}",
+        },
         user_id=current_user.id
     )
     return document
@@ -355,7 +369,13 @@ async def ingest_url(request: Request, url: str) -> IngestResponse:
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 
-async def ingest(request: Request, file_path: str) -> IngestResponse:
+
+import re
+def extract_tags(text: str):
+    """Extracts hashtags from text and returns them as a clean list"""
+    return list(set(re.findall(r"#\w+", text)))  # Removes duplicates
+
+async def ingest(request: Request, file_path: str, tags: Optional[dict[str, Any]] = None) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
     try:
@@ -367,14 +387,19 @@ async def ingest(request: Request, file_path: str) -> IngestResponse:
                 f.write(file.read())
 
             with upload_path.open('rb') as f:
-                ingested_documents = await service.ingest_bin_data(file_name, f)
-
+                extracted_tags = extract_tags(tags)
+                formatted_tags = (
+                    {"tags": [tag.lstrip("#") for tag in extracted_tags], "tag_string": " ".join(extracted_tags)}
+                    if extracted_tags else {},
+                )
+                ingested_documents = await service.ingest_bin_data(file_name, f, formatted_tags)
     except Exception as e:
         return {"message": f"There was an error uploading the file(s)\n {e}"}
 
     finally:
         upload_path.unlink(missing_ok=True)
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
+
 
 # @ingest_router.post("/ingest/file", response_model=IngestResponse, tags=["Ingestion"])
 # async def ingest_file(

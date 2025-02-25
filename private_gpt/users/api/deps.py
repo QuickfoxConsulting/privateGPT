@@ -1,5 +1,6 @@
 from fastapi import Request, Depends, HTTPException
 import logging
+from private_gpt.constants import UPLOAD_DIR
 from private_gpt.users.core.config import settings
 from private_gpt.users.constants.role import Role
 from typing import Union, Any, Generator
@@ -144,3 +145,36 @@ def get_current_active_user(
     # if not crud.user.is_active(current_user):
     #     raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
+
+
+from typing import Annotated
+from fastapi import Depends
+from pathlib import Path
+from functools import lru_cache
+
+from private_gpt.users.core.config import settings
+from private_gpt.manager.document_manager import DocumentManager
+
+
+@lru_cache
+def create_document_manager() -> DocumentManager:
+    """Create a cached instance of DocumentManager."""
+    
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+    ALLOWED_EXTENSIONS = {'.pdf', '.doc', '.docx', '.txt', '.xls', '.jpg', '.mp3', '.md', '.xlsx'}
+
+    # Create document manager instance
+    document_manager = DocumentManager(
+        base_upload_dir=Path(UPLOAD_DIR),
+        allowed_extensions=ALLOWED_EXTENSIONS,
+        max_file_size=MAX_FILE_SIZE,
+    )
+    
+    return document_manager
+
+# FastAPI dependency
+def get_document_manager(
+    document_manager: Annotated[DocumentManager, Depends(create_document_manager)]
+) -> DocumentManager:
+    """Get DocumentManager instance."""
+    return document_manager

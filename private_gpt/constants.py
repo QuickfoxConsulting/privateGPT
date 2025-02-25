@@ -4,10 +4,10 @@ from pathlib import Path
 PROJECT_ROOT_PATH: Path = Path(__file__).parents[1]
 script_dir = os.path.dirname(os.path.abspath(__file__))
 # Create directories if they don't exist
-UPLOAD_DIR = os.path.join(script_dir, "static/checked")
+UPLOAD_DIR = os.path.join(script_dir, "media")
 os.makedirs(UPLOAD_DIR, exist_ok=True)  # Actual upload path for uploaded file
 
-UNCHECKED_DIR = os.path.join(script_dir, "static/unchecked")
+UNCHECKED_DIR = os.path.join(script_dir, "static")
 os.makedirs(UNCHECKED_DIR, exist_ok=True)  # Actual upload path for uploaded file
 
 OCR_UPLOAD = os.path.join(script_dir, 'uploads')

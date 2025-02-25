@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Any
 from llama_index.core.readers import StringIterableReader
 from llama_index.core.readers.base import BaseReader
 from llama_index.core.readers.json import JSONReader
@@ -74,10 +75,11 @@ class IngestionHelper:
 
     @staticmethod
     def transform_file_into_documents(
-        file_name: str, file_data: Path
+        file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None
     ) -> list[Document]:
         documents = IngestionHelper._load_file_to_documents(file_name, file_data)
         for document in documents:
+            document.metadata.update(file_metadata or {})
             document.metadata["file_name"] = file_name
             document.metadata["ingestion_time"] = datetime.now(timezone.utc).isoformat()
         IngestionHelper._exclude_metadata(documents)

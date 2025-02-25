@@ -1,8 +1,12 @@
+import os
+from pathlib import Path
 from private_gpt.users import crud, models, schemas
 import itertools
 from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
 from fastapi import APIRouter, Depends, Request, Security, HTTPException, status
 from private_gpt.server.ingest.ingest_service import IngestService
+from private_gpt.users.models.document import Document
+from private_gpt.users.models.enums import MakerCheckerStatus
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -114,6 +118,32 @@ class ChatContentCreate(BaseModel):
 #     )
 #     return chat_completion(request, chat_body)
 
+async def get_latest_version_ids(
+    service: IngestService,
+    documents: List[Document]
+) -> List[str]:
+    """Get document IDs for the latest version of each filename.
+    
+    This function:
+    1. Iterates through all documents
+    2. For each document, finds all approved versions
+    3. For each approved version, gets the Qdrant document IDs by filename
+    """
+    latest_doc_ids = []
+    
+    for doc in documents:
+        approved_versions = [v for v in doc.versions if v.status == MakerCheckerStatus.APPROVED]
+        
+        if not approved_versions:
+            continue
+        latest_version = max(approved_versions, key=lambda v: v.uploaded_at)
+        versioned_filename = os.path.basename(latest_version.file_path)
+        logger.info(f"Extracting docs ids for file: {versioned_filename}")      
+        exact_docs = service.get_doc_ids_by_filename(versioned_filename)
+        latest_doc_ids.extend(exact_docs)
+    
+    return latest_doc_ids
+
 def create_chat_item(db, sender, content, conversation_id):
     chat_item_create = schemas.ChatItemCreate(
             sender=sender,
@@ -138,104 +168,126 @@ def create_chat_item(db, sender, content, conversation_id):
         }
     },
 )
+
 async def prompt_completion(
     request: Request,
     body: CompletionsBody,
     db: Session = Depends(deps.get_db),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
-    current_user: models.User = Security(
-        deps.get_current_user,
-    ),
+    current_user: models.User = Security(deps.get_current_user),
 ) -> OpenAICompletion | StreamingResponse:
-    
+    """Handle chat completion with proper document version filtering."""
     service = request.state.injector.get(IngestService)
+    
     try:
-        department = crud.department.get_by_id(
-            db, id=current_user.department_id)
+        # Validate department
+        department = crud.department.get_by_id(db, id=current_user.department_id)
         if not department:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail=f"No department assigned to you")
-        
-        documents = crud.documents.get_enabled_documents_by_departments(
-            db, department_id=department.id, category_ids=body.category_id)
-        
-        if not documents:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail=f"No documents uploaded for your department. Please upload documents to chat.")
-        
-        docs_list = [document.filename for document in documents]
-        docs_ids = []
-        for filename in docs_list:
-            doc_id = service.get_doc_ids_by_filename(filename)
-            docs_ids.extend(doc_id)
-        body.context_filter = {"docs_ids": docs_ids}
-
-        chat_history = crud.chat.get_by_id(
-            db, id=body.conversation_id
-        )
-        if (chat_history is None) and (chat_history.user_id != current_user.id):
             raise HTTPException(
-                status_code=404, detail="Chat not found")
-        
-        _history = body.history if body.history else []
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No department assigned to you"
+            )
 
-        def build_history() -> list[OpenAIMessage]:
-            history_messages: list[OpenAIMessage] = []
-            for interaction in _history:
-                role = interaction.role
-                if role == 'user':
-                    history_messages.append(
-                        OpenAIMessage(
-                            content=interaction.content,
-                            role="user"
-                        )
+        # Get enabled documents for department
+        documents = crud.documents.get_enabled_documents_by_departments(
+            db,
+            department_id=department.id,
+            category_ids=body.category_id
+        )
+        if not documents:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No documents uploaded for your department. Please upload documents to chat."
+            )
+        latest_doc_ids = await get_latest_version_ids(service, documents)
+        
+        if not latest_doc_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Could not find any valid document versions"
+            )
+
+        # Set context filter with latest version IDs
+        body.context_filter = {"docs_ids": latest_doc_ids}
+
+        # Validate chat history
+        chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
+        if (chat_history is None) or (chat_history.user_id != current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found"
+            )
+
+        # Build chat history
+        def build_history() -> List[OpenAIMessage]:
+            history_messages: List[OpenAIMessage] = []
+            for interaction in (body.history or []):
+                role = "user" if interaction.role == "user" else "assistant"
+                history_messages.append(
+                    OpenAIMessage(
+                        content=interaction.content,
+                        role=role
                     )
-                else:
-                    history_messages.append(
-                        OpenAIMessage(
-                            content=interaction.content,
-                            role="assistant"
-                        )
-                    )
+                )
             return history_messages
-        message = body.prompt 
-        # message = body.prompt + 'Only answer if there is answer in the provided documents'
-        user_message = OpenAIMessage(content=message, role="user")        
-        user_message_json = {
-            'text': body.prompt,
-        }
-        create_chat_item(db, "user", user_message_json , body.conversation_id) # store every query in the db
-        
-        messages = [user_message]
 
+        # Create user message
+        user_message = OpenAIMessage(content=body.prompt, role="user")
+        user_message_json = {"text": body.prompt}
+        
+        # Store user query
+        create_chat_item(
+            db,
+            "user",
+            user_message_json,
+            body.conversation_id
+        )
+
+        # Build complete message list
+        messages = [user_message]
         if body.system_prompt:
-            messages.insert(0, OpenAIMessage(
-                content=body.system_prompt, role="system"))
-            
-        all_messages = [*build_history(), user_message]
+            messages.insert(
+                0,
+                OpenAIMessage(content=body.system_prompt, role="system")
+            )
+
+        # Prepare chat body
         chat_body = ChatBody(
-            messages=all_messages,
+            messages=[*build_history(), user_message],
             use_context=body.use_context,
             stream=body.stream,
             include_sources=body.include_sources,
             context_filter=body.context_filter,
         )
+
+        # Log the interaction
         log_audit(
-            model='Chat', 
+            model='Chat',
             action='Chat',
             details={
                 "query": body.prompt,
                 'user': current_user.username,
-                }, 
+                'document_versions': latest_doc_ids
+            },
             user_id=current_user.id
         )
-        
-        chat_response = await chat_completion(request, chat_body)
+
+        chat_response = await chat_completion(request, chat_body)        
         ai_response = chat_response.model_dump(mode="json")
-        create_chat_item(db, "assistant", ai_response, body.conversation_id)
+        create_chat_item(
+            db,
+            "assistant",
+            ai_response,
+            body.conversation_id
+        )
+
         return chat_response
-    
-    except Exception as e:
-        print(traceback.format_exc())
-        logger.error(f"There was an error: {str(e)}")
+
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"Error in prompt completion: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process chat completion"
+        )
