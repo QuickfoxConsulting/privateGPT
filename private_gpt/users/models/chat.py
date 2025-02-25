@@ -29,14 +29,7 @@ class ChatHistory(Base):
         self.generate_title()
 
     def generate_title(self):
-        user_chat_items = [
-            item for item in self.chat_items if item.sender == "user"]
-        if user_chat_items:
-            first_user_chat_item = user_chat_items[0]
-            print("Chat items: ", first_user_chat_item.content['text'])
-            self.title = first_user_chat_item.content['text'][:30]
-        else:
-            self.title = "New Chat"
+        self.title = "New Chat"
 
     def __repr__(self):
         """Returns string representation of model instance"""

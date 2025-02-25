@@ -55,7 +55,7 @@ def create_app(root_injector: Injector) -> FastAPI:
                            "http://localhost:80", "http://192.168.1.131", 'http://192.168.1.131:3000'
                            , "http://192.168.1.65", 'http://192.168.1.65:3001'
                            , "http://192.168.1.109", 'http://192.168.1.109:3001'
-                           , "http://192.168.1.100", 'http://192.168.1.100:3000', "http://192.168.101.4", 'http://192.168.101.4:3000' 
+                           , "http://192.168.1.100", 'http://192.168.1.100:3000', "http://192.168.101.80", 'http://192.168.101.80:3000' 
                            ],
             allow_methods=["DELETE", "GET", "POST", "PUT", "OPTIONS", "PATCH"],
             allow_headers=["*"],

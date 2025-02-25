@@ -173,36 +173,83 @@ class SelfRAGRetriever(BaseRetriever):
         response = self._safe_llm_call(prompt)
         return self._parse_critique_response(response)
 
+    # def _parse_critique_response(self, response: str) -> Tuple[bool, float]:
+    #     """Parse LLM critique response"""
+    #     scores = {
+    #         'direct': 0,
+    #         'context': 0,
+    #         'confidence': 0.0,
+    #         'relevant': False
+    #     }
+        
+    #     try:
+    #         for line in response.split('\n'):
+    #             if 'direct relevance:' in line.lower():
+    #                 scores['direct'] = float(re.search(r"\d+", line).group())
+    #             elif 'context quality:' in line.lower():
+    #                 scores['context'] = float(re.search(r"\d+", line).group())
+    #             elif 'confidence:' in line.lower():
+    #                 scores['confidence'] = float(re.search(r"\d\.\d+", line).group())
+    #             elif 'relevant:' in line.lower():
+    #                 scores['relevant'] = 'yes' in line.lower()
+    #     except Exception as e:
+    #         if self.config.debug_mode:
+    #             print(f"Error parsing critique response: {e}")
+    #         return False, 0.0
+        
+    #     composite_score = (
+    #         0.6 * scores['direct']/10 +
+    #         0.4 * scores['context']/10
+    #     ) * scores['confidence']
+        
+    #     return scores['relevant'], composite_score
     def _parse_critique_response(self, response: str) -> Tuple[bool, float]:
-        """Parse LLM critique response"""
+        """Parse LLM critique response with improved robustness"""
         scores = {
-            'direct': 0,
-            'context': 0,
+            'direct': 0.0,
+            'context': 0.0,
             'confidence': 0.0,
             'relevant': False
         }
         
-        try:
-            for line in response.split('\n'):
-                if 'direct relevance:' in line.lower():
-                    scores['direct'] = float(re.search(r"\d+", line).group())
-                elif 'context quality:' in line.lower():
-                    scores['context'] = float(re.search(r"\d+", line).group())
-                elif 'confidence:' in line.lower():
-                    scores['confidence'] = float(re.search(r"\d\.\d+", line).group())
-                elif 'relevant:' in line.lower():
-                    scores['relevant'] = 'yes' in line.lower()
-        except Exception as e:
-            if self.config.debug_mode:
-                print(f"Error parsing critique response: {e}")
-            return False, 0.0
+        # Normalize response for case-insensitive matching
+        normalized = response.lower()
         
+        # Extract Direct Relevance
+        direct_match = re.search(r"direct relevance:\s*(\d+\.?\d*)", normalized)
+        if direct_match:
+            scores['direct'] = min(10.0, float(direct_match.group(1)))
+        
+        # Extract Context Quality
+        context_match = re.search(r"context quality:\s*(\d+\.?\d*)", normalized)
+        if context_match:
+            scores['context'] = min(10.0, float(context_match.group(1)))
+        
+        # Extract Confidence
+        confidence_match = re.search(r"overall confidence:\s*([0-1]\.\d+)", normalized)
+        if confidence_match:
+            scores['confidence'] = float(confidence_match.group(1))
+        
+        # Determine Relevance (fallback to composite score if missing)
+        relevant_match = re.search(r"relevant:\s*(yes|no)", normalized, re.IGNORECASE)
+        if relevant_match:
+            scores['relevant'] = relevant_match.group(1).lower() == 'yes'
+        else:
+            # Fallback: Determine relevance based on composite score
+            composite_score = (
+                0.6 * (scores['direct'] / 10) +
+                0.4 * (scores['context'] / 10)
+            ) * scores['confidence']
+            scores['relevant'] = composite_score >= self.config.relevance_threshold
+        
+        # Calculate final composite score
         composite_score = (
-            0.6 * scores['direct']/10 +
-            0.4 * scores['context']/10
+            0.6 * (scores['direct'] / 10) +
+            0.4 * (scores['context'] / 10)
         ) * scores['confidence']
         
         return scores['relevant'], composite_score
+    
 
     def _should_retrieve(self, query: str, context: Optional[List[NodeWithScore]] = None) -> Tuple[RetrievalDecision, str]:
         """Determine if retrieval is needed"""
@@ -312,8 +359,8 @@ class SelfRAGRetriever(BaseRetriever):
             )
             
             if is_relevant and score >= self.config.relevance_threshold:
-                # filtered_nodes.append(NodeWithScore(node=node.node, score=score))
-                filtered_nodes.append(node)
+                filtered_nodes.append(NodeWithScore(node=node.node, score=score))
+                # filtered_nodes.append(node)
         
         if self.config.enable_caching:
             self._context_history.put(

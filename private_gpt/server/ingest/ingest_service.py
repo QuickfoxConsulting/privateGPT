@@ -67,19 +67,19 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )       
-        node_parser = SafeSemanticSplitter.from_defaults(
-            embed_model=embedding_component.embedding_model,
-            breakpoint_percentile_threshold=95,
-            include_metadata=True,
-            include_prev_next_rel=True,
-        )
-        # node_parser =  SentenceWindowNodeParser.from_defaults(
-        #     window_size=15,
-        #     window_metadata_key="window",
-        #     original_text_metadata_key="original_text",
+        # node_parser = SafeSemanticSplitter.from_defaults(
+        #     embed_model=embedding_component.embedding_model,
+        #     breakpoint_percentile_threshold=95,
         #     include_metadata=True,
-        #     include_prev_next_rel=True
+        #     include_prev_next_rel=True,
         # )
+        node_parser =  SentenceWindowNodeParser.from_defaults(
+            window_size=10,
+            window_metadata_key="window",
+            original_text_metadata_key="original_text",
+            include_metadata=True,
+            include_prev_next_rel=True
+        )
         self.ingest_component = get_ingestion_component(
             self.storage_context,
             embed_model=embedding_component.embedding_model,

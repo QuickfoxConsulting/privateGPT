@@ -157,12 +157,61 @@ class ChatService:
     ) -> BaseChatEngine:
         settings = self.settings
         if use_context:
-            # vector_index_retriever = self.vector_store_component.get_retriever(
+            vector_index_retriever = self.vector_store_component.get_retriever(
+                index=self.index,
+                context_filter=context_filter,
+                similarity_top_k=self.settings.rag.similarity_top_k,
+            )
+            
+            node_postprocessors = [
+                MetadataReplacementPostProcessor(target_metadata_key="window"),
+                SimilarityPostprocessor(
+                    similarity_cutoff=settings.rag.similarity_value,
+                    filter_empty=True,
+                    filter_duplicates=True,
+                    filter_similar=True
+                ),
+                # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
+            ]
+            if settings.rag.rerank.enabled:
+                rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
+                    llm=self.llm_component.llm, 
+                    top_n=settings.rag.rerank.top_n,
+                    verbose=True
+                )
+                # rerank_postprocessor = SentenceTransformerRerank(
+                #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
+                # )
+                node_postprocessors.append(rerank_postprocessor)
+            
+            response_synthesizer = get_response_synthesizer(
+                response_mode="compact_accumulate",
+                llm=self.llm_component.llm,
+                structured_answer_filtering=True,
+                # streaming=True  # Enable streaming for better responsiveness
+            )
+            
+            custom_query_engine = RetrieverQueryEngine.from_args(
+                retriever=vector_index_retriever,
+                llm=self.llm_component.llm,
+                response_synthesizer=response_synthesizer,
+                # node_postprocessors=node_postprocessors,
+                verbose=True  # For debugging and understanding the process
+            )
+            
+            return ContextChatEngine.from_defaults(
+                system_prompt=system_prompt,
+                retriever=custom_query_engine,
+                llm=self.llm_component.llm,  # Takes no effect at the moment
+                node_postprocessors=node_postprocessors,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            )
+            
+            # base_retriever = self.vector_store_component.get_retriever(
             #     index=self.index,
             #     context_filter=context_filter,
             #     similarity_top_k=self.settings.rag.similarity_top_k,
             # )
-            
             # node_postprocessors = [
             #     MetadataReplacementPostProcessor(target_metadata_key="window"),
             #     SimilarityPostprocessor(
@@ -177,98 +226,49 @@ class ChatService:
             #     rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
             #         llm=self.llm_component.llm, 
             #         top_n=settings.rag.rerank.top_n,
-            #         verbose=True
+            #         # verbose=True
             #     )
             #     # rerank_postprocessor = SentenceTransformerRerank(
             #     #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
             #     # )
             #     node_postprocessors.append(rerank_postprocessor)
-            
+
+            # if settings.rag.query_expansion_enabled:
+            #     base_retriever = self._wrap_retriever_with_translation(base_retriever)
+            #     query_expander = QueryExpander(
+            #         llm=self.llm_component.llm,
+            #         embed_model=self.embedding_component.embedding_model,
+            #     )
+            #     base_retriever = self._wrap_retriever_with_expansion(
+            #         base_retriever, query_expander
+            #     )
+            # if settings.rag.self_rag_enabled:
+            #     base_retriever = SelfRAGRetriever(
+            #         base_retriever=base_retriever,
+            #         llm=self.llm_component.llm,
+            #         node_postprocessors=node_postprocessors,
+            #     )
             # response_synthesizer = get_response_synthesizer(
-            #     response_mode="compact_accumulate",
+            #     response_mode="compact",
             #     llm=self.llm_component.llm,
             #     structured_answer_filtering=True,
             #     # streaming=True  # Enable streaming for better responsiveness
             # )
             
             # custom_query_engine = RetrieverQueryEngine.from_args(
-            #     retriever=vector_index_retriever,
+            #     retriever=base_retriever,
             #     llm=self.llm_component.llm,
             #     response_synthesizer=response_synthesizer,
             #     # node_postprocessors=node_postprocessors,
             #     verbose=True  # For debugging and understanding the process
             # )
-            
-            # return ContextChatEngine.from_defaults(
+
+            # return CondensePlusContextChatEngine.from_defaults(
             #     system_prompt=system_prompt,
             #     retriever=custom_query_engine,
-            #     llm=self.llm_component.llm,  # Takes no effect at the moment
-            #     node_postprocessors=node_postprocessors,
-            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            #     llm=self.llm_component.llm,
+            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             # )
-            
-            base_retriever = self.vector_store_component.get_retriever(
-                index=self.index,
-                context_filter=context_filter,
-                similarity_top_k=self.settings.rag.similarity_top_k,
-            )
-            node_postprocessors = [
-                MetadataReplacementPostProcessor(target_metadata_key="window"),
-                SimilarityPostprocessor(
-                    similarity_cutoff=settings.rag.similarity_value,
-                    filter_empty=True,
-                    filter_duplicates=True,
-                    filter_similar=True
-                ),
-                TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
-            ]
-            if settings.rag.rerank.enabled:
-                rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
-                    llm=self.llm_component.llm, 
-                    top_n=settings.rag.rerank.top_n,
-                    # verbose=True
-                )
-                # rerank_postprocessor = SentenceTransformerRerank(
-                #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
-                # )
-                node_postprocessors.append(rerank_postprocessor)
-
-            if settings.rag.query_expansion_enabled:
-                base_retriever = self._wrap_retriever_with_translation(base_retriever)
-                query_expander = QueryExpander(
-                    llm=self.llm_component.llm,
-                    embed_model=self.embedding_component.embedding_model,
-                )
-                base_retriever = self._wrap_retriever_with_expansion(
-                    base_retriever, query_expander
-                )
-            if settings.rag.self_rag_enabled:
-                base_retriever = SelfRAGRetriever(
-                    base_retriever=base_retriever,
-                    llm=self.llm_component.llm,
-                    node_postprocessors=node_postprocessors,
-                )
-            response_synthesizer = get_response_synthesizer(
-                response_mode="compact",
-                llm=self.llm_component.llm,
-                structured_answer_filtering=True,
-                # streaming=True  # Enable streaming for better responsiveness
-            )
-            
-            custom_query_engine = RetrieverQueryEngine.from_args(
-                retriever=base_retriever,
-                llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
-                # node_postprocessors=node_postprocessors,
-                verbose=True  # For debugging and understanding the process
-            )
-
-            return CondensePlusContextChatEngine.from_defaults(
-                system_prompt=system_prompt,
-                retriever=custom_query_engine,
-                llm=self.llm_component.llm,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -331,10 +331,16 @@ class ChatService:
         '''
     
         system_prompt = """
-            You are a precise and helpful AI assistant designed to retrieve and communicate information from a given set of documents using Retrieval-Augmented Generation (RAG). Your primary goal is to provide **accurate, context-aware, and well-structured responses** based strictly on retrieved information.  
+          You are a helpful AI assistant named QuickRef, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
+
 
             ### **Guidelines**  
-            - **Use only retrieved information** to answer questions. If unsure, state that clearly.  
+            - Answer questions truthfully based only on the provided context documents.
+            - Only use relevant documents to answer.
+            - Ignore documents that are not related to the question.
+            - If the documents cannot answer the question, respond with only: "No relevant information found in the provided documents."
+            - Do not offer to use external knowledge or suggest alternative approaches.
+            - Do not explain why you cannot answer - just provide the standard response in guideline above.
             - **If uncertain, ask for clarification.**  
             - **Respond in the same language** as the user's query.  
             - If the context is **poor quality or unreadable**, inform the user and provide the best possible answer.  
@@ -354,11 +360,32 @@ class ChatService:
 
             ### **Error Handling**  
             - If no relevant documents are found, respond:  
-            _"The provided documents do not contain enough information to answer this question."_  
+            _ "The provided documents do not contain enough information to answer this question."_  
             - If a retrieval error occurs, suggest alternative approaches (e.g., rephrasing the query).  
+            
+            Context documents:
+                {context_str}
 
             **Your primary responsibility is to be a reliable, context-aware retrieval assistant.** Prioritize **accuracy, clarity, and appropriate citation** in all responses.
            """
+        # system_prompt = """     
+        #     You are a helpful AI assistant named QuickRef, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
+        #     Guidelines:
+        #         1. Answer questions truthfully based only on the provided context documents.
+        #         2. Only use relevant documents to answer.
+        #         3. Ignore documents that are not related to the question.
+        #         4. If the answer exists in several documents, summarize information from all relevant sources.
+        #         5. Do not use external knowledge or make up information.
+        #         6. Use references in the form [file_name] when citing information.
+        #         7. Provide comprehensive but concise answers directly relevant to the question.
+        #         8. If the documents cannot answer the question, respond with only: "No relevant information found in the provided documents."
+        #         9. Do not offer to use external knowledge or suggest alternative approaches.
+        #         10. Do not explain why you cannot answer - just provide the standard response in guideline 8.
+
+        #     Context documents:
+        #     {context_str}
+        #     Your task is to provide detailed answers based exclusively on the above documents.
+        # """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
