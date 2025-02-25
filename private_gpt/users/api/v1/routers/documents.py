@@ -359,7 +359,6 @@ async def verify_documents(
                 )
 
         temp_path = Path(document.current_version.file_path)
-        logger.info(f"Temporary file path: {temp_path}")
         if not temp_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -373,7 +372,6 @@ async def verify_documents(
                 temp_path=temp_path,
                 version=document.current_version.version_number,
             )
-            print('versioned_filename:', versioned_filename)
             version_update = schemas.DocumentVersionUpdate(
                 status=MakerCheckerStatus.APPROVED,
                 action_type=MakerCheckerActionType.UPDATE,
@@ -391,6 +389,11 @@ async def verify_documents(
                 verified=True,
             )
             crud.documents.update(db=db, db_obj=document, obj_in=checker)
+            document.filename = versioned_filename
+            db.add(document)
+            db.commit()
+            db.refresh(document)
+
             log_audit(
                 model='Document',
                 action='update',

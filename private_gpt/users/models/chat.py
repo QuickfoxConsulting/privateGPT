@@ -13,23 +13,35 @@ class ChatHistory(Base):
 
     conversation_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now,
-                        onupdate=datetime.now)
-    user_id = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user = relationship("User", back_populates="chat_histories")
     chat_items = relationship(
-        "ChatItem", back_populates="chat_history", cascade="all, delete-orphan")
+        "ChatItem", back_populates="chat_history", cascade="all, delete-orphan"
+    )
     _title_generated = Column(Boolean, default=False)
 
     def __init__(self, user_id, chat_items=None, **kwargs):
         super().__init__(**kwargs)
         self.user_id = user_id
         self.chat_items = chat_items or []
+        for item in self.chat_items:
+            item.chat_history = self  # Ensuring bidirectional relationship
         self.generate_title()
 
     def generate_title(self):
-        self.title = "New Chat"
+        """Sets title based on the first user message"""
+        if self._title_generated:
+            return
+
+        user_chat_items = [item for item in self.chat_items if item.sender == "user"]
+        if user_chat_items:
+            first_message = user_chat_items[0].content.get("text", "New Chat")
+            self.title = first_message
+            self._title_generated = True
+        else:
+            self.title = "New Chat"
 
     def __repr__(self):
         """Returns string representation of model instance"""
