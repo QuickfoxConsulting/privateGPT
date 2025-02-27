@@ -105,7 +105,7 @@ async def chat_completion(
             media_type="text/event-stream",
         )
     else:
-        completion = service.chat(
+        completion = await service.chat(
             messages=all_messages,
             use_context=body.use_context,
             context_filter=body.context_filter,

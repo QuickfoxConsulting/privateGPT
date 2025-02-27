@@ -2,7 +2,7 @@ from typing import List, Optional, Dict
 from dataclasses import dataclass
 from enum import Enum
 from private_gpt.components.llm.llm_component import LLMComponent
-
+from llama_index.core.chat_engine.types import ChatMessage
 class QueryExpander:
     """Query expansion with synonym generation and LLM-based rewriting"""
     
@@ -18,10 +18,10 @@ class QueryExpander:
         self.language = language
         self.synonyms_dict = synonyms_dict or {} 
     
-    def expand(self, query: str) -> str:
+    def expand(self, query: str, chat_history: list[ChatMessage] | None = None) -> str:
         """Expand query using multiple techniques"""
         # synonyms = self._generate_synonyms(query)        
-        expanded = self._llm_expansion(query)        
+        expanded = self._llm_expansion(query, chat_history)        
         all_terms = f"{query} {expanded}"
         return all_terms
     
@@ -42,18 +42,50 @@ class QueryExpander:
             
         return synonyms
     
-    def _llm_expansion(self, query_str: str) -> str:
-        """Use LLM to rewrite and expand the query"""
-        # prompt = f"You are given a user query that should be answered by looking up documents that from a document store using a distance based similarity measure. The documents fetched from the document store were found to be irrelevant to answer the question. Rewrite the following question into an alternative that increases the likelihood of finding relevant documents from the database. You may only answer with the exact rephrasing.  If the query is not in {self.language}, translate it. The original question is: {query} Expanded:"
-        prompt = f"""Your task is to refine a query to ensure it is highly effective for retrieving relevant search results. \n
-        Analyze the given input to grasp the core semantic intent or meaning. \n
-        Original Query:
-        \n ------- \n
-        {query_str}
-        \n ------- \n
-        Your goal is to rephrase or enhance this query to improve its search performance. Ensure the revised query is concise and directly aligned with the intended search objective. \n
-        Respond with the optimized query only:"""
-        return self.llm.complete(prompt).text.strip()
+    def _llm_expansion(self, query_str: str, chat_history: list[ChatMessage] | None = None) -> str:
+        """Use LLM to rewrite and expand the query while considering chat history context.
+        
+        Args:
+            query_str: The original query to expand
+            chat_history: Optional list of previous chat messages for context
+        """
+        # Format chat history if available
+        history_context = ""
+        if chat_history and len(chat_history) > 0:
+            history_messages = "\n".join([
+                f"{'user' if msg.role == 'user' else 'assistant'}: {msg.content}"
+                for msg in chat_history[-3:]  
+            ])
+            history_context = f"""Previous conversation context:
+            {history_messages}
+            """
+
+        prompt = f"""You are a query optimization expert. Your task is to enhance the given query for better search results.
+
+        {history_context}
+
+        Original Query: "{query_str}"
+
+        Instructions:
+        1. Analyze the query and conversation context (if provided)
+        2. Identify key concepts and related terms
+        3. Include relevant context from the chat history
+        4. Create a search-optimized version that will find relevant documents
+
+        Requirements:
+        - Maintain the original intent
+        - Be specific and focused
+        - Include important context from previous messages
+        - Keep the query concise (max 2-3 sentences)
+
+        Respond with ONLY the optimized query, no explanations:"""
+
+        expanded_query = self.llm.complete(prompt).text.strip()
+        
+        # Remove any quotes or formatting that might have been added
+        expanded_query = expanded_query.strip('"').strip("'")
+        
+        return expanded_query
     
     def _deduplicate_terms(self, terms_string: str) -> str:
         """Remove duplicate terms while preserving original query"""

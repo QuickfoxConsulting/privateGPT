@@ -223,25 +223,20 @@ class SelfRetrieverQueryEngine(BaseQueryEngine):
         )
         
         if decision == RetrievalDecision.SKIP:
-            # Use existing context
             nodes = prev_context
             metrics.used_cached = True
         elif decision == RetrievalDecision.FOLLOWUP:
-            # Combine previous context with limited new retrieval
             new_nodes = self._retriever.retrieve(query_bundle)
             nodes = prev_context + new_nodes[:2]  # Limited new nodes
             metrics.total_nodes = len(new_nodes)
         else:
-            # Full retrieval
             nodes = self._retriever.retrieve(query_bundle)
             metrics.total_nodes = len(nodes)
         
-        # Apply post-processing
         filtered_nodes = self._apply_node_postprocessors(nodes, query_bundle)
         metrics.filtered_nodes = len(filtered_nodes)
         metrics.retrieval_time = time.time() - start_time
         
-        # Update context history
         self._context_history[query_bundle.query_str] = (
             filtered_nodes[-self._max_context_history:]
         )
@@ -250,6 +245,7 @@ class SelfRetrieverQueryEngine(BaseQueryEngine):
         if len(self._context_history) > self._cache_size:
             oldest_key = next(iter(self._context_history))
             del self._context_history[oldest_key]
+        
         print("*"*50)
         print(f"Filtered nodes: {filtered_nodes}")
         print(f"Metrics: {metrics}")
@@ -261,7 +257,6 @@ class SelfRetrieverQueryEngine(BaseQueryEngine):
         with self.callback_manager.event(
             CBEventType.QUERY, payload={EventPayload.QUERY_STR: query_bundle.query_str}
         ) as query_event:
-            # Check response cache
             if query_bundle.query_str in self._response_cache:
                 response = self._response_cache[query_bundle.query_str]
                 query_event.on_end(payload={
@@ -270,17 +265,13 @@ class SelfRetrieverQueryEngine(BaseQueryEngine):
                 })
                 return response
             
-            # Retrieve with decision making
             nodes, metrics = self.retrieve_with_decision(query_bundle)
             self.metrics = metrics
             
-            # Synthesize response
             response = self._response_synthesizer.synthesize(
                 query=query_bundle,
                 nodes=nodes,
             )
-            
-            # Update response cache
             self._response_cache[query_bundle.query_str] = response
             if len(self._response_cache) > self._cache_size:
                 oldest_key = next(iter(self._response_cache))

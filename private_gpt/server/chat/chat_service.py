@@ -16,7 +16,7 @@ from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
 from private_gpt.server.chat.query_expansion import QueryExpander
-from private_gpt.server.chat.self_retriever import SelfRAGRetriever
+from private_gpt.server.chat.self_retriever_v1 import SelfRAGRetriever
 from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
@@ -43,7 +43,7 @@ from llama_index.core import PromptTemplate
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import BaseNode
 from llama_index.core.query_engine import RetrieverQueryEngine
-
+from llama_index.core.retrievers import QueryFusionRetriever
 
 
 class Completion(BaseModel):
@@ -58,25 +58,33 @@ class TitleGeneration(BaseModel):
 
 reranker_path = models_path / 'reranker'
 
+CONTEXT_PROMPT_TEMPLATE = """You are a precise and helpful AI assistant. Use the provided context to answer questions.
 
-CONDENSE_PROMPT_TEMPLATE = """Your task is to refine a query to ensure it is highly effective for retrieving relevant search results.
-        Analyze the given input to grasp the core semantic intent or meaning. Identify the key concepts and technical terms. If the query is not in English, translate it while preserving any technical terms or proper nouns.
-        Original Query:
-        ------- 
-        {question}
-        ------- 
+Guidelines:
+- Only use information from the provided context
+- If the context doesn't contain the answer, say so
+- Include relevant quotes or references when appropriate
+- Maintain a professional, clear writing style
+- Format responses using markdown for readability
 
-        Guidelines for optimization:
-        - Remove filler words, unnecessary context, and redundancies
-        - Preserve specific technical terms or unique identifiers
-        - Ensure the query is specific enough to return relevant results
-        - Limit the optimized query to 10-15 words when possible
-        - For ambiguous queries, choose the most likely intent based on context
+Context: {context}
+Question: {question}
 
-        If the original query is already optimal, return it unchanged.
+Answer:"""
 
-        Respond with the optimized query only, without explanations or additional text.
-        Standalone question:"""
+CONDENSE_PROMPT_TEMPLATE = """Given the conversation history and a new question, create a standalone question that captures all relevant context.
+
+Chat History:
+{chat_history}
+
+New Question: {question}
+
+Generate a clear, specific question that incorporates any relevant context from the chat history.
+If the new question is already self-contained, return it unchanged.
+Include any specific technical terms, identifiers, or constraints mentioned.
+Limit to 2-3 sentences maximum.
+
+Standalone question:"""
 
 @dataclass
 class ChatEngineInput:
@@ -149,11 +157,22 @@ class ChatService:
         prompt = f"Translate the following text to English. Text: {text}"
         return self.llm_component.llm.complete(prompt).text.strip()
 
-    def _chat_engine(
+    def _get_qa_template(self) -> str:
+        """Custom QA template with better context integration."""
+        return """Context information is below.
+        ---------------------
+        {context_str}
+        ---------------------
+        Given the context information and not prior knowledge, answer the query.
+        Query: {query_str}
+        Answer: Let's approach this step-by-step:"""
+
+    async def _chat_engine(
         self,
         system_prompt: str | None = None,
         use_context: bool = False,
         context_filter: ContextFilter | None = None,
+        chat_history: list[ChatMessage] | None = None,
     ) -> BaseChatEngine:
         settings = self.settings
         if use_context:
@@ -171,8 +190,9 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
-                # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
+                TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
+
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
                     llm=self.llm_component.llm, 
@@ -183,11 +203,28 @@ class ChatService:
                 #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
                 # )
                 node_postprocessors.append(rerank_postprocessor)
+
+            if settings.rag.query_expansion_enabled:
+                query_expander = QueryExpander(
+                    llm=self.llm_component.llm,
+                    embed_model=self.embedding_component.embedding_model,
+                    language="en",
+                    synonyms_dict={
+                        "company": ["organization", "firm", "business", "corporation", "enterprise"],
+                        "employee": ["worker", "staff", "staff member", "staffer", "staffer"],
+                        "policy": ["regulation", "rule", "law", "standard", "guideline"]
+                    }
+                )
+                vector_index_retriever = self._wrap_retriever_with_expansion(
+                    vector_index_retriever, query_expander, chat_history
+                )   
+
             
             response_synthesizer = get_response_synthesizer(
-                response_mode="compact_accumulate",
+                response_mode="compact",
                 llm=self.llm_component.llm,
                 structured_answer_filtering=True,
+                text_qa_template=self._get_qa_template(),
                 # streaming=True  # Enable streaming for better responsiveness
             )
             
@@ -195,7 +232,6 @@ class ChatService:
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
                 response_synthesizer=response_synthesizer,
-                # node_postprocessors=node_postprocessors,
                 verbose=True  # For debugging and understanding the process
             )
             
@@ -205,70 +241,8 @@ class ChatService:
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
                 # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                # context_prompt=CONTEXT_PROMPT_TEMPLATE
             )
-            
-            # base_retriever = self.vector_store_component.get_retriever(
-            #     index=self.index,
-            #     context_filter=context_filter,
-            #     similarity_top_k=self.settings.rag.similarity_top_k,
-            # )
-            # node_postprocessors = [
-            #     MetadataReplacementPostProcessor(target_metadata_key="window"),
-            #     SimilarityPostprocessor(
-            #         similarity_cutoff=settings.rag.similarity_value,
-            #         filter_empty=True,
-            #         filter_duplicates=True,
-            #         filter_similar=True
-            #     ),
-            #     TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
-            # ]
-            # if settings.rag.rerank.enabled:
-            #     rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
-            #         llm=self.llm_component.llm, 
-            #         top_n=settings.rag.rerank.top_n,
-            #         # verbose=True
-            #     )
-            #     # rerank_postprocessor = SentenceTransformerRerank(
-            #     #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
-            #     # )
-            #     node_postprocessors.append(rerank_postprocessor)
-
-            # if settings.rag.query_expansion_enabled:
-            #     base_retriever = self._wrap_retriever_with_translation(base_retriever)
-            #     query_expander = QueryExpander(
-            #         llm=self.llm_component.llm,
-            #         embed_model=self.embedding_component.embedding_model,
-            #     )
-            #     base_retriever = self._wrap_retriever_with_expansion(
-            #         base_retriever, query_expander
-            #     )
-            # if settings.rag.self_rag_enabled:
-            #     base_retriever = SelfRAGRetriever(
-            #         base_retriever=base_retriever,
-            #         llm=self.llm_component.llm,
-            #         node_postprocessors=node_postprocessors,
-            #     )
-            # response_synthesizer = get_response_synthesizer(
-            #     response_mode="compact",
-            #     llm=self.llm_component.llm,
-            #     structured_answer_filtering=True,
-            #     # streaming=True  # Enable streaming for better responsiveness
-            # )
-            
-            # custom_query_engine = RetrieverQueryEngine.from_args(
-            #     retriever=base_retriever,
-            #     llm=self.llm_component.llm,
-            #     response_synthesizer=response_synthesizer,
-            #     # node_postprocessors=node_postprocessors,
-            #     verbose=True  # For debugging and understanding the process
-            # )
-
-            # return CondensePlusContextChatEngine.from_defaults(
-            #     system_prompt=system_prompt,
-            #     retriever=custom_query_engine,
-            #     llm=self.llm_component.llm,
-            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            # )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -305,13 +279,26 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+        # sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+        sources = []
+        seen_nodes = set()
+
+        for node in streaming_response.source_nodes:
+            # This example uses the node's content as the identifier
+            # Replace with whatever makes nodes "the same" in your context
+            node_key = hash(node.content)  # or whatever identifies duplicates
+            
+            if node_key not in seen_nodes:
+                seen_nodes.add(node_key)
+                sources.append(Chunk.from_node(node))
+
+
         completion_gen = CompletionGen(
             response=streaming_response.response_gen, sources=sources
         )
         return completion_gen
 
-    def chat(
+    async def chat(
         self,
         messages: list[ChatMessage],
         use_context: bool = False,
@@ -323,79 +310,64 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-        '''
-                    ### **Example of Citation**  
-            - If a document "whitepaper.pdf" contains the information and has a {file_name}, cite as:  
-            *"The proposed method increases efficiency by 20% [whitepaper.pdf]."*  
-            - If no {file_name} is present, **omit citations**. 
-        '''
-    
         system_prompt = """
-          You are a helpful AI assistant named QuickRef, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
+            You are a specialized retrieval-augmented AI assistant named QuickRef, created by Quickfox Consulting. Your sole purpose is to provide answers based EXCLUSIVELY on the context documents provided to you.
 
+            ### **Core RAG Guidelines**
+            - You can ONLY answer based on information explicitly present in the retrieved context documents
+            - You must NEVER use your general knowledge to supplement answers
+            - If the answer is not in the context documents, respond with ONLY: "I cannot find information about this in the provided documents."
+            - Do not explain limitations or apologize for not knowing
+            - Never hallucinate or invent information not present in the documents
 
-            ### **Guidelines**  
-            - Answer questions truthfully based only on the provided context documents.
-            - Only use relevant documents to answer.
-            - Ignore documents that are not related to the question.
-            - If the documents cannot answer the question, respond with only: "No relevant information found in the provided documents."
-            - Do not offer to use external knowledge or suggest alternative approaches.
-            - Do not explain why you cannot answer - just provide the standard response in guideline above.
-            - **If uncertain, ask for clarification.**  
-            - **Respond in the same language** as the user's query.  
-            - If the context is **poor quality or unreadable**, inform the user and provide the best possible answer.  
-            - **If the answer isn't in the context but you possess the knowledge,** explain this and provide an answer using your understanding.  
-            - **Only include inline citations ([file_name]) when a {file_name} tag is explicitly provided in the context.** Do not cite otherwise.  
-            - **Do not use XML tags in responses.**  
-            - Ensure citations are **concise and directly related** to the information provided.  
+            ### **Document Processing**
+            - Only reference documents that directly address the query
+            - Ignore irrelevant documents completely
+            - Prioritize information from multiple documents that corroborate each other
+            - When documents contain conflicting information, highlight the inconsistency
+            - When citations are provided as {file_name}, include them as [file_name]
+            - Do not attempt to reference document IDs or names if they aren't explicitly given
 
-            ### **Response Principles**  
-            - **Structure responses clearly** using markdown:  
-            - **Bold** for emphasis  
-            - *Italics* for explanations  
-            - `Code` for technical terms  
-            - Bullet points and lists for clarity  
-            - **Highlight conflicting information** when applicable.  
-            - **Do not fabricate information.** If the retrieved documents do not contain the answer, state so.  
+            ### **Response Structure**
+            - Begin with a direct answer to the question when available
+            - Format responses with markdown
+            - Bullet lists for multiple points
+            - Keep responses concise but complete
+            - Maintain the user's query language in your response
 
-            ### **Error Handling**  
-            - If no relevant documents are found, respond:  
-            _ "The provided documents do not contain enough information to answer this question."_  
-            - If a retrieval error occurs, suggest alternative approaches (e.g., rephrasing the query).  
-            
+            ### **Step-by-Step Procedure Handling**
+            - For questions about procedures or processes, identify and extract the exact steps in the correct sequence
+            - Maintain the original numbering or ordering of steps as presented in the documents
+            - Present procedures in a clear, structured format (numbered lists for sequential steps)
+            - Do not combine or merge steps from different procedures
+            - Do not add additional steps or requirements not explicitly listed in the documents
+            - For questions about "how to" perform a specific task, prioritize finding explicit procedural instructions
+            - When presenting steps, focus on actions the user needs to take, not explanations of the system
+
+            ### **Strict RAG Enforcement**
+            - You are FORBIDDEN from using any information outside the provided context
+            - You are DISALLOWED from generating speculative answers
+            - You are PROHIBITED from offering to search for more information
+            - You cannot suggest external resources or alternative approaches
+            - You must not identify sections of text that seem relevant but don't actually answer the question
+
             Context documents:
-                {context_str}
+            {context_str}
 
-            **Your primary responsibility is to be a reliable, context-aware retrieval assistant.** Prioritize **accuracy, clarity, and appropriate citation** in all responses.
-           """
-        # system_prompt = """     
-        #     You are a helpful AI assistant named QuickRef, created by Quickfox Consulting. Your primary function is to provide comprehensive answers based solely on the information contained in the given context documents.
-        #     Guidelines:
-        #         1. Answer questions truthfully based only on the provided context documents.
-        #         2. Only use relevant documents to answer.
-        #         3. Ignore documents that are not related to the question.
-        #         4. If the answer exists in several documents, summarize information from all relevant sources.
-        #         5. Do not use external knowledge or make up information.
-        #         6. Use references in the form [file_name] when citing information.
-        #         7. Provide comprehensive but concise answers directly relevant to the question.
-        #         8. If the documents cannot answer the question, respond with only: "No relevant information found in the provided documents."
-        #         9. Do not offer to use external knowledge or suggest alternative approaches.
-        #         10. Do not explain why you cannot answer - just provide the standard response in guideline 8.
+            Your function is to be a strict, context-bound retrieval system that ONLY provides information found in the documents above. Stay within these boundaries at all times.
 
-        #     Context documents:
-        #     {context_str}
-        #     Your task is to provide detailed answers based exclusively on the above documents.
-        # """
+            """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
 
-        chat_engine = self._chat_engine(
+        chat_engine = await self._chat_engine(
             system_prompt=system_prompt,
             use_context=use_context,
             context_filter=context_filter,
+            chat_history=chat_history
         )
-        wrapped_response = chat_engine.chat(
+        wrapped_response = await chat_engine.achat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
@@ -422,7 +394,7 @@ class ChatService:
         return TranslatedRetriever(base_retriever, self)
 
     def _wrap_retriever_with_expansion(
-        self, retriever: BaseRetriever, query_expander: QueryExpander
+        self, retriever: BaseRetriever, query_expander: QueryExpander, chat_history: list[ChatMessage] | None = None
     ) -> BaseRetriever:
         """Wrap retriever with query expansion capabilities"""
         class ExpandedRetriever(BaseRetriever):
@@ -431,7 +403,7 @@ class ChatService:
                 self.expander = expander
 
             def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-                expanded_query = self.expander.expand(query_bundle.query_str)
+                expanded_query = self.expander.expand(query_bundle.query_str, chat_history)
                 new_bundle = QueryBundle(
                     query_str=expanded_query,
                     embedding=query_bundle.embedding,
@@ -439,6 +411,7 @@ class ChatService:
                 return self.base.retrieve(new_bundle)
 
         return ExpandedRetriever(retriever, query_expander)
+
 
     async def generate_title(
         self,
@@ -492,3 +465,52 @@ class ChatService:
                 return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")
+
+
+
+
+
+
+"""
+Few shot examples:
+            ### **Example 1: Direct answer from context**
+                Context:
+                [Company Handbook, Page 12]
+                The annual leave policy allows full-time employees 25 days of paid vacation per year, accrued monthly at a rate of 2.08 days. Unused vacation days can be carried over to the next calendar year, with a maximum cap of 30 days total. Employees must submit vacation requests at least two weeks in advance through the HR portal.
+                User query: How many vacation days do full-time employees get?
+
+                Assistant response:
+                Full-time employees receive **25 days of paid vacation per year**, accrued monthly at a rate of 2.08 days. Unused vacation days can be carried over to the next calendar year, with a maximum cap of 30 days total.
+
+            ### **Example 2: Information not in context**
+                Context:
+                [IT Security Policy, Section 3.4]
+                All employees must use a password that contains at least 12 characters, including uppercase letters, lowercase letters, numbers, and special symbols. Passwords must be changed every 90 days and cannot be reused for 1 year.
+                User query: What is the company's policy on remote work?
+
+                Assistant response:
+                I cannot find information about this in the provided documents.
+
+            ### **Example 3: Procedural information**
+                Context:
+                [New Employee Onboarding, Page 5]
+                Password Reset Procedure:
+                Navigate to portal.company.com/reset
+                Enter your employee ID number
+                Click "Request Reset Link"
+                Check your company email for the reset link
+                Click the link and enter your new password twice
+                Log in with your new password
+
+                User query: How do I reset my password?
+
+                Assistant response:
+                Here's how to reset your password:
+
+                1. Navigate to portal.company.com/reset
+                2. Enter your employee ID number
+                3. Click "Request Reset Link"
+                4. Check your company email for the reset link
+                5. Click the link and enter your new password twice
+                6. Log in with your new password
+"""

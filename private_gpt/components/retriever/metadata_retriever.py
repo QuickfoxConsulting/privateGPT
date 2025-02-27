@@ -23,7 +23,6 @@ class MetadataFilterRetriever(BaseRetriever):
 
     def _parse_metadata_filters(self, query: str) -> MetadataFilters:
         """Extract file names and tags from query"""
-        # Find all @filename mentions
         file_names = re.findall(r'@(\S+)', query)
         
         # Find all #tags
@@ -61,6 +60,11 @@ class MetadataFilterRetriever(BaseRetriever):
             matches_file = (
                 not filters.file_names or
                 any(f.lower() in metadata.get('file_name', '').lower() 
+                    for f in filters.file_names)
+            )
+            matches_file = (
+                not filters.file_names or
+                any(f.lower() in metadata.get('filename', '').lower() 
                     for f in filters.file_names)
             )
             
