@@ -8,7 +8,7 @@ from private_gpt.server.ingest.ingest_service import IngestService
 from private_gpt.users.models.document import Document
 from private_gpt.users.models.enums import MakerCheckerStatus
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from sqlalchemy.orm import Session
 import traceback
 import logging
@@ -70,53 +70,11 @@ class CompletionsBody(BaseModel):
 class ChatContentCreate(BaseModel):
     content: Dict[str, Any]
 
-# @completions_router.post(
-#     "/completions",
-#     response_model=None,
-#     summary="Completion",
-#     responses={200: {"model": OpenAICompletion}},
-#     tags=["Contextual Completions"],
-# )
-# def prompt_completion(
-#     request: Request, body: CompletionsBody
-# ) -> OpenAICompletion | StreamingResponse:
-#     """We recommend most users use our Chat completions API.
 
-#     Given a prompt, the model will return one predicted completion.
+class ChatResponse(BaseModel):
+    id: uuid.UUID
+    response: Union[OpenAICompletion, str]
 
-#     Optionally include a `system_prompt` to influence the way the LLM answers.
-
-#     If `use_context`
-#     is set to `true`, the model will use context coming from the ingested documents
-#     to create the response. The documents being used can be filtered using the
-#     `context_filter` and passing the document IDs to be used. Ingested documents IDs
-#     can be found using `/ingest/list` endpoint. If you want all ingested documents to
-#     be used, remove `context_filter` altogether.
-
-#     When using `'include_sources': true`, the API will return the source Chunks used
-#     to create the response, which come from the context provided.
-
-#     When using `'stream': true`, the API will return data chunks following [OpenAI's
-#     streaming model](https://platform.openai.com/docs/api-reference/chat/streaming):
-#     ```
-#     {"id":"12345","object":"completion.chunk","created":1694268190,
-#     "model":"private-gpt","choices":[{"index":0,"delta":{"content":"Hello"},
-#     "finish_reason":null}]}
-#     ```
-#     """
-#     messages = [OpenAIMessage(content=body.prompt, role="user")]
-#     # If system prompt is passed, create a fake message with the system prompt.
-#     if body.system_prompt:
-#         messages.insert(0, OpenAIMessage(content=body.system_prompt, role="system"))
-
-#     chat_body = ChatBody(
-#         messages=messages,
-#         use_context=body.use_context,
-#         stream=body.stream,
-#         include_sources=body.include_sources,
-#         context_filter=body.context_filter,
-#     )
-#     return chat_completion(request, chat_body)
 
 async def get_latest_version_ids(
     service: IngestService,
@@ -151,8 +109,10 @@ def create_chat_item(db, sender, content, conversation_id):
             conversation_id=conversation_id
         )
     chat_history = crud.chat.get_conversation(db, conversation_id=conversation_id)
-    chat_history.generate_title()
+    if not chat_history.title or chat_history.title == "New Chat":
+        chat_history.generate_title()
     return crud.chat_item.create(db, obj_in=chat_item_create)
+
 
 @completions_router.post(
     "/chat",
@@ -175,12 +135,11 @@ async def prompt_completion(
     db: Session = Depends(deps.get_db),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     current_user: models.User = Security(deps.get_current_user),
-) -> OpenAICompletion | StreamingResponse:
+) -> ChatResponse | StreamingResponse:
     """Handle chat completion with proper document version filtering."""
     service = request.state.injector.get(IngestService)
     
     try:
-        # Validate department
         department = crud.department.get_by_id(db, id=current_user.department_id)
         if not department:
             raise HTTPException(
@@ -188,7 +147,6 @@ async def prompt_completion(
                 detail="No department assigned to you"
             )
 
-        # Get enabled documents for department
         documents = crud.documents.get_enabled_documents_by_departments(
             db,
             department_id=department.id,
@@ -207,10 +165,8 @@ async def prompt_completion(
                 detail="Could not find any valid document versions"
             )
 
-        # Set context filter with latest version IDs
         body.context_filter = {"docs_ids": latest_doc_ids}
 
-        # Validate chat history
         chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
         if (chat_history is None) or (chat_history.user_id != current_user.id):
             raise HTTPException(
@@ -218,7 +174,6 @@ async def prompt_completion(
                 detail="Chat not found"
             )
 
-        # Build chat history
         def build_history() -> List[OpenAIMessage]:
             history_messages: List[OpenAIMessage] = []
             for interaction in (body.history or []):
@@ -231,11 +186,9 @@ async def prompt_completion(
                 )
             return history_messages
 
-        # Create user message
         user_message = OpenAIMessage(content=body.prompt, role="user")
         user_message_json = {"text": body.prompt}
         
-        # Store user query
         create_chat_item(
             db,
             "user",
@@ -243,7 +196,6 @@ async def prompt_completion(
             body.conversation_id
         )
 
-        # Build complete message list
         messages = [user_message]
         if body.system_prompt:
             messages.insert(
@@ -251,7 +203,6 @@ async def prompt_completion(
                 OpenAIMessage(content=body.system_prompt, role="system")
             )
 
-        # Prepare chat body
         chat_body = ChatBody(
             messages=[*build_history(), user_message],
             use_context=body.use_context,
@@ -259,8 +210,6 @@ async def prompt_completion(
             include_sources=body.include_sources,
             context_filter=body.context_filter,
         )
-
-        # Log the interaction
         log_audit(
             model='Chat',
             action='Chat',
@@ -271,17 +220,19 @@ async def prompt_completion(
             },
             user_id=current_user.id
         )
-
-        chat_response = await chat_completion(request, chat_body)        
+        chat_response = await chat_completion(request, chat_body)  
+        if isinstance(chat_response, StreamingResponse):
+            return chat_response 
+        
         ai_response = chat_response.model_dump(mode="json")
-        create_chat_item(
+        chat = create_chat_item(
             db,
             "assistant",
             ai_response,
             body.conversation_id
         )
-
-        return chat_response
+        response = ChatResponse(id=chat.id, response=chat_response)
+        return response
 
     except HTTPException:
         raise
