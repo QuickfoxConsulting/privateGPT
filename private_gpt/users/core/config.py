@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     DB_PASSWORD: str
     DB_NAME: str
     DB_PORT: str
+    
     PORT: str
 
     SMTP_SERVER: str
@@ -33,6 +34,14 @@ class Settings(BaseSettings):
     LDAP_SERVER: str
     LDAP_ENABLE: bool
     ENABLE_MAKER_CHECKER: bool
+
+    HF_TOKEN: str
+    VECTOR_DB: str
+
+    REDIS_HOST: str
+    REDIS_PORT: str
+    REDIS_PASSWORD: str
+    REDIS_DB: str
     
     class Config:
         case_sensitive = True

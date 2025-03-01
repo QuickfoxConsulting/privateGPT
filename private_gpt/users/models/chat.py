@@ -2,12 +2,11 @@ from __future__ import annotations
 import uuid
 from typing import List, Dict, Any, Optional, Union, Literal
 from datetime import datetime
-import json
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 from sqlalchemy.orm import relationship, Session
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, event, Index, JSON, Enum as SQLAlchemyEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, event, Index, JSON, Enum as SQLAlchemyEnum, UniqueConstraint, func
 from sqlalchemy.exc import SQLAlchemyError
 from private_gpt.users.db.base_class import Base
 from enum import Enum as PythonEnum
@@ -42,7 +41,7 @@ class ChatHistory(Base):
     __tablename__ = "chat_history"
     
     conversation_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String(255), nullable=True, index=True)
+    title = Column(Text, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -61,27 +60,10 @@ class ChatHistory(Base):
     
     title_generated = Column(Boolean, default=False)
     
-    # Add indexes for common query patterns
     __table_args__ = (
         Index('idx_chat_history_user_created', 'user_id', 'created_at'),
         Index('idx_chat_history_active', 'is_deleted', 'is_archived'),
     )
-    
-    def __init__(self, user_id: int, chat_items: Optional[List[ChatItem]] = None, title: Optional[str] = None, **kwargs):
-        super().__init__(**kwargs)
-        self.user_id = user_id
-        self.chat_items = chat_items or []
-        
-        if title:
-            self.title = title
-            self.title_generated = True        
-
-        for idx, item in enumerate(self.chat_items):
-            item.chat_history = self
-            item.index = idx
-            
-        if not title:
-            self.generate_title()
         
     def generate_title(self) -> None:
         """Sets title based on the first user message"""
@@ -97,7 +79,6 @@ class ChatHistory(Base):
                     text = first_message_content["text"]
                     self.title = text[:50] + "..." if len(text) > 50 else text
                 elif isinstance(first_message_content, str):
-                    # Handle case where content might be a string
                     self.title = first_message_content[:50] + "..." if len(first_message_content) > 50 else first_message_content
                 else:
                     self.title = "New Chat"
@@ -108,27 +89,6 @@ class ChatHistory(Base):
             self.title = "New Chat"
             
         self.title_generated = True
-    
-    def add_message(self, sender: str, content: Union[Dict, str], db_session: Optional[Session] = None) -> ChatItem:
-        """Add a new message to the chat history with proper indexing"""
-        if isinstance(content, dict):
-            try:
-                ChatContentSchema(**content)
-            except Exception as e:
-                logger.warning(f"Content validation failed: {str(e)}")
-        
-        next_index = len(self.chat_items)
-        new_item = ChatItem(
-            sender=sender,
-            content=content,
-            conversation_id=self.conversation_id,
-            index=next_index
-        )        
-        self.chat_items.append(new_item)        
-        self.updated_at = datetime.utcnow()        
-        if not self.title_generated and sender == "user":
-            self.generate_title()
-        return new_item
     
     def soft_delete(self) -> None:
         """Mark the chat history as deleted without removing from database"""
@@ -195,6 +155,7 @@ class ChatItem(Base):
     __table_args__ = (
         Index('idx_chat_items_conv_index', 'conversation_id', 'index'),
         Index('idx_chat_items_sender', 'conversation_id', 'sender'),
+        UniqueConstraint('conversation_id', 'index', name='uq_chat_items_conversation_index'),
     )
     
     def validate_content(self) -> bool:
@@ -234,88 +195,59 @@ class ChatItem(Base):
         return f"<ChatItem id={self.id} sender={self.sender} index={self.index} status={self.status.name}>"
 
 
-# Safer version of get_next_index with error handling
 def get_next_index(db: Session, conversation_id: uuid.UUID) -> int:
-    """
-    Get the next index value for the given conversation_id.
-    
-    Args:
-        db: Database session
-        conversation_id: UUID of the conversation
-        
-    Returns:
-        Next available index (0-based)
-        
-    Raises:
-        SQLAlchemyError: If database query fails
-    """
-    try:
-        result = db.query(ChatItem).filter(
+    """Get the next index value for the given conversation_id."""
+    try:        
+        # Use MAX function to get the highest index directly
+        result = db.query(func.max(ChatItem.index)).filter(
             ChatItem.conversation_id == conversation_id
-        ).order_by(
-            ChatItem.index.desc()
-        ).first()
+        ).scalar()
         
-        return 0 if result is None else result.index + 1
+        # Return 0 if there are no items yet, otherwise increment the highest index
+        return 0 if result is None else result + 1
     except SQLAlchemyError as e:
         logger.error(f"Error getting next index for conversation {conversation_id}: {str(e)}")
         raise
 
 
-# Batch helper function to optimize bulk operations
-def batch_insert_chat_items(db: Session, items: List[ChatItem]) -> None:
-    """
-    Efficiently insert multiple chat items with proper indexing.
-    Args:
-        db: Database session
-        items: List of ChatItem objects to insert
-    """
-    # Group items by conversation_id
-    items_by_conversation = {}
-    for item in items:
-        if item.conversation_id not in items_by_conversation:
-            items_by_conversation[item.conversation_id] = []
-        items_by_conversation[item.conversation_id].append(item)
-    
-    # Get starting indexes for each conversation in a single query per conversation
-    for conversation_id, conv_items in items_by_conversation.items():
-        next_index = get_next_index(db, conversation_id)
-        
-        # Set indexes
-        for i, item in enumerate(conv_items):
-            item.index = next_index + i
-    
-    db.add_all(items)
-
-
-# Define event listeners
 @event.listens_for(ChatItem, "before_insert")
 def set_chat_item_index(mapper, connection, target):
     """Set the index value before inserting a new ChatItem if not already set."""
+    # Only set the index if it hasn't been explicitly set already
     if target.conversation_id and target.index is None:
         session = Session.object_session(target)
         if session:
             try:
-                target.index = get_next_index(session, target.conversation_id)
-            except SQLAlchemyError:
-                # Fallback in case of error
+                # Check if there are any existing items with this conversation_id
+                existing_count = session.query(ChatItem).filter(
+                    ChatItem.conversation_id == target.conversation_id
+                ).count()
+                
+                if existing_count == 0:
+                    # If this is the first item, set index to 0
+                    target.index = 0
+                else:
+                    # Get the highest index without relying on order
+                    highest_index = session.query(func.max(ChatItem.index)).filter(
+                        ChatItem.conversation_id == target.conversation_id
+                    ).scalar() or -1
+                    
+                    # Set index to highest + 1 to avoid gaps
+                    target.index = highest_index + 1
+                
+                logger.debug(f"Setting index via event listener: {target.index}")
+            except SQLAlchemyError as e:
+                logger.error(f"Error in event listener: {str(e)}")
                 target.index = 0
         else:
             target.index = 0
 
 
-@event.listens_for(ChatHistory, "after_insert")
-def update_chat_history_title(mapper, connection, target):
-    """Update title after insertion if not already generated"""
-    if not target.title_generated:
-        try:
-            target.generate_title()
-            target.title_generated = True
-        except Exception as e:
-            logger.warning(f"Error in after_insert event: {str(e)}")
+@event.listens_for(ChatItem, "before_delete")
+def log_chat_item_deletion(mapper, connection, target):
+    logger.warning(f"Deleting ChatItem: {target}")
 
 
-# Helper function for common queries
 def get_recent_chats(db: Session, user_id: int, limit: int = 10) -> List[ChatHistory]:
     """Get the most recent active chat histories for a user"""
     return db.query(ChatHistory).filter(
@@ -329,8 +261,6 @@ def get_recent_chats(db: Session, user_id: int, limit: int = 10) -> List[ChatHis
 def search_chats(db: Session, user_id: int, query: str, limit: int = 10) -> List[ChatHistory]:
     """
     Search chat histories by title or content for a user
-    
-    Note: This requires PostgreSQL full-text search capabilities
     """
     search_query = f"%{query}%"
     
@@ -341,7 +271,7 @@ def search_chats(db: Session, user_id: int, query: str, limit: int = 10) -> List
         ChatHistory.title.ilike(search_query)
     )
     
-    # Then by content (this is a simplistic approach - full-text search would be better)
+    # Then by content
     content_matches = db.query(ChatHistory).join(
         ChatItem, ChatHistory.conversation_id == ChatItem.conversation_id
     ).filter(
@@ -350,7 +280,6 @@ def search_chats(db: Session, user_id: int, query: str, limit: int = 10) -> List
         ChatItem.content.cast(String).ilike(search_query)
     ).distinct()
     
-    # Combine results
     combined = title_matches.union(content_matches).order_by(
         ChatHistory.updated_at.desc()
     ).limit(limit)
@@ -358,6 +287,21 @@ def search_chats(db: Session, user_id: int, query: str, limit: int = 10) -> List
     return combined.all()
 
 
+# def batch_insert_chat_items(db: Session, items: List[ChatItem]) -> None:
+
+#     items_by_conversation = {}
+#     for item in items:
+#         if item.conversation_id not in items_by_conversation:
+#             items_by_conversation[item.conversation_id] = []
+#         items_by_conversation[item.conversation_id].append(item)
+    
+#     # Get starting indexes for each conversation in a single query per conversation
+#     for conversation_id, conv_items in items_by_conversation.items():
+#         next_index = get_next_index(db, conversation_id)        
+#         for i, item in enumerate(conv_items):
+#             item.index = next_index + i
+    
+#     db.add_all(items)
 
 # import uuid
 # from datetime import datetime

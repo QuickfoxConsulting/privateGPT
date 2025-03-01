@@ -87,7 +87,7 @@ nodestore:
   database: simple
 
 qdrant:
-  path: local_data/private_gpt/qdrant
+  path: http://qdrant:6333
 
 postgres:
   host: localhost

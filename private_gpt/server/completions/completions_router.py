@@ -113,7 +113,6 @@ def create_chat_item(db, sender, content, conversation_id):
         chat_history.generate_title()
     return crud.chat_item.create(db, obj_in=chat_item_create)
 
-
 @completions_router.post(
     "/chat",
     response_model=None,
@@ -189,12 +188,13 @@ async def prompt_completion(
         user_message = OpenAIMessage(content=body.prompt, role="user")
         user_message_json = {"text": body.prompt}
         
-        create_chat_item(
+        user_chat = create_chat_item(
             db,
             "user",
             user_message_json,
             body.conversation_id
         )
+        print("USER MESSAGE: ",user_chat.id, user_chat.index)
 
         messages = [user_message]
         if body.system_prompt:
@@ -231,6 +231,7 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
+        print("AI MESSAGE: ",chat.id, chat.index)
         response = ChatResponse(id=chat.id, response=chat_response)
         return response
 

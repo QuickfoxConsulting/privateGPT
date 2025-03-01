@@ -1,77 +1,226 @@
 version: '3.8'
 
 services:
-  nginx:
-    build: 
-      context: .
-      dockerfile: Dockerfile.nginx
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - 80:80
-    depends_on:
-      - private-gpt
-
+  #-----------------------------------
+  #---- Private-GPT services ---------
+  #-----------------------------------
   private-gpt:
+    image: ${PGPT_IMAGE:-zylonai/private-gpt}:${PGPT_TAG:-0.6.2}-ollama
+    user: root
     build:
-      dockerfile: Dockerfile.local
-    entrypoint: ./docker-entrypoint.sh
-    env_file:
-      - .env
+      context: .
+      dockerfile: Dockerfile.ollama
     volumes:
-      - ./local_data/:/home/worker/app/local_data
+      - ./local_data:/home/worker/app/local_data
     ports:
-      - 8000:8000
-    depends_on:
-      - db
-      - ollama
+      - "8001:8001"
     environment:
-      PORT: 8000
+      PORT: 8001
       PGPT_PROFILES: docker
       PGPT_MODE: ollama
-      DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${DB_NAME}
-
+      PGPT_EMBED_MODE: huggingface
+      PGPT_OLLAMA_API_BASE: http://ollama:11434
+      DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:${DB_PORT}/${DB_NAME}
+      QDRANT_URL: http://qdrant:6333
+      # Redis and Celery configuration
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # Vector database selection
+      VECTOR_DB: ${VECTOR_DB:-qdrant}  # Options: pgvector, qdrant
+      HF_TOKEN: ${HF_TOKEN:-}
+    depends_on:
+      - postgres
+      - qdrant
+      - redis
+      - celery-worker
+      - ollama
+    restart: unless-stopped
     deploy:
       resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [ "gpu" ]
-              count: all
-    
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: ollama
-  #   volumes:
-  #     - ./models:/root/.ollama
-  #   pull_policy: always
-  #   tty: true
-  #   restart: unless-stopped
-  #   ports:
-  #     - 11434:11434
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             capabilities: [ "gpu" ]
-  #             count: all
+        limits:
+          cpus: '2'
+          memory: 4G
 
-  db:
-    image: postgres:15-alpine
-    container_name: db
-    env_file:
-      - .env
+  #-----------------------------------
+  #---- Celery services -------------
+  #-----------------------------------
+  celery-worker:
+    image: ${PGPT_IMAGE:-zylonai/private-gpt}:${PGPT_TAG:-0.6.2}-ollama
+    user: root
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
+    command: celery -A private_gpt.worker.celery_app worker --loglevel=info
+    volumes:
+      - ./local_data:/home/worker/app/local_data
+    environment:
+      PGPT_PROFILES: docker
+      PGPT_MODE: ollama
+      PGPT_EMBED_MODE: ollama
+      PGPT_OLLAMA_API_BASE: http://ollama:11434
+      # PostgreSQL connection (if using pgvector)
+      DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:${DB_PORT}/${DB_NAME}
+      # Qdrant connection
+      QDRANT_URL: http://qdrant:6333
+      # Redis and Celery configuration
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # Vector database selection
+      VECTOR_DB: ${VECTOR_DB:-qdrant}  # Options: pgvector, qdrant
+      HF_TOKEN: ${HF_TOKEN:-}
+    depends_on:
+      - postgres
+      - qdrant
+      - redis
+      - ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+
+  #-----------------------------------
+  #---- Redis service ---------------
+  #-----------------------------------
+  redis:
+    image: redis:7
+    container_name: redis
+    environment:
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_DB: ${REDIS_DB}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}    
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 0.5G
+
+  #-----------------------------------
+  #---- PostgreSQL service ----------
+  #-----------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
-      # POSTGRES_HOST_AUTH_METHOD: trust
-    restart: always
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - 5433:${DB_PORT}
-  
+      - "${DB_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  #-----------------------------------
+  #---- Qdrant service --------------
+  #-----------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      QDRANT_ALLOW_CREATE_ON_INSERT: "true"
+      QDRANT_ALLOW_PRIVATE_COLLECTION_CREATION: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readiness"]
+      interval: 10s
+      timeout: 30s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  #-----------------------------------
+  #---- Ollama service --------------
+  #-----------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ./models:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 10s
+      timeout: 300s
+      retries: 3
+      start_period: 5s
+    # For Apple Silicon Macs
+    environment:
+      OLLAMA_USE_MPS: ${OLLAMA_USE_MPS:-0}  # Set to 1 for Apple Silicon, 0 otherwise
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+  #-----------------------------------
+  #---- Optional Monitoring ---------
+  #-----------------------------------
+  # flower:
+  #   image: mher/flower:1.2
+  #   command: celery flower --broker=redis://redis:6379/1 --port=5555
+  #   ports:
+  #     - "5555:5555"
+  #   depends_on:
+  #     - redis
+  #     - celery-worker
+  #   environment:
+  #     FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 512M
+
+  # #-----------------------------------
+  # #---- Fixture Loader --------------
+  # #-----------------------------------
+  # fixture_loader:
+  #   build: .
+  #   depends_on:
+  #     - postgres
+  #   environment:
+  #     DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:${DB_PORT}/${DB_NAME}
+  #   command: ["python", "-c", ""]
+  #   restart: "no"
+
 volumes:
   postgres-data:
+  redis-data:
+  qdrant-data:

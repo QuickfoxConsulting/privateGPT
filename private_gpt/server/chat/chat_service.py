@@ -219,7 +219,6 @@ class ChatService:
                     vector_index_retriever, query_expander, chat_history
                 )   
 
-            
             response_synthesizer = get_response_synthesizer(
                 response_mode="compact",
                 llm=self.llm_component.llm,
@@ -428,7 +427,7 @@ class ChatService:
             - Prioritize accuracy over excessive creativity; keep it clear and simple.
             
             ### Output:
-            Strict JSON format: { "title": "your concise title here" }
+            Strict follow JSON format: { "title": "your concise title here" }
             
             ### Examples:
             - { "title": "📉 Stock Market Trends" },
