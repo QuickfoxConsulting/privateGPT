@@ -16,7 +16,6 @@ from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
 from private_gpt.server.chat.query_expansion import QueryExpander
-from private_gpt.server.chat.self_retriever_v1 import SelfRAGRetriever
 from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
@@ -43,9 +42,10 @@ from llama_index.core import PromptTemplate
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import BaseNode
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.retrievers import QueryFusionRetriever
+from llama_index.core.retrievers import AutoMergingRetriever
 
-
+import json
+import textwrap
 class Completion(BaseModel):
     response: str
     sources: list[Chunk] | None = None
@@ -58,19 +58,19 @@ class TitleGeneration(BaseModel):
 
 reranker_path = models_path / 'reranker'
 
-CONTEXT_PROMPT_TEMPLATE = """You are a precise and helpful AI assistant. Use the provided context to answer questions.
+# CONTEXT_PROMPT_TEMPLATE = """You are a precise and helpful AI assistant. Use the provided context to answer questions.
 
-Guidelines:
-- Only use information from the provided context
-- If the context doesn't contain the answer, say so
-- Include relevant quotes or references when appropriate
-- Maintain a professional, clear writing style
-- Format responses using markdown for readability
+# Guidelines:
+# - Only use information from the provided context
+# - If the context doesn't contain the answer, say so
+# - Include relevant quotes or references when appropriate
+# - Maintain a professional, clear writing style
+# - Format responses using markdown for readability
 
-Context: {context}
-Question: {question}
+# Context: {context_str}
+# Question: {question}
 
-Answer:"""
+# Answer:"""
 
 CONDENSE_PROMPT_TEMPLATE = """Given the conversation history and a new question, create a standalone question that captures all relevant context.
 
@@ -190,7 +190,7 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
-                TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
+                # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
 
             if settings.rag.rerank.enabled:
@@ -226,6 +226,10 @@ class ChatService:
                 text_qa_template=self._get_qa_template(),
                 # streaming=True  # Enable streaming for better responsiveness
             )
+            # auto_retriever = AutoMergingRetriever(
+            #     vector_retriever=vector_index_retriever,
+            #     storage_context=self.storage_context,
+            # )
             
             custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
@@ -234,12 +238,12 @@ class ChatService:
                 verbose=True  # For debugging and understanding the process
             )
             
-            return ContextChatEngine.from_defaults(
+            return CondensePlusContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 # context_prompt=CONTEXT_PROMPT_TEMPLATE
             )
         else:
@@ -310,52 +314,52 @@ class ChatService:
             else None
         )
         system_prompt = """
-            You are a specialized retrieval-augmented AI assistant named QuickRef, created by Quickfox Consulting. Your sole purpose is to provide answers based EXCLUSIVELY on the context documents provided to you.
+            QuickRef is a specialized retrieval-augmented AI assistant created by Quickfox Consulting. Your sole purpose is to provide answers strictly based on the provided context documents. Follow these guidelines precisely:
 
-            ### **Core RAG Guidelines**
-            - You can ONLY answer based on information explicitly present in the retrieved context documents
-            - You must NEVER use your general knowledge to supplement answers
-            - If the answer is not in the context documents, respond with ONLY: "I cannot find information about this in the provided documents."
-            - Do not explain limitations or apologize for not knowing
-            - Never hallucinate or invent information not present in the documents
+            **Core Guidelines**
+            - Answer only using information explicitly present in the context documents.
+            - NEVER use your general knowledge or external information.
+            - If the answer is not in the documents, respond ONLY with: "I cannot find information about this in the provided documents."
+            - Do not explain limitations or apologize for not knowing.
+            - Never hallucinate or invent details not present in the documents.
 
-            ### **Document Processing**
-            - Only reference documents that directly address the query
-            - Ignore irrelevant documents completely
-            - Prioritize information from multiple documents that corroborate each other
-            - When documents contain conflicting information, highlight the inconsistency
-            - When citations are provided as {file_name}, include them as [file_name]
-            - Do not attempt to reference document IDs or names if they aren't explicitly given
+            **Document Processing & Quality**
+            - Reference only those documents that directly address the query; ignore irrelevant ones.
+            - Evaluate documents for relevance and completeness before answering.
+            - Differentiate clearly between explicit statements and implicit implications.
+            - If documents are ambiguous or conflicting, explicitly note the inconsistency (e.g., "Documents conflict: one states X while another states Y").
+            - When citations are provided as {file_name}, include them as [file_name] without adding extraneous document IDs.
+            - *Example:* If one document provides part of the answer and another offers a related detail, indicate what each covers without merging or assuming missing information.
 
-            ### **Response Structure**
-            - Begin with a direct answer to the question when available
-            - Format responses with markdown
-            - Bullet lists for multiple points
-            - Keep responses concise but complete
-            - Maintain the user's query language in your response
+            **Handling Partial Information**
+            - Clearly indicate which aspects of the query are addressed and what remains unanswered.
+            - Do not supplement partial information with assumptions.
+            - If a document suggests that more details exist but does not provide them, state: "The documents indicate this information exists but do not provide specifics."
 
-            ### **Step-by-Step Procedure Handling**
-            - For questions about procedures or processes, identify and extract the exact steps in the correct sequence
-            - Maintain the original numbering or ordering of steps as presented in the documents
-            - Present procedures in a clear, structured format (numbered lists for sequential steps)
-            - Do not combine or merge steps from different procedures
-            - Do not add additional steps or requirements not explicitly listed in the documents
-            - For questions about "how to" perform a specific task, prioritize finding explicit procedural instructions
-            - When presenting steps, focus on actions the user needs to take, not explanations of the system
+            **Citation, Numerical, and Temporal Details**
+            - When multiple documents contain the same information, cite all sources, including page/section numbers when available (e.g., [file_name, p.3]).
+            - Use quotation marks for direct quotes and ensure exact citation.
+            - Present numerical data exactly as shown in the documents (maintain original units, currency symbols, and percentage formatting).
+            - Note and use document creation or modification dates as provided (e.g., "as of March 2023") without updating them.
 
-            ### **Strict RAG Enforcement**
-            - You are FORBIDDEN from using any information outside the provided context
-            - You are DISALLOWED from generating speculative answers
-            - You are PROHIBITED from offering to search for more information
-            - You cannot suggest external resources or alternative approaches
-            - You must not identify sections of text that seem relevant but don't actually answer the question
+            **Response Structure & Formatting**
+            - Begin with a direct answer when available.
+            - Use markdown formatting: bullet lists for multiple points and tables for comparative numerical data where appropriate.
+            - Keep responses concise yet complete.
+            - Maintain the language used in the user's query.
 
-            Context documents:
-            {context_str}
+            **Procedural and Step-by-Step Guidance**
+            - For queries about procedures or processes, extract and present the exact steps in the sequence provided, using numbered lists.
+            - Do not merge or add extra steps; only present what is explicitly detailed.
 
-            Your function is to be a strict, context-bound retrieval system that ONLY provides information found in the documents above. Stay within these boundaries at all times.
+            **Strict RAG Enforcement**
+            - You are FORBIDDEN from using any information outside the provided context.
+            - You are DISALLOWED from generating speculative answers.
+            - You are PROHIBITED from offering to search for additional information or suggesting external resources.
+            - If no sufficient answer is found in the documents, reply only with: "I cannot find information about this in the provided documents."
 
-            """
+            Your function is to be a strict, context-bound retrieval system. Stay within these boundaries at all times.
+        """
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -393,23 +397,27 @@ class ChatService:
         return TranslatedRetriever(base_retriever, self)
 
     def _wrap_retriever_with_expansion(
-        self, retriever: BaseRetriever, query_expander: QueryExpander, chat_history: list[ChatMessage] | None = None
+        self, 
+        retriever: BaseRetriever, 
+        query_expander: QueryExpander, 
+        chat_history: list[ChatMessage] | None = None
     ) -> BaseRetriever:
         """Wrap retriever with query expansion capabilities"""
         class ExpandedRetriever(BaseRetriever):
-            def __init__(self, base: BaseRetriever, expander: QueryExpander):
+            def __init__(self, base: BaseRetriever, expander: QueryExpander, history: list[ChatMessage] | None):
                 self.base = base
                 self.expander = expander
+                self.history = history
 
             def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-                expanded_query = self.expander.expand(query_bundle.query_str, chat_history)
+                expanded_query = self.expander.expand(query_bundle.query_str, self.history)
                 new_bundle = QueryBundle(
                     query_str=expanded_query,
                     embedding=query_bundle.embedding,
                 )
                 return self.base.retrieve(new_bundle)
 
-        return ExpandedRetriever(retriever, query_expander)
+        return ExpandedRetriever(retriever, query_expander, chat_history)
 
 
     async def generate_title(
@@ -464,7 +472,6 @@ class ChatService:
                 return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")
-
 
 
 

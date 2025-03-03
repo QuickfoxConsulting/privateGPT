@@ -104,7 +104,7 @@ class CRUDChat(CRUDBase[ChatHistory, ChatHistoryCreate, ChatHistoryUpdate]):
             chat_history.chat_items = (
                 db.query(ChatItem)
                 .filter(ChatItem.conversation_id == id)
-                .order_by(asc(getattr(ChatItem, 'index')))  # Changed to ascending order by index
+                .order_by(asc(getattr(ChatItem, 'created_at')))  # Changed to ascending order by index
                 .offset(skip)
                 .limit(limit)
                 .all()

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from private_gpt.components.llm.llm_component import LLMComponent
 from llama_index.core.chat_engine.types import ChatMessage
+
 class QueryExpander:
     """Query expansion with synonym generation and LLM-based rewriting"""
     
@@ -64,19 +65,20 @@ class QueryExpander:
 
         {history_context}
 
-        Original Query: "{query_str}"
+        Original Query: {query_str}
 
         Instructions:
-        1. Analyze the query and conversation context (if provided)
+        1. Analyze the query carefully
         2. Identify key concepts and related terms
-        3. Include relevant context from the chat history
-        4. Create a search-optimized version that will find relevant documents
+        3. ONLY include context from previous conversation if it's directly relevant to current query
+        4. If the query represents a new topic unrelated to previous conversation, ignore the conversation history
+        5. Create a search-optimized version that will find relevant documents
 
         Requirements:
         - Maintain the original intent
         - Be specific and focused
-        - Include important context from previous messages
         - Keep the query concise (max 2-3 sentences)
+        - The expanded query must relate ONLY to the original query's intent
 
         Respond with ONLY the optimized query, no explanations:"""
 

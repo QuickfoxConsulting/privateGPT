@@ -194,8 +194,6 @@ async def prompt_completion(
             user_message_json,
             body.conversation_id
         )
-        print("USER MESSAGE: ",user_chat.id, user_chat.index)
-
         messages = [user_message]
         if body.system_prompt:
             messages.insert(
@@ -231,7 +229,6 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
-        print("AI MESSAGE: ",chat.id, chat.index)
         response = ChatResponse(id=chat.id, response=chat_response)
         return response
 

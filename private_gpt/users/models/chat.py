@@ -54,7 +54,7 @@ class ChatHistory(Base):
         "ChatItem", 
         back_populates="chat_history", 
         cascade="all, delete-orphan",
-        order_by="ChatItem.index",
+        order_by="ChatItem.created_at",  # Changed from index to created_at
         lazy="selectin"  # Optimize for common access pattern
     )
     
@@ -135,11 +135,10 @@ class ChatItem(Base):
     __tablename__ = "chat_items"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)    
-    index = Column(Integer, nullable=False)
     
     sender = Column(String(225), nullable=False, index=True)
     content = Column(JSONB, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)  # Added index for ordering
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     rating = Column(SQLAlchemyEnum(Rating), nullable=True)
     status = Column(SQLAlchemyEnum(MessageStatus), default=MessageStatus.DELIVERED)
@@ -153,9 +152,8 @@ class ChatItem(Base):
     
     chat_history = relationship("ChatHistory", back_populates="chat_items")
     __table_args__ = (
-        Index('idx_chat_items_conv_index', 'conversation_id', 'index'),
         Index('idx_chat_items_sender', 'conversation_id', 'sender'),
-        UniqueConstraint('conversation_id', 'index', name='uq_chat_items_conversation_index'),
+        Index('idx_chat_items_created', 'conversation_id', 'created_at'),  # New index for ordering
     )
     
     def validate_content(self) -> bool:
@@ -192,55 +190,7 @@ class ChatItem(Base):
     
     def __repr__(self) -> str:
         """Returns string representation of model instance"""
-        return f"<ChatItem id={self.id} sender={self.sender} index={self.index} status={self.status.name}>"
-
-
-def get_next_index(db: Session, conversation_id: uuid.UUID) -> int:
-    """Get the next index value for the given conversation_id."""
-    try:        
-        # Use MAX function to get the highest index directly
-        result = db.query(func.max(ChatItem.index)).filter(
-            ChatItem.conversation_id == conversation_id
-        ).scalar()
-        
-        # Return 0 if there are no items yet, otherwise increment the highest index
-        return 0 if result is None else result + 1
-    except SQLAlchemyError as e:
-        logger.error(f"Error getting next index for conversation {conversation_id}: {str(e)}")
-        raise
-
-
-@event.listens_for(ChatItem, "before_insert")
-def set_chat_item_index(mapper, connection, target):
-    """Set the index value before inserting a new ChatItem if not already set."""
-    # Only set the index if it hasn't been explicitly set already
-    if target.conversation_id and target.index is None:
-        session = Session.object_session(target)
-        if session:
-            try:
-                # Check if there are any existing items with this conversation_id
-                existing_count = session.query(ChatItem).filter(
-                    ChatItem.conversation_id == target.conversation_id
-                ).count()
-                
-                if existing_count == 0:
-                    # If this is the first item, set index to 0
-                    target.index = 0
-                else:
-                    # Get the highest index without relying on order
-                    highest_index = session.query(func.max(ChatItem.index)).filter(
-                        ChatItem.conversation_id == target.conversation_id
-                    ).scalar() or -1
-                    
-                    # Set index to highest + 1 to avoid gaps
-                    target.index = highest_index + 1
-                
-                logger.debug(f"Setting index via event listener: {target.index}")
-            except SQLAlchemyError as e:
-                logger.error(f"Error in event listener: {str(e)}")
-                target.index = 0
-        else:
-            target.index = 0
+        return f"<ChatItem id={self.id} sender={self.sender} status={self.status.name}>"
 
 
 @event.listens_for(ChatItem, "before_delete")
@@ -285,7 +235,6 @@ def search_chats(db: Session, user_id: int, query: str, limit: int = 10) -> List
     ).limit(limit)
     
     return combined.all()
-
 
 # def batch_insert_chat_items(db: Session, items: List[ChatItem]) -> None:
 
