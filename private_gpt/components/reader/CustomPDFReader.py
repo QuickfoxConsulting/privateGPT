@@ -24,7 +24,7 @@ class TextBlock:
 
 
 class TextMatcher:
-    def __init__(self, similarity_threshold: float = 0.75, overlap_threshold: float = 0.3):
+    def __init__(self, similarity_threshold: float = 0.85, overlap_threshold: float = 0.6):
         self.similarity_threshold = similarity_threshold
         self.overlap_threshold = overlap_threshold
         self.vectorizer = TfidfVectorizer(
@@ -116,11 +116,11 @@ class CustomPDFReader(BaseReader):
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
-        ("####", "Header 4"),
-        ("#####", "Header 5"),
+        # ("####", "Header 4"),
+        # ("#####", "Header 5"),
     ]
 
-    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.75):
+    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.85):
         # self.chunker = LateChunker(chunk_size=chunk_size, mode="sentence")
         self.converter = DocumentConverter()
         self.markdown_splitter = MarkdownHeaderTextSplitter(

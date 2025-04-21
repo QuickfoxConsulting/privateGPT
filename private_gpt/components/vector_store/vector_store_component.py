@@ -99,7 +99,7 @@ class VectorStoreComponent:
                     from llama_index.vector_stores.qdrant import (  # type: ignore
                         QdrantVectorStore,
                     )
-                    from qdrant_client import QdrantClient  # type: ignore
+                    from qdrant_client import QdrantClient, AsyncQdrantClient  # type: ignore
                 except ImportError as e:
                     raise ImportError(
                         "Qdrant dependencies not found, install with `poetry install --extras vector-stores-qdrant`"
@@ -111,14 +111,19 @@ class VectorStoreComponent:
                         "Trying to connect to Qdrant at localhost:6333."
                     )
                     client = QdrantClient()
+                    # aclient = AsyncQdrantClient()
                 else:
                     client = QdrantClient(
                         **settings.qdrant.model_dump(exclude_none=True)
                     )
+                    # aclient = AsyncQdrantClient(
+                    #     **settings.qdrant.model_dump(exclude_none=True)
+                    # )
                 self.vector_store = typing.cast(
                     VectorStore,
                     QdrantVectorStore(
                         client=client,
+                        # aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
                         enable_hybrid=True, 
                         fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",

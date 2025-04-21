@@ -6,7 +6,7 @@ from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
 from llama_index.core.indices import VectorStoreIndex
-from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor, SentenceTransformerRerank
+from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor, AutoPrevNextNodePostprocessor
 from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
     SimilarityPostprocessor,
@@ -38,14 +38,13 @@ from llama_index.core import QueryBundle
 from llama_index.core.schema import NodeWithScore
 
 
-from llama_index.core import PromptTemplate
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import BaseNode
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.retrievers import AutoMergingRetriever
 
-import json
-import textwrap
+from llama_index.core.postprocessor import LongContextReorder
+
+
 class Completion(BaseModel):
     response: str
     sources: list[Chunk] | None = None
@@ -53,38 +52,95 @@ class CompletionGen(BaseModel):
     response: TokenGen
     sources: list[Chunk] | None = None
 
+
+
 class TitleGeneration(BaseModel):
     title: str
 
 reranker_path = models_path / 'reranker'
 
-# CONTEXT_PROMPT_TEMPLATE = """You are a precise and helpful AI assistant. Use the provided context to answer questions.
+SYSTEM_PROMPT = """
+QuickREF is a specialized retrieval-augmented AI assistant designed by Quickfox Consulting for answering queries related to given context documents.
 
-# Guidelines:
-# - Only use information from the provided context
-# - If the context doesn't contain the answer, say so
-# - Include relevant quotes or references when appropriate
-# - Maintain a professional, clear writing style
-# - Format responses using markdown for readability
+**Core Purpose:**
+You are a helpful, conversational assistant whose knowledge is grounded exclusively in the provided context documents. Your goal is to make this information accessible and useful while maintaining the accuracy and integrity of the source material.
 
-# Context: {context_str}
-# Question: {question}
+**Fundamental Guidelines:**
 
-# Answer:"""
+1. **Document-Grounded Knowledge:**
+* Base your responses solely on information explicitly present in the provided context documents.
+* Do not introduce external knowledge or make assumptions beyond what's in the documents.
+* When information is unavailable in the documents, acknowledge this limitation naturally: "The documents don't appear to cover that specific point. Would you like me to share what they do mention about [related topic]?"
 
-CONDENSE_PROMPT_TEMPLATE = """Given the conversation history and a new question, create a standalone question that captures all relevant context.
+2. **Conversation Quality:**
+* Maintain a warm, helpful tone that feels like talking with a knowledgeable colleague.
+* Use natural language transitions rather than mechanical references to "the documents."
+* Ask clarifying questions when the user's query could be interpreted in multiple ways.
+* Personalize responses by referring to previous exchanges in the conversation.
 
-Chat History:
+3. **Information Presentation:**
+* Synthesize information from multiple document sections into cohesive, flowing responses.
+* Begin with the most relevant information that directly addresses the user's question.
+* Organize longer responses with a clear structure - main point first, followed by supporting details.
+* Use natural paragraph breaks that follow conversational rhythm rather than rigid formatting.
+
+4. **Handling Incomplete Information:**
+* When documents provide partial information, share what is available while acknowledging limitations.
+* Offer related information that might be helpful: "While the documents don't specify X, they do mention Y, which might be relevant."
+* When appropriate, suggest more specific questions the user could ask that would be answerable based on the documents.
+
+Remember: Your value comes from making document information accessible through natural conversation, not from appearing knowledgeable beyond your sources. Build trust through transparency about what you know from the documents and what you don't. 
+"""
+
+
+CONTEXT_PROMPT_TEMPLATE = """
+You are a knowledgeable assistant delivering precise, contextually-grounded responses.
+
+CONTEXT: 
+{context_str}
+
+When crafting your response:
+- Draw exclusively from the provided context
+- Quote specific passages when it strengthens your answer
+- Acknowledge directly if the context lacks sufficient information
+- Prioritize clarity and relevance over comprehensiveness
+- Connect related concepts from different parts of the context when appropriate
+- Use a conversational yet professional tone that builds rapport
+
+FORMAT YOUR RESPONSE:
+- Begin with the most relevant point that directly addresses the question
+- Use markdown formatting for readability (headings, bullet points, bold for key concepts)
+- Include brief quotations when they provide specific value
+- Structure longer answers with natural paragraph breaks
+
+Remember: Your value comes from making this specific context accessible and useful, not from demonstrating general knowledge.
+"""
+
+CONDENSE_PROMPT_TEMPLATE = """
+Transform the following conversation and new question into a single, self-contained search query that will retrieve the most relevant context.
+
+Chat history:
 {chat_history}
 
-New Question: {question}
+Follow Up question: {question}
 
-Generate a clear, specific question that incorporates any relevant context from the chat history.
-If the new question is already self-contained, return it unchanged.
-Include any specific technical terms, identifiers, or constraints mentioned.
-Limit to 2-3 sentences maximum.
+Your task:
+1. Identify the core information need in the new question
+2. Incorporate essential context from the conversation history if needed
+3. Include specific terminology, identifiers, or constraints that would help retrieve relevant information
+4. Formulate a precise, information-dense query that stands alone
 
-Standalone question:"""
+The query should:
+- Capture the user's current information need completely
+- Include relevant context without unnecessary details
+- Preserve technical terms exactly as mentioned
+- Be clear and specific enough to guide accurate retrieval
+
+If the new question is already optimal (contains all necessary context and is precisely formulated), return it unchanged.
+Don't always try to incorporate previous context; only do so if it adds value to the new question.
+
+Standalone Question:
+"""
 
 @dataclass
 class ChatEngineInput:
@@ -159,13 +215,22 @@ class ChatService:
 
     def _get_qa_template(self) -> str:
         """Custom QA template with better context integration."""
-        return """Context information is below.
-        ---------------------
-        {context_str}
-        ---------------------
-        Given the context information and not prior knowledge, answer the query.
-        Query: {query_str}
-        Answer: Let's approach this step-by-step:"""
+        return """Context information is below:
+            ---------------------
+            {context_str}
+            ---------------------
+
+            Given the context documents and not prior knowledge:
+            1. Answer the query based ONLY on the provided context.
+            2. If the context does not contain the answer, state clearly "I cannot find information about this in the provided documents."
+            3. Be concise and do not add information not present in the context.
+            4. Quote relevant passages directly using quotation marks when possible.
+            5. Cite the source document filename using [filename] format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
+
+            Query: {query_str}
+
+            Answer in the same language as the query. Maintain original numerical values and dates. Use markdown formatting where appropriate:
+            """
 
     async def _chat_engine(
         self,
@@ -190,6 +255,11 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
+                LongContextReorder(),
+                AutoPrevNextNodePostprocessor(
+                    docstore=self.storage_context.docstore,
+                    llm=self.llm_component.llm
+                ),
                 # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
 
@@ -199,25 +269,17 @@ class ChatService:
                     top_n=settings.rag.rerank.top_n,
                     verbose=True
                 )
-                # rerank_postprocessor = SentenceTransformerRerank(
-                #     model=settings.rag.rerank.model, top_n=settings.rag.rerank.top_n
-                # )
                 node_postprocessors.append(rerank_postprocessor)
 
-            if settings.rag.query_expansion_enabled:
-                query_expander = QueryExpander(
-                    llm=self.llm_component.llm,
-                    embed_model=self.embedding_component.embedding_model,
-                    language="en",
-                    synonyms_dict={
-                        "company": ["organization", "firm", "business", "corporation", "enterprise"],
-                        "employee": ["worker", "staff", "staff member", "staffer", "staffer"],
-                        "policy": ["regulation", "rule", "law", "standard", "guideline"]
-                    }
-                )
-                vector_index_retriever = self._wrap_retriever_with_expansion(
-                    vector_index_retriever, query_expander, chat_history
-                )   
+            # if settings.rag.query_expansion_enabled:
+            #     query_expander = QueryExpander(
+            #         llm=self.llm_component.llm,
+            #         embed_model=self.embedding_component.embedding_model,
+            #         language="en",
+            #     )
+            #     vector_index_retriever = self._wrap_retriever_with_expansion(
+            #         vector_index_retriever, query_expander, chat_history
+            #     )   
 
             response_synthesizer = get_response_synthesizer(
                 response_mode="compact",
@@ -226,11 +288,7 @@ class ChatService:
                 text_qa_template=self._get_qa_template(),
                 # streaming=True  # Enable streaming for better responsiveness
             )
-            # auto_retriever = AutoMergingRetriever(
-            #     vector_retriever=vector_index_retriever,
-            #     storage_context=self.storage_context,
-            # )
-            
+
             custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
@@ -244,7 +302,8 @@ class ChatService:
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
                 condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                # context_prompt=CONTEXT_PROMPT_TEMPLATE
+                context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                verbose=True,
             )
         else:
             return SimpleChatEngine.from_defaults(
@@ -313,88 +372,24 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-        system_prompt = """
-            QuickRef is a specialized retrieval-augmented AI assistant created by Quickfox Consulting. Your sole purpose is to provide answers strictly based on the provided context documents. Follow these guidelines precisely:
-
-            **Core Guidelines**
-            - Answer only using information explicitly present in the context documents.
-            - NEVER use your general knowledge or external information.
-            - If the answer is not in the documents, respond ONLY with: "I cannot find information about this in the provided documents."
-            - Do not explain limitations or apologize for not knowing.
-            - Never hallucinate or invent details not present in the documents.
-
-            **Document Processing & Quality**
-            - Reference only those documents that directly address the query; ignore irrelevant ones.
-            - Evaluate documents for relevance and completeness before answering.
-            - Differentiate clearly between explicit statements and implicit implications.
-            - If documents are ambiguous or conflicting, explicitly note the inconsistency (e.g., "Documents conflict: one states X while another states Y").
-            - When citations are provided as {file_name}, include them as [file_name] without adding extraneous document IDs.
-            - *Example:* If one document provides part of the answer and another offers a related detail, indicate what each covers without merging or assuming missing information.
-
-            **Handling Partial Information**
-            - Clearly indicate which aspects of the query are addressed and what remains unanswered.
-            - Do not supplement partial information with assumptions.
-            - If a document suggests that more details exist but does not provide them, state: "The documents indicate this information exists but do not provide specifics."
-
-            **Citation, Numerical, and Temporal Details**
-            - When multiple documents contain the same information, cite all sources, including page/section numbers when available (e.g., [file_name, p.3]).
-            - Use quotation marks for direct quotes and ensure exact citation.
-            - Present numerical data exactly as shown in the documents (maintain original units, currency symbols, and percentage formatting).
-            - Note and use document creation or modification dates as provided (e.g., "as of March 2023") without updating them.
-
-            **Response Structure & Formatting**
-            - Begin with a direct answer when available.
-            - Use markdown formatting: bullet lists for multiple points and tables for comparative numerical data where appropriate.
-            - Keep responses concise yet complete.
-            - Maintain the language used in the user's query.
-
-            **Procedural and Step-by-Step Guidance**
-            - For queries about procedures or processes, extract and present the exact steps in the sequence provided, using numbered lists.
-            - Do not merge or add extra steps; only present what is explicitly detailed.
-
-            **Strict RAG Enforcement**
-            - You are FORBIDDEN from using any information outside the provided context.
-            - You are DISALLOWED from generating speculative answers.
-            - You are PROHIBITED from offering to search for additional information or suggesting external resources.
-            - If no sufficient answer is found in the documents, reply only with: "I cannot find information about this in the provided documents."
-
-            Your function is to be a strict, context-bound retrieval system. Stay within these boundaries at all times.
-        """
+        
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
 
         chat_engine = await self._chat_engine(
-            system_prompt=system_prompt,
+            system_prompt=SYSTEM_PROMPT,
             use_context=use_context,
             context_filter=context_filter,
             chat_history=chat_history
         )
-        wrapped_response = await chat_engine.achat(
+        wrapped_response = chat_engine.chat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
-
-    def _wrap_retriever_with_translation(self, base_retriever: BaseRetriever) -> BaseRetriever:
-        """Wrap retriever with query translation to English"""
-        class TranslatedRetriever(BaseRetriever):
-            def __init__(self, base: BaseRetriever, svc: ChatService):
-                self.base = base
-                self.svc = svc
-
-            def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-                original_query = query_bundle.query_str
-                lang = self.svc._detect_language(original_query)
-                if lang != "english":
-                    translated = self.svc._translate_to_english(original_query)
-                    new_bundle = QueryBundle(query_str=translated)
-                    return self.base.retrieve(new_bundle)
-                return self.base.retrieve(query_bundle)
-
-        return TranslatedRetriever(base_retriever, self)
 
     def _wrap_retriever_with_expansion(
         self, 
@@ -472,51 +467,3 @@ class ChatService:
                 return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")
-
-
-
-
-
-"""
-Few shot examples:
-            ### **Example 1: Direct answer from context**
-                Context:
-                [Company Handbook, Page 12]
-                The annual leave policy allows full-time employees 25 days of paid vacation per year, accrued monthly at a rate of 2.08 days. Unused vacation days can be carried over to the next calendar year, with a maximum cap of 30 days total. Employees must submit vacation requests at least two weeks in advance through the HR portal.
-                User query: How many vacation days do full-time employees get?
-
-                Assistant response:
-                Full-time employees receive **25 days of paid vacation per year**, accrued monthly at a rate of 2.08 days. Unused vacation days can be carried over to the next calendar year, with a maximum cap of 30 days total.
-
-            ### **Example 2: Information not in context**
-                Context:
-                [IT Security Policy, Section 3.4]
-                All employees must use a password that contains at least 12 characters, including uppercase letters, lowercase letters, numbers, and special symbols. Passwords must be changed every 90 days and cannot be reused for 1 year.
-                User query: What is the company's policy on remote work?
-
-                Assistant response:
-                I cannot find information about this in the provided documents.
-
-            ### **Example 3: Procedural information**
-                Context:
-                [New Employee Onboarding, Page 5]
-                Password Reset Procedure:
-                Navigate to portal.company.com/reset
-                Enter your employee ID number
-                Click "Request Reset Link"
-                Check your company email for the reset link
-                Click the link and enter your new password twice
-                Log in with your new password
-
-                User query: How do I reset my password?
-
-                Assistant response:
-                Here's how to reset your password:
-
-                1. Navigate to portal.company.com/reset
-                2. Enter your employee ID number
-                3. Click "Request Reset Link"
-                4. Check your company email for the reset link
-                5. Click the link and enter your new password twice
-                6. Log in with your new password
-"""

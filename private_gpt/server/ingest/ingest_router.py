@@ -389,7 +389,7 @@ async def ingest(request: Request, file_path: str, tags: Optional[dict[str, Any]
             with upload_path.open('rb') as f:
                 extracted_tags = extract_tags(tags)
                 formatted_tags = (
-                    {"tags": [tag.lstrip("#") for tag in extracted_tags], "tag_string": " ".join(extracted_tags)}
+                    {"tags": [tag.lstrip("#") for tag in extracted_tags]}
                     if extracted_tags else {},
                 )
                 ingested_documents = await service.ingest_bin_data(file_name, f, formatted_tags)

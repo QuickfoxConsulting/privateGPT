@@ -404,6 +404,8 @@ async def verify_documents(
                 user_id=current_user.id
             )
             tags = document.tags if document.tags else ""
+            print(f"TAGS: {tags}")
+            print(f"CATEGORY: {document.categories}")
             await ingest(request, final_path, tags)
             return document
             

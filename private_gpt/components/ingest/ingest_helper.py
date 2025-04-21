@@ -79,7 +79,9 @@ class IngestionHelper:
     ) -> list[Document]:
         documents = IngestionHelper._load_file_to_documents(file_name, file_data)
         for document in documents:
-            document.metadata.update(file_metadata or {})
+            metadata_to_update = file_metadata[0] if isinstance(file_metadata, tuple) and file_metadata else {}
+            document.metadata.update(metadata_to_update)
+            print("UPDATED METADATA: ", document.metadata)
             document.metadata["file_name"] = file_name
             document.metadata["ingestion_time"] = datetime.now(timezone.utc).isoformat()
         IngestionHelper._exclude_metadata(documents)

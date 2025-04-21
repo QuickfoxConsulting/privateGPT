@@ -1,8 +1,6 @@
 from typing import List, Optional, Dict
-from dataclasses import dataclass
-from enum import Enum
-from private_gpt.components.llm.llm_component import LLMComponent
 from llama_index.core.chat_engine.types import ChatMessage
+from private_gpt.components.llm.llm_component import LLMComponent
 
 class QueryExpander:
     """Query expansion with synonym generation and LLM-based rewriting"""
@@ -24,6 +22,7 @@ class QueryExpander:
         # synonyms = self._generate_synonyms(query)        
         expanded = self._llm_expansion(query, chat_history)        
         all_terms = f"{query} {expanded}"
+        print('Expanded query:', all_terms)
         return all_terms
     
     def _generate_synonyms(self, query: str) -> List[str]:
@@ -61,7 +60,7 @@ class QueryExpander:
             {history_messages}
             """
 
-        prompt = f"""You are a query optimization expert. Your task is to enhance the given query for better search results.
+        prompt = f"""You are a query optimization expert. Your task is to enhance the given query for better vector search results.
 
         {history_context}
 
@@ -80,27 +79,10 @@ class QueryExpander:
         - Keep the query concise (max 2-3 sentences)
         - The expanded query must relate ONLY to the original query's intent
 
-        Respond with ONLY the optimized query, no explanations:"""
+        Your response must contain NOTHING except the optimized query itself - no explanations, no notes, no headers, no formatting:"""
 
-        expanded_query = self.llm.complete(prompt).text.strip()
-        
-        # Remove any quotes or formatting that might have been added
+        expanded_query = self.llm.complete(prompt).text.strip()        
         expanded_query = expanded_query.strip('"').strip("'")
         
         return expanded_query
     
-    def _deduplicate_terms(self, terms_string: str) -> str:
-        """Remove duplicate terms while preserving original query"""
-        terms = terms_string.split()
-        original_query_words = terms[:len(terms_string.split(' ', 1)[0].split())]
-        expanded_terms = terms[len(original_query_words):]
-        
-        seen = set(word.lower() for word in original_query_words)
-        result = list(original_query_words)
-        
-        for word in expanded_terms:
-            if word.lower() not in seen:
-                result.append(word)
-                seen.add(word.lower())
-        
-        return ' '.join(result)
