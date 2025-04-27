@@ -15,4 +15,3 @@ api_router.include_router(documents.router)
 api_router.include_router(audits.router)
 api_router.include_router(chat_history.router)
 api_router.include_router(categories.router)
-

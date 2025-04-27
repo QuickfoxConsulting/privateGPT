@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, ContextChatEngine, CondensePlusContextChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
 from llama_index.core.indices import VectorStoreIndex
-from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, TimeWeightedPostprocessor, AutoPrevNextNodePostprocessor
+from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, AutoPrevNextNodePostprocessor
 from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
     SimilarityPostprocessor,
@@ -32,18 +32,9 @@ from private_gpt.server.chunks.chunks_service import Chunk
 from private_gpt.settings.settings import Settings
 
 from private_gpt.paths import models_path
-
-from typing import List, Optional, Tuple
-from llama_index.core import QueryBundle
-from llama_index.core.schema import NodeWithScore
-
-
-from llama_index.core.retrievers import BaseRetriever
-from llama_index.core.schema import BaseNode
 from llama_index.core.query_engine import RetrieverQueryEngine
 
 from llama_index.core.postprocessor import LongContextReorder
-
 
 class Completion(BaseModel):
     response: str
@@ -52,94 +43,76 @@ class CompletionGen(BaseModel):
     response: TokenGen
     sources: list[Chunk] | None = None
 
-
-
 class TitleGeneration(BaseModel):
     title: str
 
 reranker_path = models_path / 'reranker'
 
 SYSTEM_PROMPT = """
-QuickREF is a specialized retrieval-augmented AI assistant designed by Quickfox Consulting for answering queries related to given context documents.
+QuickREF is a retrieval-augmented AI assistant by Quickfox Consulting that provides precise, document-grounded responses.
 
-**Core Purpose:**
-You are a helpful, conversational assistant whose knowledge is grounded exclusively in the provided context documents. Your goal is to make this information accessible and useful while maintaining the accuracy and integrity of the source material.
+**Core Principles:**
+1. **Document-Anchored Responses**
+   * Draw answers EXCLUSIVELY from provided documents
+   * Never introduce external knowledge or speculation
+   * For missing information: "The documents don't address this specifically. Would you like information on [related available topic]?"
 
-**Fundamental Guidelines:**
+2. **Natural Communication**
+   * Respond conversationally like a knowledgeable colleague
+   * Ask focused clarifying questions when user intent is ambiguous
+   * Reference conversation history organically
 
-1. **Document-Grounded Knowledge:**
-* Base your responses solely on information explicitly present in the provided context documents.
-* Do not introduce external knowledge or make assumptions beyond what's in the documents.
-* When information is unavailable in the documents, acknowledge this limitation naturally: "The documents don't appear to cover that specific point. Would you like me to share what they do mention about [related topic]?"
+3. **Structured Clarity**
+   * Lead with the most directly relevant information
+   * Use clear paragraph breaks and hierarchical organization
+   * Employ bullet points for lists, bold for key concepts
 
-2. **Conversation Quality:**
-* Maintain a warm, helpful tone that feels like talking with a knowledgeable colleague.
-* Use natural language transitions rather than mechanical references to "the documents."
-* Ask clarifying questions when the user's query could be interpreted in multiple ways.
-* Personalize responses by referring to previous exchanges in the conversation.
+4. **Knowledge Boundaries**
+   * Acknowledge partial information when complete answers aren't available
+   * Bridge to related document content when appropriate
+   * Suggest more answerable alternative questions
 
-3. **Information Presentation:**
-* Synthesize information from multiple document sections into cohesive, flowing responses.
-* Begin with the most relevant information that directly addresses the user's question.
-* Organize longer responses with a clear structure - main point first, followed by supporting details.
-* Use natural paragraph breaks that follow conversational rhythm rather than rigid formatting.
+5. **Zero-Context Protocol**
+   * When no relevant information exists: "The provided documents contain no information about this topic."
 
-4. **Handling Incomplete Information:**
-* When documents provide partial information, share what is available while acknowledging limitations.
-* Offer related information that might be helpful: "While the documents don't specify X, they do mention Y, which might be relevant."
-* When appropriate, suggest more specific questions the user could ask that would be answerable based on the documents.
-
-Remember: Your value comes from making document information accessible through natural conversation, not from appearing knowledgeable beyond your sources. Build trust through transparency about what you know from the documents and what you don't. 
+Remember: Your value comes from accurately representing document content, not generating outside information.
 """
 
+CONTEXT_PROMPT_TEMPLATE = """  
+You are a document-grounded assistant responding exclusively using the context below.
 
-CONTEXT_PROMPT_TEMPLATE = """
-You are a knowledgeable assistant delivering precise, contextually-grounded responses.
+**CONTEXT**: {context_str}
 
-CONTEXT: 
-{context_str}
+**Core Guidelines:**
+* Answer using ONLY information from the provided context
+* Do not introduce external knowledge or assumptions
+* Cite sources with [ID] format (e.g., [1], [2])
+* Quote directly when needed or paraphrase accurately
+* If information is missing: "The provided documents don't contain information about [topic]."
 
-When crafting your response:
-- Draw exclusively from the provided context
-- Quote specific passages when it strengthens your answer
-- Acknowledge directly if the context lacks sufficient information
-- Prioritize clarity and relevance over comprehensiveness
-- Connect related concepts from different parts of the context when appropriate
-- Use a conversational yet professional tone that builds rapport
+**Voice**: Clear, professional, and conversational without unnecessary formality
 
-FORMAT YOUR RESPONSE:
-- Begin with the most relevant point that directly addresses the question
-- Use markdown formatting for readability (headings, bullet points, bold for key concepts)
-- Include brief quotations when they provide specific value
-- Structure longer answers with natural paragraph breaks
-
-Remember: Your value comes from making this specific context accessible and useful, not from demonstrating general knowledge.
-"""
+If no relevant context is available, respond only with: "The provided documents don't contain information addressing this question."  
+"""  
 
 CONDENSE_PROMPT_TEMPLATE = """
-Transform the following conversation and new question into a single, self-contained search query that will retrieve the most relevant context.
+You transform conversational follow-up questions into comprehensive, standalone queries optimized for RAG retrieval.
 
-Chat history:
-{chat_history}
+Chat History: {chat_history}
+Follow-Up Question: {question}
 
-Follow Up question: {question}
+**Transformation Process:**
+1. Create a self-contained question that incorporates all necessary context from the chat history
+2. Replace pronouns (it, they, these) with their specific referents
+3. Include all entities, time periods, and specific terminology from the original conversation
+4. Preserve the original intent while maximizing information retrieval potential
+5. Format as a natural, complete question (not keywords)
 
-Your task:
-1. Identify the core information need in the new question
-2. Incorporate essential context from the conversation history if needed
-3. Include specific terminology, identifiers, or constraints that would help retrieve relevant information
-4. Formulate a precise, information-dense query that stands alone
+**Output Instructions:**
+- Return ONLY the rewritten query without explanation, commentary, or prefacing
+- If the original question is already comprehensive or chat history is empty, optimize it for clarity and specificity without changing its meaning
 
-The query should:
-- Capture the user's current information need completely
-- Include relevant context without unnecessary details
-- Preserve technical terms exactly as mentioned
-- Be clear and specific enough to guide accurate retrieval
-
-If the new question is already optimal (contains all necessary context and is precisely formulated), return it unchanged.
-Don't always try to incorporate previous context; only do so if it adds value to the new question.
-
-Standalone Question:
+The ideal rewritten query should retrieve all relevant document passages even without the chat history context.
 """
 
 @dataclass
@@ -202,17 +175,6 @@ class ChatService:
             show_progress=True,
         )
 
-    def _detect_language(self, text: str) -> str:
-        """Detect language using LLM"""
-        prompt = f"Detect the language of this text whether it is nepali or english. Respond only with the language name in English. Text: {text}"
-        response = self.llm_component.llm.complete(prompt).text.strip().lower()
-        return response
-
-    def _translate_to_english(self, text: str) -> str:
-        """Translate text to English using LLM"""
-        prompt = f"Translate the following text to English. Text: {text}"
-        return self.llm_component.llm.complete(prompt).text.strip()
-
     def _get_qa_template(self) -> str:
         """Custom QA template with better context integration."""
         return """Context information is below:
@@ -246,6 +208,9 @@ class ChatService:
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
             )
+            filter_retriever = MetadataFilterRetriever(
+                base_retriever=vector_index_retriever
+            )
             
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
@@ -271,16 +236,6 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            # if settings.rag.query_expansion_enabled:
-            #     query_expander = QueryExpander(
-            #         llm=self.llm_component.llm,
-            #         embed_model=self.embedding_component.embedding_model,
-            #         language="en",
-            #     )
-            #     vector_index_retriever = self._wrap_retriever_with_expansion(
-            #         vector_index_retriever, query_expander, chat_history
-            #     )   
-
             response_synthesizer = get_response_synthesizer(
                 response_mode="compact",
                 llm=self.llm_component.llm,
@@ -290,7 +245,7 @@ class ChatService:
             )
 
             custom_query_engine = RetrieverQueryEngine.from_args(
-                retriever=vector_index_retriever,
+                retriever=filter_retriever,
                 llm=self.llm_component.llm,
                 response_synthesizer=response_synthesizer,
                 verbose=True  # For debugging and understanding the process
@@ -301,10 +256,11 @@ class ChatService:
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
+
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=system_prompt,
@@ -390,30 +346,6 @@ class ChatService:
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
-
-    def _wrap_retriever_with_expansion(
-        self, 
-        retriever: BaseRetriever, 
-        query_expander: QueryExpander, 
-        chat_history: list[ChatMessage] | None = None
-    ) -> BaseRetriever:
-        """Wrap retriever with query expansion capabilities"""
-        class ExpandedRetriever(BaseRetriever):
-            def __init__(self, base: BaseRetriever, expander: QueryExpander, history: list[ChatMessage] | None):
-                self.base = base
-                self.expander = expander
-                self.history = history
-
-            def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-                expanded_query = self.expander.expand(query_bundle.query_str, self.history)
-                new_bundle = QueryBundle(
-                    query_str=expanded_query,
-                    embedding=query_bundle.embedding,
-                )
-                return self.base.retrieve(new_bundle)
-
-        return ExpandedRetriever(retriever, query_expander, chat_history)
-
 
     async def generate_title(
         self,

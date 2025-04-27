@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from private_gpt.server.chat.chat_service import ChatService
 from private_gpt.users import crud, models, schemas
 import itertools
 from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
@@ -12,7 +13,7 @@ from typing import List, Dict, Any, Optional, Union
 from sqlalchemy.orm import Session
 import traceback
 import logging
-import json
+
 logger = logging.getLogger(__name__)
 
 from starlette.responses import StreamingResponse
@@ -128,6 +129,115 @@ def create_chat_item(db, sender, content, conversation_id):
     },
 )
 
+# async def prompt_completion( request: Request,
+#     body: CompletionsBody,
+#     db: Session = Depends(deps.get_db),
+#     log_audit: models.Audit = Depends(deps.get_audit_logger),
+#     current_user: models.User = Security(deps.get_current_user),
+# ) -> ChatResponse | StreamingResponse:
+#     """Handle chat completion with proper document version filtering."""
+#     service = request.state.injector.get(IngestService)
+    
+#     try:
+#         department = crud.department.get_by_id(db, id=current_user.department_id)
+#         if not department:
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND,
+#                 detail="No department assigned to you"
+#             )
+
+#         documents = crud.documents.get_enabled_documents_by_departments(
+#             db,
+#             department_id=department.id,
+#             category_ids=body.category_id
+#         )
+#         if not documents:
+#             body.use_context = False
+#             body.prompt = "\n\nNote to AI: There are no documents available for the user's department. Please inform them to upload documents or ask their administrator to upload documents so you can provide context-aware responses."
+        
+#         latest_doc_ids = await get_latest_version_ids(service, documents)
+        
+#         if not latest_doc_ids:
+#             body.use_context = False
+#             body.prompt = "\n\nNote to AI: There are no documents available for the user's department. Please inform them to upload documents or ask their administrator to upload documents so you can provide context-aware responses."
+        
+
+#         body.context_filter = {"docs_ids": latest_doc_ids}
+
+#         chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
+#         if (chat_history is None) or (chat_history.user_id != current_user.id):
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND,
+#                 detail="Chat not found"
+#             )
+
+#         def build_history() -> List[OpenAIMessage]:
+#             history_messages: List[OpenAIMessage] = []
+#             for interaction in (body.history or []):
+#                 role = "user" if interaction.role == "user" else "assistant"
+#                 history_messages.append(
+#                     OpenAIMessage(
+#                         content=interaction.content,
+#                         role=role
+#                     )
+#                 )
+#             return history_messages
+
+#         user_message = OpenAIMessage(content=body.prompt, role="user")
+#         user_message_json = {"text": body.prompt}
+        
+#         user_chat = create_chat_item(
+#             db,
+#             "user",
+#             user_message_json,
+#             body.conversation_id
+#         )
+#         messages = [user_message]
+#         if body.system_prompt:
+#             messages.insert(
+#                 0,
+#                 OpenAIMessage(content=body.system_prompt, role="system")
+#             )
+
+#         chat_body = ChatBody(
+#             messages=[*build_history(), user_message],
+#             use_context=body.use_context,
+#             stream=body.stream,
+#             include_sources=body.include_sources,
+#             context_filter=body.context_filter,
+#         )
+#         log_audit(
+#             model='Chat',
+#             action='Chat',
+#             details={
+#                 "query": body.prompt,
+#                 'user': current_user.username,
+#                 'document_versions': latest_doc_ids
+#             },
+#             user_id=current_user.id
+#         )
+#         chat_response = await chat_completion(request, chat_body)  
+#         if isinstance(chat_response, StreamingResponse):
+#             return chat_response 
+        
+#         ai_response = chat_response.model_dump(mode="json")
+#         chat = create_chat_item(
+#             db,
+#             "assistant",
+#             ai_response,
+#             body.conversation_id
+#         )
+#         response = ChatResponse(id=chat.id, response=chat_response)
+#         return response
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"Error in prompt completion: {str(e)}\n{traceback.format_exc()}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Failed to process chat completion"
+#         )
 async def prompt_completion(
     request: Request,
     body: CompletionsBody,
@@ -135,10 +245,13 @@ async def prompt_completion(
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     current_user: models.User = Security(deps.get_current_user),
 ) -> ChatResponse | StreamingResponse:
-    """Handle chat completion with proper document version filtering."""
+    """Handle chat completion with intelligent context handling and fallbacks."""
     service = request.state.injector.get(IngestService)
     
     try:
+        original_prompt = body.prompt
+        original_use_context = body.use_context
+        
         department = crud.department.get_by_id(db, id=current_user.department_id)
         if not department:
             raise HTTPException(
@@ -151,20 +264,26 @@ async def prompt_completion(
             department_id=department.id,
             category_ids=body.category_id
         )
-        if not documents:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No documents uploaded for your department. Please upload documents to chat."
-            )
-        latest_doc_ids = await get_latest_version_ids(service, documents)
         
-        if not latest_doc_ids:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Could not find any valid document versions"
-            )
-
-        body.context_filter = {"docs_ids": latest_doc_ids}
+        document_status = "available"
+        if not documents:
+            document_status = "no_documents"
+            body.use_context = False
+            body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
+            body.context_filter = None
+            logger.warning(f"No documents found for department {department.id}")
+        else:
+            latest_doc_ids = await get_latest_version_ids(service, documents)
+            
+            if not latest_doc_ids:
+                document_status = "no_valid_versions"
+                body.use_context = False
+                body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No valid document versions are available. "
+                body.context_filter = None
+                logger.warning(f"No valid document versions found for documents: {[doc.id for doc in documents]}")
+            else:
+                body.context_filter = {"docs_ids": latest_doc_ids}
+                logger.info(f"Found {len(latest_doc_ids)} valid document versions")
 
         chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
         if (chat_history is None) or (chat_history.user_id != current_user.id):
@@ -185,8 +304,8 @@ async def prompt_completion(
                 )
             return history_messages
 
-        user_message = OpenAIMessage(content=body.prompt, role="user")
-        user_message_json = {"text": body.prompt}
+        user_message = OpenAIMessage(content=original_prompt, role="user")
+        user_message_json = {"text": original_prompt}
         
         user_chat = create_chat_item(
             db,
@@ -194,41 +313,52 @@ async def prompt_completion(
             user_message_json,
             body.conversation_id
         )
+        
         messages = [user_message]
         if body.system_prompt:
-            messages.insert(
-                0,
-                OpenAIMessage(content=body.system_prompt, role="system")
-            )
+            messages.insert(0, OpenAIMessage(content=body.system_prompt, role="system"))
 
         chat_body = ChatBody(
             messages=[*build_history(), user_message],
             use_context=body.use_context,
             stream=body.stream,
-            include_sources=body.include_sources,
+            include_sources=body.include_sources if body.use_context else False,
             context_filter=body.context_filter,
         )
+        
+        audit_details = {
+            "query": original_prompt,
+            "user": current_user.username,
+            "context_requested": original_use_context,
+            "context_used": body.use_context,
+            "document_status": document_status,
+            "department_id": department.id
+        }
+        
+        if body.context_filter and "docs_ids" in body.context_filter:
+            audit_details["document_versions"] = body.context_filter["docs_ids"]
+        
         log_audit(
-            model='Chat',
-            action='Chat',
-            details={
-                "query": body.prompt,
-                'user': current_user.username,
-                'document_versions': latest_doc_ids
-            },
+            model="Chat",
+            action="Chat",
+            details=audit_details,
             user_id=current_user.id
         )
-        chat_response = await chat_completion(request, chat_body)  
+        
+        chat_response = await chat_completion(request, chat_body)
+        
         if isinstance(chat_response, StreamingResponse):
             return chat_response 
         
         ai_response = chat_response.model_dump(mode="json")
+        
         chat = create_chat_item(
             db,
             "assistant",
             ai_response,
             body.conversation_id
         )
+        
         response = ChatResponse(id=chat.id, response=chat_response)
         return response
 

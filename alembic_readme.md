@@ -22,3 +22,6 @@
 
 
 pip install llama-cpp-python --force-reinstall --upgrade --no-cache-dir --verbose --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 numpy==1.26.0 
+
+
+https://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@github.com/QuickfoxConsulting/privateGPT.git

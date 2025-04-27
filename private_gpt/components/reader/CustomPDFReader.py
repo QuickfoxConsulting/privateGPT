@@ -50,6 +50,15 @@ class TextMatcher:
         total = len(text1_chars.union(text2_chars))
         return overlap / total if total > 0 else 0
 
+    def fill_small_gaps(self,  pages: List[int], max_gap: int = 2) -> List[int]:
+        if not pages:
+            return []
+        filled = set()
+        for i in range(len(pages) - 1):
+            filled.update(range(pages[i], pages[i+1] + 1) if pages[i+1] - pages[i] <= max_gap else [pages[i]])
+        filled.add(pages[-1])
+        return sorted(filled)
+
     def find_page_ranges(self, chunk_text: str, text_blocks: List[TextBlock]) -> List[int]:
         """Find page ranges for a chunk using multiple matching strategies."""
         chunk_text = self.preprocess_text(chunk_text)
@@ -68,47 +77,54 @@ class TextMatcher:
             # Fill gaps in page ranges
             page_list = sorted(matched_pages)
             if len(page_list) > 1:
-                full_range = set(range(min(page_list), max(page_list) + 1))
-                matched_pages.update(full_range)
+                matched_pages = set(self.fill_small_gaps(page_list))
             return sorted(matched_pages)
         
-        # Strategy 2: TF-IDF similarity with sliding window
+        # Strategy 2: TF-IDF similarity + overlap threshold with sliding window
         block_texts = [self.preprocess_text(block.text) for block in text_blocks]
         if not block_texts or not chunk_text:
             return [1]
-        
+
         # Create overlapping windows of text to better match chunks that cross page boundaries
         window_size = 2
         windowed_texts = []
         windowed_pages = []
         for i in range(len(block_texts)):
-            window_text = ' '.join(block_texts[max(0, i-window_size):min(len(block_texts), i+window_size+1)])
+            window_text = ' '.join(block_texts[max(0, i - window_size):min(len(block_texts), i + window_size + 1)])
             windowed_texts.append(window_text)
             windowed_pages.append(text_blocks[i].page_num)
-        
+
         tfidf_matrix = self.vectorizer.fit_transform(windowed_texts + [chunk_text])
         similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])[0]
-        
-        # Find all matches above threshold
-        matched_indices = np.where(similarities >= self.similarity_threshold)[0]
-        if len(matched_indices) > 0:
+
+        # Find matches that pass BOTH similarity and overlap thresholds
+        matched_indices = []
+        for idx, sim in enumerate(similarities):
+            if sim >= self.similarity_threshold:
+                overlap = self.calculate_text_overlap(chunk_text, windowed_texts[idx])
+                if overlap >= self.overlap_threshold:
+                    matched_indices.append(idx)
+
+        if matched_indices:
             matched_pages = {windowed_pages[i] for i in matched_indices}
-            # Fill gaps in page ranges
             page_list = sorted(matched_pages)
             if len(page_list) > 1:
                 full_range = set(range(min(page_list), max(page_list) + 1))
                 matched_pages.update(full_range)
             return sorted(matched_pages)
-        
-        # Fallback: Take the best match and its neighbors
-        best_match_idx = np.argmax(similarities)
+
+        # Fallback: best match and neighbors
+        best_match_idx = int(np.argmax(similarities))
         matched_pages = {windowed_pages[best_match_idx]}
         if best_match_idx > 0:
             matched_pages.add(windowed_pages[best_match_idx - 1])
         if best_match_idx < len(windowed_pages) - 1:
             matched_pages.add(windowed_pages[best_match_idx + 1])
-        
+
         return sorted(matched_pages)
+    
+
+from collections import defaultdict
     
 class CustomPDFReader(BaseReader):
 
@@ -116,11 +132,11 @@ class CustomPDFReader(BaseReader):
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
-        # ("####", "Header 4"),
+        ("####", "Header 4"),
         # ("#####", "Header 5"),
     ]
 
-    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.85):
+    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.9):
         # self.chunker = LateChunker(chunk_size=chunk_size, mode="sentence")
         self.converter = DocumentConverter()
         self.markdown_splitter = MarkdownHeaderTextSplitter(
