@@ -12,6 +12,7 @@ from private_gpt.components.embedding.embedding_component import EmbeddingCompon
 from private_gpt.components.ingest.ingest_component import get_ingestion_component
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -23,7 +24,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CHUNK_SIZE = 384
+
+
+DEFAULT_CHUNK_SIZE = 512
 SENTENCE_CHUNK_OVERLAP = 100
 
 class SafeSemanticSplitter(SemanticSplitterNodeParser):
@@ -65,15 +68,22 @@ class IngestService:
             vector_store=vector_store_component.vector_store,
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
-        )       
-        node_parser = SentenceWindowNodeParser.from_defaults(
-            window_size=10,
+        )      
+        # node_parser = SentenceWindowNodeParser.from_defaults(
+        #     window_size=20,
+        #     window_metadata_key="window",
+        #     original_text_metadata_key="original_text",
+        #     include_metadata=True,
+        #     include_prev_next_rel=True
+        # )
+        node_parser = SentenceChunkWindowNodeParser.from_defaults(
+            chunk_size=10,
             window_metadata_key="window",
+            window_size=10,
             original_text_metadata_key="original_text",
             include_metadata=True,
-            include_prev_next_rel=True
+            include_prev_next_rel=True,
         )
-        # sentence_parser = SentenceSplitter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=SENTENCE_CHUNK_OVERLAP)
         self.ingest_component = get_ingestion_component(
             self.storage_context,
             embed_model=embedding_component.embedding_model,

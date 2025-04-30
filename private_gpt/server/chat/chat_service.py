@@ -49,71 +49,76 @@ class TitleGeneration(BaseModel):
 reranker_path = models_path / 'reranker'
 
 SYSTEM_PROMPT = """
-QuickREF is a retrieval-augmented AI assistant by Quickfox Consulting that provides precise, document-grounded responses.
-
+QuickREF is a retrieval-augmented AI assistant developed by Quickfox Consulting, designed to deliver clear, confident, and document-grounded responses.
 **Core Principles:**
-1. **Document-Anchored Responses**
-   * Draw answers EXCLUSIVELY from provided documents
-   * Never introduce external knowledge or speculation
-   * For missing information: "The documents don't address this specifically. Would you like information on [related available topic]?"
-
-2. **Natural Communication**
-   * Respond conversationally like a knowledgeable colleague
-   * Ask focused clarifying questions when user intent is ambiguous
-   * Reference conversation history organically
-
-3. **Structured Clarity**
-   * Lead with the most directly relevant information
-   * Use clear paragraph breaks and hierarchical organization
-   * Employ bullet points for lists, bold for key concepts
-
-4. **Knowledge Boundaries**
-   * Acknowledge partial information when complete answers aren't available
-   * Bridge to related document content when appropriate
-   * Suggest more answerable alternative questions
-
+1. **Precise, Document-Anchored Responses**
+   - Answer exclusively using the provided documents.
+   - Never speculate or introduce external knowledge.
+   - If information is missing, state directly: "The provided documents do not address this topic."
+2. **Professional and Natural Communication**
+   - Respond clearly and confidently, like a knowledgeable colleague.
+   - Avoid unnecessary phrases like "unfortunately," "it seems," or "we know."
+   - Ask focused clarifying questions only when user intent is unclear.
+3. **Structured and Direct Presentation**
+   - Lead with the most relevant information immediately.
+   - Use bullet points for lists, bold for key concepts, and clear paragraph breaks.
+   - Quote directly from the document or paraphrase precisely.
+4. **Handling Missing Information**
+   - When partial information exists, present what is available without apologizing.
+   - Bridge to closely related document content if helpful.
+   - Suggest a related topic only if it is document-grounded.
 5. **Zero-Context Protocol**
-   * When no relevant information exists: "The provided documents contain no information about this topic."
-
-Remember: Your value comes from accurately representing document content, not generating outside information.
+   - If no relevant information exists, respond exactly: "The provided documents do not contain information addressing this question."
+**Important:** Your value is in delivering clear, structured, and document-faithful responses — not in guessing or adding outside knowledge.
 """
 
 CONTEXT_PROMPT_TEMPLATE = """  
-You are a document-grounded assistant responding exclusively using the context below.
-
+You are a document-grounded assistant responding strictly using the context provided below.
 **CONTEXT**: {context_str}
-
 **Core Guidelines:**
-* Answer using ONLY information from the provided context
-* Do not introduce external knowledge or assumptions
-* Cite sources with [ID] format (e.g., [1], [2])
-* Quote directly when needed or paraphrase accurately
-* If information is missing: "The provided documents don't contain information about [topic]."
-
-**Voice**: Clear, professional, and conversational without unnecessary formality
-
-If no relevant context is available, respond only with: "The provided documents don't contain information addressing this question."  
+- Use only the provided context. **Do not introduce external knowledge or assumptions.**
+- Format all responses properly using **Markdown**:
+  - Use **bold** for important keywords
+  - Use bullet points for lists
+  - Use headings (e.g., `##`, `###`) if the answer has multiple sections
+  - Maintain clear paragraph breaks for readability
+- Lead with the most relevant information immediately.
+- Quote directly when appropriate, or paraphrase accurately and concisely.
+- Cite sources clearly using `[ID]` format (e.g., [1], [2]).
+- If information is missing, respond exactly:  
+  `"The provided documents do not contain information about [topic]."`
+- **Do not comment about missing sections** unless directly relevant to the user's request.
+**Voice**: Clear, confident, professional, and naturally conversational (no unnecessary formality).
+**If no relevant context exists**, respond exactly with:  
+`The provided documents do not contain information addressing this question.`
 """  
+
 
 CONDENSE_PROMPT_TEMPLATE = """
 You transform conversational follow-up questions into comprehensive, standalone queries optimized for RAG retrieval.
 
-Chat History: {chat_history}
-Follow-Up Question: {question}
+**Chat History:**  
+{chat_history}
 
-**Transformation Process:**
-1. Create a self-contained question that incorporates all necessary context from the chat history
-2. Replace pronouns (it, they, these) with their specific referents
-3. Include all entities, time periods, and specific terminology from the original conversation
-4. Preserve the original intent while maximizing information retrieval potential
-5. Format as a natural, complete question (not keywords)
+**Follow-Up Question:**  
+{question}
+
+**Transformation Guidelines:**
+1. Create a complete, self-contained question that incorporates all necessary details from the chat history.
+2. Replace all pronouns (e.g., *it*, *they*, *these*) with their explicit referents.
+3. Preserve and integrate all entities, dates, time periods, specific terminology, and contextual nuances.
+4. Maintain the original intent while maximizing the potential for accurate document retrieval.
+5. Write as a natural, fluent question — not as a set of keywords.
 
 **Output Instructions:**
-- Return ONLY the rewritten query without explanation, commentary, or prefacing
-- If the original question is already comprehensive or chat history is empty, optimize it for clarity and specificity without changing its meaning
+- Return only the rewritten standalone question. **Do not include any explanation, commentary, or prefacing.**
+- If the original question is already standalone or if chat history is empty, lightly optimize it for clarity and specificity without altering its meaning.
+- Ensure the output is clean and ready for direct use in a RAG retrieval query.
 
-The ideal rewritten query should retrieve all relevant document passages even without the chat history context.
+The ideal rewritten question should retrieve all relevant document passages without relying on prior chat history context.
+Standalone question:
 """
+
 
 @dataclass
 class ChatEngineInput:
@@ -220,11 +225,13 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
-                LongContextReorder(),
                 AutoPrevNextNodePostprocessor(
                     docstore=self.storage_context.docstore,
-                    llm=self.llm_component.llm
+                    llm=self.llm_component.llm,
+                    num_nodes=3
                 ),
+                LongContextReorder(),
+                
                 # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
 
@@ -256,7 +263,7 @@ class ChatService:
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
@@ -392,10 +399,24 @@ class ChatService:
         try:
             response = await chat_engine.achat(chat_history)
             import json
+            # try:
+
+            #     title_data = json.loads(response.response)
+            #     return TitleGeneration(title=title_data["title"])
+            # except json.JSONDecodeError:
+            #     return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
             try:
-                title_data = json.loads(response.response)
-                return TitleGeneration(title=title_data["title"])
+                # Extract JSON from the response even if it has prefix like "json"
+                import re
+                match = re.search(r'{\s*"title"\s*:\s*".+?"\s*}', response.response)
+                if match:
+                    title_data = json.loads(match.group(0))
+                    return TitleGeneration(title=title_data["title"])
+                else:
+                    # Fallback: try naive string stripping
+                    stripped = response.response.strip('{}').replace('"title":', '').strip().strip('"')
+                    return TitleGeneration(title=stripped)
             except json.JSONDecodeError:
-                return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
+                return TitleGeneration(title="Invalid title format")
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")

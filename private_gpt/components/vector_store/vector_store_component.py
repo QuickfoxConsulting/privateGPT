@@ -60,6 +60,13 @@ class VectorStoreComponent:
                         **settings.postgres.model_dump(exclude_none=True),
                         table_name="embeddings",
                         embed_dim=settings.embedding.embed_dim,
+                        hnsw_kwargs={
+                            "hnsw_m": 16,
+                            "hnsw_ef_construction": 64,
+                            "hnsw_ef_search": 40,
+                            "hnsw_dist_method": "vector_cosine_ops",
+                        },
+                            hybrid_search=True,
                     ),
                 )
 
@@ -105,25 +112,25 @@ class VectorStoreComponent:
                         "Qdrant dependencies not found, install with `poetry install --extras vector-stores-qdrant`"
                     ) from e
 
-                if settings.qdrant is None:
-                    logger.info(
-                        "Qdrant config not found. Using default settings."
-                        "Trying to connect to Qdrant at localhost:6333."
-                    )
-                    client = QdrantClient()
-                    # aclient = AsyncQdrantClient()
-                else:
-                    client = QdrantClient(
-                        **settings.qdrant.model_dump(exclude_none=True)
-                    )
-                    # aclient = AsyncQdrantClient(
-                    #     **settings.qdrant.model_dump(exclude_none=True)
-                    # )
+                # if settings.qdrant is None:
+                #     logger.info(
+                #         "Qdrant config not found. Using default settings."
+                #         "Trying to connect to Qdrant at localhost:6333."
+                #     )
+                client = QdrantClient(host="localhost", port=6333)
+                aclient = AsyncQdrantClient(host="localhost", port=6333)
+                # else:
+                #     client = QdrantClient(
+                #         **settings.qdrant.model_dump(exclude_none=True)
+                #     )
+                #     aclient = AsyncQdrantClient(
+                #         **settings.qdrant.model_dump(exclude_none=True)
+                #     )
                 self.vector_store = typing.cast(
                     VectorStore,
                     QdrantVectorStore(
                         client=client,
-                        # aclient=aclient,
+                        aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
                         enable_hybrid=True, 
                         # fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",

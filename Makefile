@@ -16,7 +16,6 @@ black:
 
 ruff:
 	poetry run ruff check private_gpt tests
-
 format:
 	poetry run black .
 	poetry run ruff check private_gpt tests --fix

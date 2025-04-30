@@ -186,7 +186,7 @@ router = APIRouter(prefix="/c", tags=["Chat Histories"])
 @router.get("", response_model=Page[schemas.Chat])
 def list_chat_histories(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
     include_archived: bool = Query(False, description="Include archived chats"),
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
@@ -242,7 +242,7 @@ def create_chat_history(
 def read_chat_history(
     conversation_id: uuid.UUID,
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,

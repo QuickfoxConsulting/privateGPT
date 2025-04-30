@@ -15,6 +15,10 @@ import numpy as np
 from dataclasses import dataclass
 from collections import defaultdict
 
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.datamodel.base_models import InputFormat
+
 @dataclass
 class TextBlock:
     text: str
@@ -132,16 +136,37 @@ class CustomPDFReader(BaseReader):
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
-        ("####", "Header 4"),
+        # ("####", "Header 4"),
         # ("#####", "Header 5"),
     ]
 
-    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.9):
+    def __init__(self, chunk_size: int = 1024, similarity_threshold: float = 0.9):
         # self.chunker = LateChunker(chunk_size=chunk_size, mode="sentence")
-        self.converter = DocumentConverter()
+        pipeline_options = PdfPipelineOptions(
+            # artifacts_path=artifacts_path,
+            # do_ocr=True,
+            do_table_structure=True,
+            # do_code_enrichment=True,          # Enable code enrichment for code snippets
+            do_formula_enrichment=True,         # Enable formula enrichment for mathematical formulas
+            # do_picture_classification=True,   # Classify images if present
+            do_picture_description=True,        # Generate descriptive captions for images
+            # generate_page_images=True,        # Capture page images for visual context
+            # images_scale=0.8,                 # Adjust the scale of generated images
+            table_structure_options=dict(
+                mode=TableFormerMode.FAST   # Use an accurate mode for table extraction
+            ),
+            enable_remote_services=False
+        )
+        self.converter = DocumentConverter(
+            format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+        )
+
         self.markdown_splitter = MarkdownHeaderTextSplitter(
-            self.HEADERS_TO_SPLIT_ON, 
-            strip_headers=False
+            headers_to_split_on=self.HEADERS_TO_SPLIT_ON,
+            return_each_line=True,
+            strip_headers=True,
         )
         self.text_matcher = TextMatcher(similarity_threshold=similarity_threshold)
 
@@ -225,6 +250,7 @@ class CustomPDFReader(BaseReader):
             result = self.converter.convert(pdf_path)
             md_text = result.document.export_to_markdown()
             # md_text = pymupdf4llm.to_markdown(pdf_path)
+
         except Exception:
             md_text = "\n\n".join(block.text for block in text_blocks)
         
@@ -233,13 +259,10 @@ class CustomPDFReader(BaseReader):
             blocks_by_page[block.page_num].append(block)
         
         try:
-            markdown_splitter = MarkdownHeaderTextSplitter(
-                self.HEADERS_TO_SPLIT_ON, 
-                strip_headers=False
-            )
-            md_header_splits = markdown_splitter.split_text(md_text)
+            md_header_splits = self.markdown_splitter.split_text(md_text)
         except Exception as e:
-            md_header_splits = [Document(page_content=md_text, metadata={})]
+            pdf_loader = pymupdf4llm.LlamaMarkdownReader()
+            md_header_splits = pdf_loader.load_pdf(pdf_path)
             
         chunks = []
         for header_chunk in md_header_splits:

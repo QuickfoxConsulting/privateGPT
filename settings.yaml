@@ -41,10 +41,9 @@ llm:
   # prompt_style: "chatml"
   # Should be matching the selected model
   max_new_tokens: 1024
-  context_window: 8192
+  context_window: 32000
   tokenizer: meta-llama/Meta-Llama-3-8B-Instruct
   temperature: 0.1     # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
-
 rag:
   similarity_top_k: 10
   #This value controls how many "top" documents the RAG returns to use in the context.
@@ -77,11 +76,11 @@ embedding:
   embed_dim: 768 # 768 is for BAAI/bge-small-en-v1.5
 
 huggingface:
-  embedding_hf_model_name: BAAI/bge-base-en-v1.5
+  embedding_hf_model_name: mixedbread-ai/mxbai-embed-large-v1
   access_token: ${HUGGINGFACE_TOKEN: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}
 
 vectorstore:
-  database: qdrant
+  database: postgres
 
 nodestore:
   database: simple

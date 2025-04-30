@@ -374,7 +374,7 @@ async def verify_documents(
             )
             version_update = schemas.DocumentVersionUpdate(
                 status=MakerCheckerStatus.APPROVED,
-                action_type=MakerCheckerActionType.UPDATE,
+                action_type=MakerCheckerActionType.UPDATE, 
                 reviewed_by=current_user.id,
                 reviewed_at=datetime.now(),
                 file_path=str(final_path),
