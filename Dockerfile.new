@@ -25,7 +25,7 @@ RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
-ARG HF_TOKEN=""
+ARG HF_TOKEN="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"
 ENV HF_TOKEN=${HF_TOKEN}
 
 ENV PYTHONUNBUFFERED=1

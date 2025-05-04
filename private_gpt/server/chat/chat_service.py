@@ -35,6 +35,7 @@ from private_gpt.paths import models_path
 from llama_index.core.query_engine import RetrieverQueryEngine
 
 from llama_index.core.postprocessor import LongContextReorder
+from private_gpt.server.chat.agentic_rag import AgenticCondenseChatEngine
 
 class Completion(BaseModel):
     response: str
@@ -258,7 +259,7 @@ class ChatService:
                 verbose=True  # For debugging and understanding the process
             )
             
-            return CondensePlusContextChatEngine.from_defaults(
+            return AgenticCondenseChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
