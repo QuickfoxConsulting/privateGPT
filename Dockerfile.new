@@ -64,7 +64,8 @@ fi\n\
 \n\
 # Apply Alembic database migrations\n\
 echo "Applying database migrations"\n\
-alembic upgrade head\n\
+alembic upgrade c5a5dd\n\
+alembic upgrade fe4501\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
