@@ -117,8 +117,15 @@ class VectorStoreComponent:
                 #         "Qdrant config not found. Using default settings."
                 #         "Trying to connect to Qdrant at localhost:6333."
                 #     )
-                client = QdrantClient(host="localhost", port=6333)
-                aclient = AsyncQdrantClient(host="localhost", port=6333)
+                # client = QdrantClient(url="http://qdrant:6333", prefer_grpc=True)
+                # aclient = AsyncQdrantClient(url="http://qdrant:6333", prefer_grpc=True)
+                # client = QdrantClient(url="http://qdrant:6333")
+                # aclient = AsyncQdrantClient(url="http://qdrant:6333")
+                # For synchronous client with gRPC
+                client = QdrantClient(host="qdrant", port=6334, prefer_grpc=True)
+
+                # For asynchronous client with gRPC
+                aclient = AsyncQdrantClient(host="qdrant", port=6334, prefer_grpc=True)
                 # else:
                 #     client = QdrantClient(
                 #         **settings.qdrant.model_dump(exclude_none=True)
@@ -133,10 +140,10 @@ class VectorStoreComponent:
                         aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
                         enable_hybrid=True, 
-                        # fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
+                        fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
                         # batch_size=20,
-                        sparse_doc_fn=sparse_doc_vectors,
-                        sparse_query_fn=sparse_query_vectors,
+                        # sparse_doc_fn=sparse_doc_vectors,
+                        # sparse_query_fn=sparse_query_vectors,
                         use_async=True,
                         # hybrid_fusion_fn=relative_score_fusion,
                     ),  # TODO
@@ -166,7 +173,7 @@ class VectorStoreComponent:
             sparse_top_k=12, 
             vector_store_query_mode="hybrid",
             alpha=0.5,
-            vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
+            # vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
         )
 
     def close(self) -> None:

@@ -1052,10 +1052,9 @@ markers = {main = "platform_system == \"Windows\" or extra == \"vector-stores-ch
 name = "coloredlogs"
 version = "15.0.1"
 description = "Colored terminal output for Python's logging module"
-optional = true
+optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"vector-stores-chroma\""
 files = [
     {file = "coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"},
     {file = "coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0"},
@@ -1803,6 +1802,30 @@ sqlmodel = ["sqlakeyset (>=2.0.1680321678,<3.0.0)", "sqlmodel (>=0.0.22)"]
 tortoise = ["tortoise-orm (>=0.22.0)"]
 
 [[package]]
+name = "fastembed"
+version = "0.6.1"
+description = "Fast, light, accurate library built for retrieval embedding generation"
+optional = false
+python-versions = ">=3.9.0"
+groups = ["main"]
+files = [
+    {file = "fastembed-0.6.1-py3-none-any.whl", hash = "sha256:89bfe07d3e12ae84474f0c85a6416ffbded25c72af43ac7ebf39acf309046044"},
+    {file = "fastembed-0.6.1.tar.gz", hash = "sha256:9c69ce389700eaa267eb9f488ecced94273d973be3fa933e6a9f807df3da5d96"},
+]
+
+[package.dependencies]
+huggingface-hub = ">=0.20,<1.0"
+loguru = ">=0.7.2,<0.8.0"
+mmh3 = ">=4.1.0,<6.0.0"
+numpy = {version = ">=1.21", markers = "python_version >= \"3.10\" and python_version < \"3.12\""}
+onnxruntime = {version = ">=1.17.0,<1.20.0 || >1.20.0", markers = "python_version >= \"3.10\" and python_version < \"3.13\""}
+pillow = ">=10.3.0,<12.0.0"
+py-rust-stemmers = ">=0.1.0,<0.2.0"
+requests = ">=2.31,<3.0"
+tokenizers = ">=0.15,<1.0"
+tqdm = ">=4.66,<5.0"
+
+[[package]]
 name = "ffmpy"
 version = "0.4.0"
 description = "A simple Python wrapper for FFmpeg"
@@ -1848,10 +1871,9 @@ files = [
 name = "flatbuffers"
 version = "25.2.10"
 description = "The FlatBuffers serialization format for Python"
-optional = true
+optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"vector-stores-chroma\""
 files = [
     {file = "flatbuffers-25.2.10-py2.py3-none-any.whl", hash = "sha256:ebba5f4d5ea615af3f7fd70fc310636fbb2bbd1f566ac0a23d98dd412de50051"},
     {file = "flatbuffers-25.2.10.tar.gz", hash = "sha256:97e451377a41262f8d9bd4295cc836133415cc03d8cb966410a4af92eb00d26e"},
@@ -2315,7 +2337,7 @@ description = "Lightweight in-process concurrent programming"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(sys_platform != \"darwin\" or platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\" or platform_machine == \"x86_64\") and (platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\")"
+markers = "platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\""
 files = [
     {file = "greenlet-3.2.1-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:777c1281aa7c786738683e302db0f55eb4b0077c20f1dc53db8852ffaea0a6b0"},
     {file = "greenlet-3.2.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3059c6f286b53ea4711745146ffe5a5c5ff801f62f6c56949446e0f6461f8157"},
@@ -2674,10 +2696,9 @@ typing = ["types-PyYAML", "types-requests", "types-simplejson", "types-toml", "t
 name = "humanfriendly"
 version = "10.0"
 description = "Human friendly output for text interfaces using Python"
-optional = true
+optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"vector-stores-chroma\""
 files = [
     {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
     {file = "humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc"},
@@ -3800,6 +3821,25 @@ llama-index-core = ">=0.10.1,<0.11.0"
 qdrant-client = ">=1.7.1"
 
 [[package]]
+name = "loguru"
+version = "0.7.3"
+description = "Python logging made (stupidly) simple"
+optional = false
+python-versions = "<4.0,>=3.5"
+groups = ["main"]
+files = [
+    {file = "loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c"},
+    {file = "loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6"},
+]
+
+[package.dependencies]
+colorama = {version = ">=0.3.4", markers = "sys_platform == \"win32\""}
+win32-setctime = {version = ">=1.0.0", markers = "sys_platform == \"win32\""}
+
+[package.extras]
+dev = ["Sphinx (==8.1.3)", "build (==1.2.2)", "colorama (==0.4.5)", "colorama (==0.4.6)", "exceptiongroup (==1.1.3)", "freezegun (==1.1.0)", "freezegun (==1.5.0)", "mypy (==v0.910)", "mypy (==v0.971)", "mypy (==v1.13.0)", "mypy (==v1.4.1)", "myst-parser (==4.0.0)", "pre-commit (==4.0.1)", "pytest (==6.1.2)", "pytest (==8.3.2)", "pytest-cov (==2.12.1)", "pytest-cov (==5.0.0)", "pytest-cov (==6.0.0)", "pytest-mypy-plugins (==1.9.3)", "pytest-mypy-plugins (==3.1.0)", "sphinx-rtd-theme (==3.0.2)", "tox (==3.27.1)", "tox (==4.23.2)", "twine (==6.0.1)"]
+
+[[package]]
 name = "lxml"
 version = "5.4.0"
 description = "Powerful and Pythonic XML processing library combining libxml2/libxslt with the ElementTree API."
@@ -4247,10 +4287,9 @@ tqdm = "*"
 name = "mmh3"
 version = "5.1.0"
 description = "Python extension for MurmurHash (MurmurHash3), a set of fast and robust hash functions."
-optional = true
+optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"vector-stores-chroma\""
 files = [
     {file = "mmh3-5.1.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:eaf4ac5c6ee18ca9232238364d7f2a213278ae5ca97897cafaa123fcc7bb8bec"},
     {file = "mmh3-5.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:48f9aa8ccb9ad1d577a16104834ac44ff640d8de8c0caed09a2300df7ce8460a"},
@@ -5051,10 +5090,9 @@ httpx = ">=0.27.0,<0.28.0"
 name = "onnxruntime"
 version = "1.21.1"
 description = "ONNX Runtime is a runtime accelerator for Machine Learning models"
-optional = true
+optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"vector-stores-chroma\""
 files = [
     {file = "onnxruntime-1.21.1-cp310-cp310-macosx_13_0_universal2.whl", hash = "sha256:daedb5d33d8963062a25f4a3c788262074587f685a19478ef759a911b4b12c25"},
     {file = "onnxruntime-1.21.1-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3a402f9bda0b1cc791d9cf31d23c471e8189a55369b49ef2b9d0854eb11d22c4"},
@@ -5879,7 +5917,7 @@ testing = ["google-api-core (>=1.31.5)"]
 name = "protobuf"
 version = "4.25.7"
 description = ""
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
@@ -5993,6 +6031,81 @@ files = [
     {file = "psycopg2_binary-2.9.10-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:7f5d859928e635fa3ce3477704acee0f667b3a3d3e4bb109f2b18d4005f38287"},
     {file = "psycopg2_binary-2.9.10-cp39-cp39-win32.whl", hash = "sha256:3216ccf953b3f267691c90c6fe742e45d890d8272326b4a8b20850a03d05b7b8"},
     {file = "psycopg2_binary-2.9.10-cp39-cp39-win_amd64.whl", hash = "sha256:30e34c4e97964805f715206c7b789d54a78b70f3ff19fbe590104b71c45600e5"},
+]
+
+[[package]]
+name = "py-rust-stemmers"
+version = "0.1.5"
+description = "Fast and parallel snowball stemmer"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:bfbd9034ae00419ff2154e33b8f5b4c4d99d1f9271f31ed059e5c7e9fa005844"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:c7162ae66df2bb0fc39b350c24a049f5f5151c03c046092ba095c2141ec223a2"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:da6de2b694af6227ba8c5a0447d4e0ef69991e63ee558b969f90c415f33e54d0"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:a3abbd6d26722951a04550fff55460c0f26819169c23286e11ea25c645be6140"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:019221c57a7bcc51097fa3f124b62d0577b5b6167184ee51abd3aea822d78f69"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:8dd5824194c279ee07f2675a55b3d728dfeec69a4b3c27329fab9b2ff5063c91"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:7cf4d69bf20cec373ba0e89df3d98549b1a0cfb130dbd859a50ed772dd044546"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-musllinux_1_2_armv7l.whl", hash = "sha256:b42eb52609ac958e7fcc441395457dc5183397e8014e954f4aed78de210837b9"},
+    {file = "py_rust_stemmers-0.1.5-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:c836aeb53409a44f38b153106374fe780099a7c976c582c5ae952061ff5d2fed"},
+    {file = "py_rust_stemmers-0.1.5-cp310-none-win_amd64.whl", hash = "sha256:39550089f7a021a3a97fec2ff0d4ad77e471f0a65c0f100919555e60a4daabf0"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:e644987edaf66919f5a9e4693336930f98d67b790857890623a431bb77774c84"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:910d87d39ba75da1fe3d65df88b926b4b454ada8d73893cbd36e258a8a648158"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:31ff4fb9417cec35907c18a6463e3d5a4941a5aa8401f77fbb4156b3ada69e3f"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:07b3b8582313ef8a7f544acf2c887f27c3dd48c5ddca028fa0f498de7380e24f"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:804944eeb5c5559443d81f30c34d6e83c6292d72423f299e42f9d71b9d240941"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c52c5c326de78c70cfc71813fa56818d1bd4894264820d037d2be0e805b477bd"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:d8f374c0f26ef35fb87212686add8dff394bcd9a1364f14ce40fe11504e25e30"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-musllinux_1_2_armv7l.whl", hash = "sha256:0ae0540453843bc36937abb54fdbc0d5d60b51ef47aa9667afd05af9248e09eb"},
+    {file = "py_rust_stemmers-0.1.5-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:85944262c248ea30444155638c9e148a3adc61fe51cf9a3705b4055b564ec95d"},
+    {file = "py_rust_stemmers-0.1.5-cp311-none-win_amd64.whl", hash = "sha256:147234020b3eefe6e1a962173e41d8cf1dbf5d0689f3cd60e3022d1ac5c2e203"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:29772837126a28263bf54ecd1bc709dd569d15a94d5e861937813ce51e8a6df4"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4d62410ada44a01e02974b85d45d82f4b4c511aae9121e5f3c1ba1d0bea9126b"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b28ef729a4c83c7d9418be3c23c0372493fcccc67e86783ff04596ef8a208cdf"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:a979c3f4ff7ad94a0d4cf566ca7bfecebb59e66488cc158e64485cf0c9a7879f"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1c3593d895453fa06bf70a7b76d6f00d06def0f91fc253fe4260920650c5e078"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:96ccc7fd042ffc3f7f082f2223bb7082ed1423aa6b43d5d89ab23e321936c045"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:ef18cfced2c9c676e0d7d172ba61c3fab2aa6969db64cc8f5ca33a7759efbefe"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-musllinux_1_2_armv7l.whl", hash = "sha256:541d4b5aa911381e3d37ec483abb6a2cf2351b4f16d5e8d77f9aa2722956662a"},
+    {file = "py_rust_stemmers-0.1.5-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:ffd946a36e9ac17ca96821963663012e04bc0ee94d21e8b5ae034721070b436c"},
+    {file = "py_rust_stemmers-0.1.5-cp312-none-win_amd64.whl", hash = "sha256:6ed61e1207f3b7428e99b5d00c055645c6415bb75033bff2d06394cbe035fd8e"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:398b3a843a9cd4c5d09e726246bc36f66b3d05b0a937996814e91f47708f5db5"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4e308fc7687901f0c73603203869908f3156fa9c17c4ba010a7fcc98a7a1c5f2"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1f9efc4da5e734bdd00612e7506de3d0c9b7abc4b89d192742a0569d0d1fe749"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:cc2cc8d2b36bc05b8b06506199ac63d437360ae38caefd98cd19e479d35afd42"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a231dc6f0b2a5f12a080dfc7abd9e6a4ea0909290b10fd0a4620e5a0f52c3d17"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:5845709d48afc8b29e248f42f92431155a3d8df9ba30418301c49c6072b181b0"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:e48bfd5e3ce9d223bfb9e634dc1425cf93ee57eef6f56aa9a7120ada3990d4be"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-musllinux_1_2_armv7l.whl", hash = "sha256:35d32f6e7bdf6fd90e981765e32293a8be74def807147dea9fdc1f65d6ce382f"},
+    {file = "py_rust_stemmers-0.1.5-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:191ea8bf922c984631ffa20bf02ef0ad7eec0465baeaed3852779e8f97c7e7a3"},
+    {file = "py_rust_stemmers-0.1.5-cp313-none-win_amd64.whl", hash = "sha256:e564c9efdbe7621704e222b53bac265b0e4fbea788f07c814094f0ec6b80adcf"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-macosx_10_12_x86_64.whl", hash = "sha256:7720c4d472653f7301537fb289d10f827b25c9b998d1b58403181180097212ee"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-macosx_11_0_arm64.whl", hash = "sha256:53e2ad505d15959fd86a8b204e55fd73290cf5fdba0020fd0d9323d7fe225962"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fa7d6bd88cb99933178bc1e9f803d921c13274a2fe52325d40f8d35046e929c3"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:f240be882e9afcc8eeb5860c13bf37cf666d99179da49b0cd19ac3cbb4871423"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:52c397e314a02319d7a0f7d2cd845557a3ba145f8318a6f2e119b46056bf4379"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-manylinux_2_28_x86_64.whl", hash = "sha256:b5ae7a3d1d015e72817f8fe6b35bb762681b7197fee2d80232528fff68be7576"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-musllinux_1_2_aarch64.whl", hash = "sha256:f161278168a7ad5ace2909454f2ee87d2c815bfd1bfec5a80fac36de31bf96e4"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-musllinux_1_2_armv7l.whl", hash = "sha256:918ce5252570febdf8accded210046e7f3edb933eac5599fa40e773ff42c7a8f"},
+    {file = "py_rust_stemmers-0.1.5-cp38-cp38-musllinux_1_2_x86_64.whl", hash = "sha256:0db3d2fff5775060c78a67e72132fa8802ace50175da26bf4661e4071aa10094"},
+    {file = "py_rust_stemmers-0.1.5-cp38-none-win_amd64.whl", hash = "sha256:9982b5f915e8e5b7ca83104f57cc4e7668b900d87232eea2c6f432d2009f0d18"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-macosx_10_12_x86_64.whl", hash = "sha256:67b2753cadb0bdb827ae8088ef5ead44408b8ff92d2bc8926231c7e056810e4a"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:68f1fd369c4be5d63c2f697a07511c868f41875a464aab0f564071131d84bab4"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ec840a009de79a9a8231090222a8fdc07043d337e2ef38843daae88f0479ae7f"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:1816ade2c5148337cec16c115e210c8e3341c4cde5b591bf43224bd2168e5eda"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d095b359d6e14e219b6fbff074f7b53e845f70e6d7fc9e63b50f192677c94cf5"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:5bc04bd5f72ee5d9cfb1530c56e450de7d80ed4504d5013f02f522cf8ea9b474"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:7687586cf4e34f230ee154b5f034b9c568409aaef997c888d4749e4bdbab79fd"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-musllinux_1_2_armv7l.whl", hash = "sha256:544e3e5e0174924f2dce3248094d9632c3106c1619a03141dbfb8bfdb29b0925"},
+    {file = "py_rust_stemmers-0.1.5-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:77b96f1141de6db8b550052ef7f90099e3c3e10bb0d472a4af7a30af776252f8"},
+    {file = "py_rust_stemmers-0.1.5-cp39-none-win_amd64.whl", hash = "sha256:c3078476318a4697dc216bb6c615b59d1ee02058202c2fa91ccfb4bebf412e22"},
+    {file = "py_rust_stemmers-0.1.5-pp310-pypy310_pp73-macosx_10_12_x86_64.whl", hash = "sha256:f8c6596f04e7a6df2a5cc18854d31b133d2a69a8c494fa49853fe174d8739d14"},
+    {file = "py_rust_stemmers-0.1.5-pp310-pypy310_pp73-macosx_11_0_arm64.whl", hash = "sha256:154c27f5d576fabf2bacf53620f014562af4c6cf9eb09ba7477830f2be868902"},
+    {file = "py_rust_stemmers-0.1.5-pp310-pypy310_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ec42b66927b62fd57328980b6c7004fe85e8fad89c952e8718da68b805a119e3"},
+    {file = "py_rust_stemmers-0.1.5-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:57b061c3b4af9e409d009d729b21bc53dabe47116c955ccf0b642a5a2d438f93"},
+    {file = "py_rust_stemmers-0.1.5.tar.gz", hash = "sha256:e9c310cfb5c2470d7c7c8a0484725965e7cab8b1237e106a0863d5741da3e1f7"},
 ]
 
 [[package]]
@@ -6485,10 +6598,10 @@ files = [
 name = "pyreadline3"
 version = "3.5.4"
 description = "A python implementation of GNU readline."
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "sys_platform == \"win32\" and extra == \"vector-stores-chroma\""
+markers = "sys_platform == \"win32\""
 files = [
     {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
     {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
@@ -9020,6 +9133,22 @@ files = [
 ]
 
 [[package]]
+name = "win32-setctime"
+version = "1.2.0"
+description = "A small Python utility to set file creation time on Windows"
+optional = false
+python-versions = ">=3.5"
+groups = ["main"]
+markers = "sys_platform == \"win32\""
+files = [
+    {file = "win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390"},
+    {file = "win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0"},
+]
+
+[package.extras]
+dev = ["black (>=19.3b0)", "pytest (>=4.6.2)"]
+
+[[package]]
 name = "wrapt"
 version = "1.17.2"
 description = "Module for decorators, wrappers and monkey patching."
@@ -9399,4 +9528,4 @@ vector-stores-qdrant = ["llama-index-vector-stores-qdrant"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.12"
-content-hash = "0da6a3969bd6284e5ccb6a6c3b6927d494616e667342df032ddfebb8d6e5e0ba"
+content-hash = "2aafce006b3017da87a85df2b73ad37b975f3a3321a33bd985c1cbd390513463"

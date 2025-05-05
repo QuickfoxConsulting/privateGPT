@@ -12,3 +12,87 @@ EXPOSE 80
 
 # Start Nginx in the foreground
 CMD ["nginx", "-g", "daemon off;"]
+
+
+FROM python:3.11.6-slim-bookworm AS base
+# Install system dependencies for psycopg2 and other packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    gcc \
+    git \
+    curl \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install poetry
+RUN pip install pipx
+RUN python3 -m pipx ensurepath
+RUN pipx install poetry==1.8.3
+# Install huggingface_hub for authentication
+RUN pip install --no-cache-dir huggingface_hub
+ENV PATH="/root/.local/bin:$PATH"
+ENV PATH=".venv/bin/:$PATH"
+# https://python-poetry.org/docs/configuration/#virtualenvsin-project
+ENV POETRY_VIRTUALENVS_IN_PROJECT=true
+
+FROM base AS dependencies
+WORKDIR /app
+COPY pyproject.toml poetry.lock ./
+ARG POETRY_EXTRAS="ui vector-stores-qdrant llms-ollama embeddings-huggingface"
+RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
+
+FROM base AS app
+# Add ARG for Hugging Face token - can be passed at build time
+ARG HF_TOKEN="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"
+ENV HF_TOKEN=${HF_TOKEN}
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+ENV APP_ENV=prod
+ENV PYTHONPATH="$PYTHONPATH:/app/private_gpt/"
+EXPOSE 8000
+WORKDIR /app
+
+# Create directories
+RUN mkdir -p local_data models
+
+# Copy dependencies
+COPY --from=dependencies /app/.venv/ .venv
+
+# Copy only necessary application files
+COPY private_gpt/ /app/private_gpt/
+COPY scripts/ /app/scripts/
+COPY *.yaml /app/
+COPY alembic/ /app/alembic/
+COPY alembic.ini /app/
+COPY pyproject.toml poetry.lock /app/
+
+# Create startup script with Hugging Face login
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Login to Hugging Face if token is provided\n\
+if [ -n "$HF_TOKEN" ]; then\n\
+  echo "Logging into Hugging Face..."\n\
+  python -c "from huggingface_hub import login; login(token=\"$HF_TOKEN\", write_permission=True)"\n\
+  echo "Hugging Face login successful"\n\
+else\n\
+  echo "No Hugging Face token provided, skipping login"\n\
+fi\n\
+\n\
+# Apply Alembic database migrations\n\
+echo "Applying database migrations"\n\
+alembic upgrade c5a5dd\n\
+alembic upgrade fe4501\n\
+\n\
+# Load fixture data\n\
+echo "Loading fixtures"\n\
+poetry run python scripts/fixtures.py\n\
+\n\
+# Start the FastAPI application\n\
+echo "Starting FastAPI server"\n\
+echo "Starting PrivateGPT"\n\
+poetry run python -m private_gpt' > /app/startup.sh && chmod +x /app/startup.sh
+
+# NOTE: We're keeping root user for simplicity
+ENTRYPOINT ["/app/startup.sh"]

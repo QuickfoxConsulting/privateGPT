@@ -83,6 +83,7 @@ alembic = "^1.14.0"
 docling = "^2.31.0"
 chonkie = "^1.0.6"
 scikit-learn = "^1.6.1"
+fastembed = "^0.6.1"
 
 [tool.poetry.extras]
 ui = ["gradio", "ffmpy"]

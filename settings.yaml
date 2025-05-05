@@ -37,7 +37,7 @@ ui:
 
 llm:
   mode: llamacpp
-  prompt_style: "chatdeepseek"
+  prompt_style: "llama3"
   # prompt_style: "chatml"
   # Should be matching the selected model
   max_new_tokens: 1024
@@ -47,7 +47,7 @@ llm:
 rag:
   similarity_top_k: 5
   #This value controls how many "top" documents the RAG returns to use in the context.
-  similarity_value: 0.5
+  similarity_value: 0.6
   #This value is disabled by default.  If you enable this settings, the RAG will only use articles that meet a certain percentage score.
   rerank:
     enabled: true
@@ -107,8 +107,8 @@ openai:
 ollama:
   llm_model: gemma3:4b
   embedding_model: nomic-embed-text:latest
-  api_base: http://privategpt-ollama-1:11434
-  embedding_api_base: http://privategpt-ollama-1:11434  # change if your embedding model runs on another ollama
+  api_base: http://localhost:11434
+  embedding_api_base: http://localhost:11434  # change if your embedding model runs on another ollama
   keep_alive: 5m
   request_timeout: 120.0
 

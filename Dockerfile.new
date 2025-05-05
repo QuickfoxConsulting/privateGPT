@@ -1,11 +1,13 @@
 FROM python:3.11.6-slim-bookworm AS base
 # Install system dependencies for psycopg2 and other packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
- build-essential \
- libpq-dev \
- gcc \
- git \
- && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    libpq-dev \
+    gcc \
+    git \
+    curl \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Install poetry
 RUN pip install pipx
 RUN python3 -m pipx ensurepath
@@ -74,7 +76,7 @@ poetry run python scripts/fixtures.py\n\
 # Start the FastAPI application\n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-poetry run python -m private_gpt' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=ollama poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
 
 # NOTE: We're keeping root user for simplicity
 ENTRYPOINT ["/app/startup.sh"]
