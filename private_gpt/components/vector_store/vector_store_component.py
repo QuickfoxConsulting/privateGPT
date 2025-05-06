@@ -119,13 +119,8 @@ class VectorStoreComponent:
                 #     )
                 # client = QdrantClient(url="http://qdrant:6333", prefer_grpc=True)
                 # aclient = AsyncQdrantClient(url="http://qdrant:6333", prefer_grpc=True)
-                # client = QdrantClient(url="http://qdrant:6333")
-                # aclient = AsyncQdrantClient(url="http://qdrant:6333")
-                # For synchronous client with gRPC
-                client = QdrantClient(host="qdrant", port=6334, prefer_grpc=True)
-
-                # For asynchronous client with gRPC
-                aclient = AsyncQdrantClient(host="qdrant", port=6334, prefer_grpc=True)
+                client = QdrantClient(url="http://qdrant:6333")
+                aclient = AsyncQdrantClient(url="http://qdrant:6333")
                 # else:
                 #     client = QdrantClient(
                 #         **settings.qdrant.model_dump(exclude_none=True)

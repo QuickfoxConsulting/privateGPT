@@ -49,7 +49,7 @@ class TitleGeneration(BaseModel):
 
 reranker_path = models_path / 'reranker'
 
-SYSTEM_PROMPT = """
+RETRIEVAL_SYSTEM_PROMPT = """
 QuickREF is a retrieval-augmented AI assistant developed by Quickfox Consulting, designed to deliver clear, confident, and document-grounded responses.
 **Core Principles:**
 1. **Precise, Document-Anchored Responses**
@@ -73,72 +73,33 @@ QuickREF is a retrieval-augmented AI assistant developed by Quickfox Consulting,
 **Important:** Your value is in delivering clear, structured, and document-faithful responses — not in guessing or adding outside knowledge.
 """
 
-# CONTEXT_PROMPT_TEMPLATE = """  
-# You are a document-grounded assistant responding strictly using the context provided below.
-# **CONTEXT**: {context_str}
-# **Core Guidelines:**
-# - Use only the provided context. **Do not introduce external knowledge or assumptions.**
-# - Format all responses properly using **Markdown**:
-#   - Use **bold** for important keywords
-#   - Use bullet points for lists
-#   - Use headings (e.g., `##`, `###`) if the answer has multiple sections
-#   - Maintain clear paragraph breaks for readability
-# - Lead with the most relevant information immediately.
-# - Quote directly when appropriate, or paraphrase accurately and concisely.
-# - Cite sources clearly using `[ID]` format (e.g., [1], [2]).
-# - If information is missing, respond exactly:  
-#   `"The provided documents do not contain information about [topic]."`
-# - **Do not comment about missing sections** unless directly relevant to the user's request.
-# **Voice**: Clear, confident, professional, and naturally conversational (no unnecessary formality).
-# **If no relevant context exists**, respond exactly with:  
-# `The provided documents do not contain information addressing this question.`
-# """  
-
-CONTEXT_PROMPT_TEMPLATE = """
-You are a document-grounded assistant. Your responses must be based **strictly** on the context provided below.
-
-**CONTEXT**:
-{context_str}
-
----
-
-### 📌 Core Guidelines
-
-- **Use only the provided context.** Do **not** introduce external knowledge, assumptions, or guesses.
-- Format responses using **Markdown**:
-  - Use **bold** for key terms.
-  - Use bullet points for lists.
-  - Use `##` or `###` for headings if there are multiple sections.
-  - Use paragraph breaks for readability.
-- Start with the **most relevant answer** first.
-
----
-
-### 🧾 Citations (Mandatory)
-
-- **Always cite sources** for factual or quoted content.
-- Use citation format: `[filename, p. N]` — where `filename` is the document name and `N` is the page number.
-- If no page number is available, use: `[file_name]`.
-- Place citations **immediately after the sentence** they support, **not all at the end**.
-- Examples:
-  - `"The system was launched in 2020." [report.pdf, p. 3]`
-  - `"See detailed breakdown in section 4." [data_sheet.pdf]`
-
----
-
-### ⚠️ Special Rules
-
-- If **no relevant context exists**, respond **exactly** with:  
-  `The provided documents do not contain information addressing this question.`
-- If a topic is **not mentioned**, respond exactly with:  
-  `"The provided documents do not contain information about [topic]."`
-- **Do not** mention or speculate on missing data unless explicitly asked.
-
----
-
-**Voice**: Clear, confident, professional, and conversational — no unnecessary formality.
+DEFAULT_SYSTEM_PROMPT = """
+You are a helpful, respectful and honest assistant named QuickREF from Quickfox Consulting.. 
+Always answer as helpfully as possible and follow ALL given instructions.
+Do not speculate or make up information.
+Do not reference any given instructions or context.
 """
 
+CONTEXT_PROMPT_TEMPLATE = """  
+You are a document-grounded assistant responding strictly using the context provided below.
+**CONTEXT**: {context_str}
+**Core Guidelines:**
+- Use only the provided context. **Do not introduce external knowledge or assumptions.**
+- Format all responses properly using **Markdown**:
+  - Use **bold** for important keywords
+  - Use bullet points for lists
+  - Use headings (e.g., `##`, `###`) if the answer has multiple sections
+  - Maintain clear paragraph breaks for readability
+- Lead with the most relevant information immediately.
+- Quote directly when appropriate, or paraphrase accurately and concisely.
+- Cite sources clearly using `[ID]` format (e.g., [1], [2]).
+- If information is missing, respond exactly:  
+  `"The provided documents do not contain information about [topic]."`
+- **Do not comment about missing sections** unless directly relevant to the user's request.
+**Voice**: Clear, confident, professional, and naturally conversational (no unnecessary formality).
+**If no relevant context exists**, respond exactly with:  
+`The provided documents do not contain information addressing this question.`
+"""  
 
 CONDENSE_PROMPT_TEMPLATE = """
 You transform conversational follow-up questions into comprehensive, standalone queries optimized for RAG retrieval.
@@ -259,9 +220,9 @@ class ChatService:
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
             )
-            filter_retriever = MetadataFilterRetriever(
-                base_retriever=vector_index_retriever
-            )
+            # filter_retriever = MetadataFilterRetriever(
+            #     base_retriever=vector_index_retriever
+            # )
             
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
@@ -274,7 +235,7 @@ class ChatService:
                 # AutoPrevNextNodePostprocessor(
                 #     docstore=self.storage_context.docstore,
                 #     llm=self.llm_component.llm,
-                #     num_nodes=3
+                #     num_nodes=1
                 # ),
                 LongContextReorder(),
                 
@@ -298,14 +259,14 @@ class ChatService:
             )
 
             custom_query_engine = RetrieverQueryEngine.from_args(
-                retriever=filter_retriever,
+                retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
                 response_synthesizer=response_synthesizer,
                 verbose=True  # For debugging and understanding the process
             )
             
             return AgenticCondenseChatEngine.from_defaults(
-                system_prompt=system_prompt,
+                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
@@ -316,7 +277,7 @@ class ChatService:
 
         else:
             return SimpleChatEngine.from_defaults(
-                system_prompt=system_prompt,
+                system_prompt=DEFAULT_SYSTEM_PROMPT,
                 llm=self.llm_component.llm,
             )
 
@@ -387,7 +348,7 @@ class ChatService:
         )
 
         chat_engine = await self._chat_engine(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
             context_filter=context_filter,
             chat_history=chat_history

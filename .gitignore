@@ -43,3 +43,5 @@ __pycache__/
 
 marker_test
 media
+models
+root

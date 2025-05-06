@@ -45,9 +45,9 @@ llm:
   tokenizer: meta-llama/Meta-Llama-3-8B-Instruct
   temperature: 0.1     # The temperature of the model. Increasing the temperature will make the model answer more creatively. A value of 0.1 would be more factual. (Default: 0.1)
 rag:
-  similarity_top_k: 5
+  similarity_top_k: 10
   #This value controls how many "top" documents the RAG returns to use in the context.
-  similarity_value: 0.6
+  similarity_value: 0.5
   #This value is disabled by default.  If you enable this settings, the RAG will only use articles that meet a certain percentage score.
   rerank:
     enabled: true

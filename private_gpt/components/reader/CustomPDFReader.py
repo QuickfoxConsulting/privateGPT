@@ -346,6 +346,26 @@ chunker = LateChunker.from_recipe(
         lang="en"
     )
 
+pipeline_options = PdfPipelineOptions(
+            # artifacts_path=artifacts_path,
+            # do_ocr=True,
+            do_table_structure=True,
+            # do_code_enrichment=True,          # Enable code enrichment for code snippets
+            do_formula_enrichment=True,         # Enable formula enrichment for mathematical formulas
+            # do_picture_classification=True,   # Classify images if present
+            do_picture_description=True,        # Generate descriptive captions for images
+            # generate_page_images=True,        # Capture page images for visual context
+            # images_scale=0.8,                 # Adjust the scale of generated images
+            table_structure_options=dict(
+                mode=TableFormerMode.FAST   # Use an accurate mode for table extraction
+            ),
+            enable_remote_services=False
+        )
+CONVERTER = DocumentConverter(
+    format_options={
+    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+    }
+)
 class TextMatcher:
     def __init__(self, similarity_threshold: float = 0.9, overlap_threshold: float = 0.9):
         self.similarity_threshold = similarity_threshold
@@ -457,26 +477,7 @@ class CustomPDFReader(BaseReader):
         # ("#####", "Header 5"),
     ]
     def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.95):
-        pipeline_options = PdfPipelineOptions(
-            # artifacts_path=artifacts_path,
-            # do_ocr=True,
-            do_table_structure=True,
-            # do_code_enrichment=True,          # Enable code enrichment for code snippets
-            do_formula_enrichment=True,         # Enable formula enrichment for mathematical formulas
-            # do_picture_classification=True,   # Classify images if present
-            do_picture_description=True,        # Generate descriptive captions for images
-            # generate_page_images=True,        # Capture page images for visual context
-            # images_scale=0.8,                 # Adjust the scale of generated images
-            table_structure_options=dict(
-                mode=TableFormerMode.FAST   # Use an accurate mode for table extraction
-            ),
-            enable_remote_services=False
-        )
-        self.converter = DocumentConverter(
-            format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-        }
-        )
+       
         self.text_matcher = TextMatcher(similarity_threshold=similarity_threshold)
 
     def _extract_pdf_metadata(self, doc: fitz.Document) -> Dict:
@@ -556,7 +557,7 @@ class CustomPDFReader(BaseReader):
         filename = os.path.basename(pdf_path)
         
         try:
-            result = self.converter.convert(pdf_path)
+            result = CONVERTER.convert(pdf_path)
             md_text = result.document.export_to_markdown()
             # md_text = pymupdf4llm.to_markdown(pdf_path)
 

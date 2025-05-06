@@ -74,9 +74,11 @@ echo "Loading fixtures"\n\
 poetry run python scripts/fixtures.py\n\
 \n\
 # Start the FastAPI application\n\
+echo "Installing Fastembed"\n\
+pip install fastembed\n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=ollama poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=ollama poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 1' > /app/startup.sh && chmod +x /app/startup.sh
 
 # NOTE: We're keeping root user for simplicity
 ENTRYPOINT ["/app/startup.sh"]

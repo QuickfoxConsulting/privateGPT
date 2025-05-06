@@ -8,6 +8,9 @@ services:
       - .env
     volumes:
       - ./local_data/:/app/local_data
+      - ./models/:/app/models
+      - ./media/:/app/private_gpt/media
+      - ./root/.cache:/root/.cache
     ports:
       - "8000:8000"
     depends_on:
@@ -23,7 +26,7 @@ services:
       PGPT_MODE: ollama
       DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
       QDRANT_URL: http://qdrant:6333
-      OLLAMA_URL: http://ollama:11434
+      # OLLAMA_URL: http://ollama:11434
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -73,26 +76,36 @@ services:
       retries: 3
       start_period: 20s
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./models:/root/.ollama
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://ollama:11434"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ./models:/root/.ollama
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://ollama:11434"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 60s
+
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
 
 volumes:
   postgres-data:
     name: pgpt-postgres-data
   qdrant-data:
     name: pgpt-qdrant-data
-
+  private-gpt-data:
+    name: pgpt-private-gpt-data
+  
 configs:
   qdrant_config:
     content: |
