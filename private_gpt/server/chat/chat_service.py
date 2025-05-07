@@ -1,7 +1,8 @@
 from dataclasses import dataclass
+from enum import Enum
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, CondenseQuestionChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
@@ -14,6 +15,7 @@ from llama_index.core.postprocessor import (
 )
 from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
+from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
 from private_gpt.server.chat.query_expansion import QueryExpander
 from pydantic import BaseModel
@@ -208,22 +210,19 @@ class ChatService:
 
     async def _chat_engine(
         self,
+        use_context: ChatMode.CHAT.value,
         system_prompt: str | None = None,
-        use_context: bool = False,
         context_filter: ContextFilter | None = None,
         chat_history: list[ChatMessage] | None = None,
     ) -> BaseChatEngine:
         settings = self.settings
-        if use_context:
+        print("Chat mode:", use_context)
+        if use_context == ChatMode.AGENTIC.value:
             vector_index_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
-            )
-            # filter_retriever = MetadataFilterRetriever(
-            #     base_retriever=vector_index_retriever
-            # )
-            
+            )        
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -232,13 +231,12 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
-                # AutoPrevNextNodePostprocessor(
-                #     docstore=self.storage_context.docstore,
-                #     llm=self.llm_component.llm,
-                #     num_nodes=1
-                # ),
+                AutoPrevNextNodePostprocessor(
+                    docstore=self.storage_context.docstore,
+                    llm=self.llm_component.llm,
+                    num_nodes=3
+                ),
                 LongContextReorder(),
-                
                 # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
 
@@ -251,7 +249,7 @@ class ChatService:
                 node_postprocessors.append(rerank_postprocessor)
 
             response_synthesizer = get_response_synthesizer(
-                response_mode="compact",
+                response_mode="tree_summarize",
                 llm=self.llm_component.llm,
                 structured_answer_filtering=True,
                 text_qa_template=self._get_qa_template(),
@@ -266,7 +264,7 @@ class ChatService:
             )
             
             return AgenticCondenseChatEngine.from_defaults(
-                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
@@ -274,7 +272,54 @@ class ChatService:
                 context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
-
+        elif use_context == ChatMode.SEARCH.value:
+            vector_index_retriever = self.vector_store_component.get_retriever(
+                index=self.index,
+                context_filter=context_filter,
+                similarity_top_k=10,
+            )
+            # filter_retriever = MetadataFilterRetriever(
+            #     base_retriever=vector_index_retriever
+            # )
+            node_postprocessors = [
+                MetadataReplacementPostProcessor(target_metadata_key="window"),
+                SimilarityPostprocessor(
+                    similarity_cutoff=settings.rag.similarity_value,
+                    filter_empty=True,
+                    filter_duplicates=True,
+                    filter_similar=True
+                ),
+                LongContextReorder(),
+            ]
+            if settings.rag.rerank.enabled:
+                rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
+                    llm=self.llm_component.llm, 
+                    top_n=settings.rag.rerank.top_n,
+                    verbose=True
+                )
+                node_postprocessors.append(rerank_postprocessor)
+            response_synthesizer = get_response_synthesizer(
+                response_mode="compact",
+                llm=self.llm_component.llm,
+                structured_answer_filtering=True,
+                text_qa_template=self._get_qa_template(),
+                # streaming=True  # Enable streaming for better responsiveness
+            )
+            custom_query_engine = RetrieverQueryEngine.from_args(
+                retriever=vector_index_retriever,
+                llm=self.llm_component.llm,
+                response_synthesizer=response_synthesizer,
+                verbose=True  # For debugging and understanding the process
+            )
+            return CondensePlusContextChatEngine.from_defaults(
+                system_prompt=system_prompt,
+                retriever=custom_query_engine,
+                llm=self.llm_component.llm,  # Takes no effect at the moment
+                node_postprocessors=node_postprocessors,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                verbose=True,
+            )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
@@ -284,7 +329,7 @@ class ChatService:
     def stream_chat(
         self,
         messages: list[ChatMessage],
-        use_context: bool = False,
+        use_context: ChatMode.CHAT.value,
         context_filter: ContextFilter | None = None,
     ) -> CompletionGen:
         chat_engine_input = ChatEngineInput.from_messages(messages)
@@ -333,7 +378,7 @@ class ChatService:
     async def chat(
         self,
         messages: list[ChatMessage],
-        use_context: bool = False,
+        use_context: ChatMode.CHAT.value,
         context_filter: ContextFilter | None = None,
     ) -> Completion:
         chat_engine_input = ChatEngineInput.from_messages(messages)

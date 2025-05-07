@@ -265,6 +265,7 @@
 
 import os
 from pathlib import Path
+from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.server.chat.chat_service import ChatService
 from private_gpt.users import crud, models, schemas
 import itertools
@@ -296,12 +297,13 @@ import uuid
 completions_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
 
+
 class CompletionsBody(BaseModel):
     conversation_id: uuid.UUID
     history: Optional[list[OpenAIMessage]]
     prompt: str
     system_prompt: str | None = None
-    use_context: bool = False
+    use_context: str = ChatMode.CHAT.value
     context_filter: ContextFilter | None = None
     include_sources: bool = True
     stream: bool = False
@@ -393,7 +395,6 @@ def create_chat_item(db, sender, content, conversation_id):
         }
     },
 )
-
 async def prompt_completion(
     request: Request,
     body: CompletionsBody,
@@ -416,7 +417,8 @@ async def prompt_completion(
                 detail="Chat not found"
             )
         
-        if body.use_context:
+        is_using_context = body.use_context != ChatMode.CHAT.value        
+        if is_using_context:
             service = request.state.injector.get(IngestService)
             document_status = "requested"
             
@@ -435,7 +437,8 @@ async def prompt_completion(
             
             if not documents:
                 document_status = "no_documents"
-                body.use_context = False
+                is_using_context = False
+                body.use_context = ChatMode.CHAT.value
                 body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
                 body.context_filter = None
                 logger.warning(f"No documents found for department {department.id}")
@@ -444,7 +447,8 @@ async def prompt_completion(
                 
                 if not latest_doc_ids:
                     document_status = "no_valid_versions"
-                    body.use_context = False
+                    is_using_context = False
+                    body.use_context = ChatMode.CHAT.value
                     body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No valid document versions are available. "
                     body.context_filter = None
                     logger.warning(f"No valid document versions found for documents: {[doc.id for doc in documents]}")
@@ -483,9 +487,10 @@ async def prompt_completion(
             messages=[*build_history(), user_message],
             use_context=body.use_context,
             stream=body.stream,
-            include_sources=body.include_sources if body.use_context else False,
+            include_sources=body.include_sources if is_using_context else False,
             context_filter=body.context_filter,
         )        
+        
         audit_details = {
             "query": original_prompt,
             "user": current_user.username,
@@ -506,10 +511,12 @@ async def prompt_completion(
             details=audit_details,
             user_id=current_user.id
         )        
+        
         chat_response = await chat_completion(request, chat_body)
         
         if isinstance(chat_response, StreamingResponse):
             return chat_response         
+        
         ai_response = chat_response.model_dump(mode="json")
         
         chat = create_chat_item(

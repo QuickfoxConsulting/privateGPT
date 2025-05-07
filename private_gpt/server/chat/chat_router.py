@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
+from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.open_ai.openai_models import (
     OpenAICompletion,
     OpenAIMessage,
@@ -18,7 +19,7 @@ chat_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
 class ChatBody(BaseModel):
     messages: list[OpenAIMessage]
-    use_context: bool = False
+    use_context: str = ChatMode.CHAT.value
     context_filter: ContextFilter | None = None
     include_sources: bool = True
     stream: bool = False
