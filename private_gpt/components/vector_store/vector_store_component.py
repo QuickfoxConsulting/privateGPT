@@ -120,7 +120,7 @@ class VectorStoreComponent:
                 # client = QdrantClient(url="http://qdrant:6333", prefer_grpc=True)
                 # aclient = AsyncQdrantClient(url="http://qdrant:6333", prefer_grpc=True)
                 client = QdrantClient(url="http://qdrant:6333")
-                aclient = AsyncQdrantClient(url="http://qdrant:6333")
+                # aclient = AsyncQdrantClient(url="http://qdrant:6333")
                 # else:
                 #     client = QdrantClient(
                 #         **settings.qdrant.model_dump(exclude_none=True)
@@ -132,7 +132,7 @@ class VectorStoreComponent:
                     VectorStore,
                     QdrantVectorStore(
                         client=client,
-                        aclient=aclient,
+                        # aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
                         enable_hybrid=True, 
                         fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",

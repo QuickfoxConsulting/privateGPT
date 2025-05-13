@@ -1,0 +1,18 @@
+http:
+  routers:
+    ollama:
+      rule: "PathPrefix(`/`)"
+      service: "ollama-service"
+      entryPoints:
+        - web
+
+  services:
+    ollama-service:
+      loadBalancer:
+        servers:
+          - url: "http://ollama-1:11434"
+          - url: "http://ollama-2:11434"
+        healthCheck:
+          path: "/api/health"
+          interval: "10s"
+          timeout: "5s"

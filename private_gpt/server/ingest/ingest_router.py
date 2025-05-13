@@ -207,37 +207,46 @@ def delete_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail="Internal Server Error"
         )
-
+    
 async def create_documents(
-    db: Session, 
-    file_name: str = None, 
+    db: Session,
+    file_name: str = None,
     current_user: models.User = None,
-    departments: schemas.DocumentUpload = Depends(),
+    documents: schemas.DocumentUpload = None,
     log_audit: models.Audit = None,
 ):
     """
     Create documents in the `Document` table and update the
     `Document Department Association` table with the department IDs for the documents.
+    Using the new metadata JSONB field for storing tags, departments, and categories.
     """
-    department_ids = departments.departments
-    file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
+    file_ingested = crud.documents.get_by_base_filename(db, file_name=file_name)
     if file_ingested:
         raise HTTPException(
             status_code=409,
             detail="File already exists. Choose a different file.",
         )
-
+    
     logger.info(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
-
+    
+    metadata_dict = {
+        "tags": getattr(documents.doc_metadata, "tags", []),
+        "departments": getattr(documents.doc_metadata, "departments", []),
+        "category": getattr(documents.doc_metadata, "category", None)
+    }
+    
+    if hasattr(documents.doc_metadata, "custom_fields") and documents.doc_metadata.custom_fields:
+        metadata_dict.update(documents.doc_metadata.custom_fields)
+    
+    # Create document with doc_metadata
     docs_in = schemas.DocumentMakerCreate(
-        filename=file_name, 
-        uploaded_by=current_user.id, 
-        tags=departments.tags
+        filename=file_name,
+        uploaded_by=current_user.id,
+        doc_metadata=metadata_dict
     )
     
-    # Create the document
     document = crud.documents.create(db=db, obj_in=docs_in)
-
+    
     # Create the initial document version
     version_in = schemas.DocumentVersionCreate(
         document_id=document.id,
@@ -248,45 +257,69 @@ async def create_documents(
         uploaded_by=current_user.id,
     )
     document_version = crud.document_versions.create(db=db, obj_in=version_in)
-
-    # Update the document with the current version
+    
     document.current_version_id = document_version.id
     db.commit()
-
-    # Associate departments
-    department_ids = department_ids if department_ids else "1"
-    department_ids = [int(number) for number in department_ids.split(",")]
-
+    
+    # Extract department IDs from metadata for backward compatibility
+    department_ids = []
+    if metadata_dict.get("departments"):
+        departments_data = metadata_dict["departments"]
+        
+        if isinstance(departments_data, str):
+            department_names_or_ids = [d.strip() for d in departments_data.split(",") if d.strip()]
+        elif isinstance(departments_data, list):
+            department_names_or_ids = departments_data
+        else:
+            department_names_or_ids = []
+        
+        for dept in department_names_or_ids:
+            if isinstance(dept, int) or (isinstance(dept, str) and dept.isdigit()):
+                # If it's already an ID, add it directly
+                department_ids.append(int(dept))
+            elif isinstance(dept, str):
+                department = db.query(models.Department).filter(models.Department.name == dept).first()
+                if department:
+                    department_ids.append(department.id)
+                else:
+                    logger.warning(f"Department name '{dept}' not found in database")
+    
+    if not department_ids:
+        department_ids = [1]  
+    
+    # Associate departments (maintain backward compatibility)
     for department_id in department_ids:
         db.execute(
             models.document_department_association.insert().values(
-                document_id=document.id, 
+                document_id=document.id,
                 department_id=department_id
             )
         )
-
-    # Associate category if provided
-    if departments.category:  
+    
+    # Associate category for backward compatibility
+    category = metadata_dict.get("category")
+    if category:
+        category_id = category if isinstance(category, int) else db.query(models.Category).filter(models.Category.name == category).first()
+        if isinstance(category_id, models.Category):
+            category_id = category_id.id
+        
         db.execute(
             models.document_category_association.insert().values(
-                document_id=document.id, 
-                category_id=departments.category
+                document_id=document.id,
+                category_id=category_id
             )
-        )
-
+        )    
     log_audit(
-        model='Document', 
+        model='Document',
         action='create',
         details={
-            'filename': f"{file_name}", 
-            'user': f"{current_user.username}",
-            'departments': f"{department_ids}",
-            'categories': f"{departments.category}",
+            'filename': file_name,
+            'user': current_user.username,
+            'metadata': metadata_dict,
         },
         user_id=current_user.id
     )
     return document
-
 
 async def create_url_documents(
     db: Session, 
@@ -368,13 +401,6 @@ async def ingest_url(request: Request, url: str) -> IngestResponse:
         return {"message": f"There was an error uploading the file(s)\n {e}"}
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
-
-
-import re
-def extract_tags(text: str):
-    """Extracts hashtags from text and returns them as a clean list"""
-    return list(set(re.findall(r"#\w+", text)))  # Removes duplicates
-
 async def ingest(request: Request, file_path: str, tags: Optional[dict[str, Any]] = None) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
@@ -387,12 +413,7 @@ async def ingest(request: Request, file_path: str, tags: Optional[dict[str, Any]
                 f.write(file.read())
 
             with upload_path.open('rb') as f:
-                extracted_tags = extract_tags(tags)
-                formatted_tags = (
-                    {"tags": [tag.lstrip("#") for tag in extracted_tags]}
-                    if extracted_tags else {},
-                )
-                ingested_documents = await service.ingest_bin_data(file_name, f, formatted_tags)
+                ingested_documents = await service.ingest_bin_data(file_name, f, tags)
     except Exception as e:
         return {"message": f"There was an error uploading the file(s)\n {e}"}
 

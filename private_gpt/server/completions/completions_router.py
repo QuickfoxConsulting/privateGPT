@@ -327,7 +327,7 @@ class CompletionsBody(BaseModel):
                     "prompt": "How do you fry an egg?",
                     "system_prompt": "You are a rapper. Always answer with a rap.",
                     "stream": False,
-                    "use_context": False,
+                    "use_context": "chat",
                     "include_sources": False,
                     "category_id": 1,
                 }

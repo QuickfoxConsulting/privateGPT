@@ -1,7 +1,7 @@
-from typing import Optional
-from pydantic import BaseModel
+import json
+from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import List
 from fastapi import Form, UploadFile, File
 
 from .category import CategoryList
@@ -28,20 +28,28 @@ class DocumentEnable(BaseModel):
 class DocumentDepartmentUpdate(DocumentsBase):
     departments: List[int] = []
 
+class MetadataModel(BaseModel):
+    tags: Optional[List[str]] = []
+    departments: Optional[List[int]] = []
+    category: Optional[int] = None
+    
+    class Config:
+        extra = "allow" 
+
 class Document(BaseModel):
     id: int
     is_enabled: bool
     filename: str
-    tags: str
+    doc_metadata: Dict[str, Any] = {}  # JSONB field for all doc_metadata
     uploaded_by: int
     uploaded_at: datetime
-    departments: List[DepartmentList] = []
+    departments: List[DepartmentList] = []  # Keep for backward compatibility
 
     class Config:
         orm_mode = True
 
 class DocumentMakerChecker(DocumentCreate):
-    tags: Optional[str] = None
+    doc_metadata: Optional[Dict[str, Any]] = None
 
 class DocumentMakerCreate(DocumentMakerChecker):
     pass
@@ -67,18 +75,20 @@ class DocumentVerify(BaseModel):
     departments: List[DepartmentList] = []
     status: str
     categories: List[CategoryList] = []
+    doc_metadata: Optional[Dict[str, Any]] = {}
 
     class Config:
         orm_mode = True
 
 class DocumentFilter(BaseModel):
     filename: Optional[str] = None
-    tags: Optional[str] = None
+    tags: Optional[str] = None  # Search within doc_metadata.tags
     uploaded_by: Optional[str] = None
     action_type: Optional[str] = None
     status: Optional[str] = None
     order_by: Optional[str] = None
-    category_id: Optional[str] = None
+    category_id: Optional[str] = None  # Search within doc_metadata.category
+    department_id: Optional[str] = None  # Search within doc_metadata.departments
 
 class DocumentVersionBase(BaseModel):
     """Base schema for document version information."""
@@ -131,7 +141,7 @@ class DocumentView(BaseModel):
     id: int
     is_enabled: bool
     filename: str
-    tags: str = "" 
+    doc_metadata: Dict[str, Any] = {}  # Updated to use JSONB doc_metadata
     uploaded_by: str
     uploaded_at: datetime
     departments: List[DepartmentList] = []
@@ -145,7 +155,12 @@ class DocumentView(BaseModel):
                 "id": 1,
                 "is_enabled": True,
                 "filename": "example.pdf",
-                "tags": "important,confidential",
+                "doc_metadata": {
+                    "tags": ["policy", "HR"],
+                    "departments": [1, 2],
+                    "category": 1,
+                    "custom_field": "custom value"
+                },
                 "uploaded_by": "john.doe",
                 "uploaded_at": "2024-02-14T12:00:00",
                 "departments": [{"id": 1, "name": "HR"}],
@@ -167,8 +182,7 @@ class DocumentView(BaseModel):
 
 class DocCatUpdate(BaseModel):
     filename: str
-    departments: Optional[List[int]] = None
-    categories: Optional[List[int]] = None
+    doc_metadata: Dict[str, Any] = {}  # Contains departments and categories
 
 class DocumentList(DocumentsBase):
     id: int
@@ -176,6 +190,7 @@ class DocumentList(DocumentsBase):
     uploaded_by: int
     uploaded_at: datetime
     vesion: Optional[DocumentVersionOut]
+    doc_metadata: Dict[str, Any] = {}
     categories: List[CategoryList] = []
     departments: List[DepartmentList] = []
 
@@ -186,22 +201,37 @@ class DocumentList(DocumentsBase):
 # Form Model
 # =================
 class UrlUpload(BaseModel):
-    departments: str = Form(...)
-    tags: Optional[str] = Form(...)
-    category: int = Form(...)
+    doc_metadata: str = Form(...)  # JSON string containing departments, tags, category
     url: str = Form(...)
 
-class DocumentUpload(BaseModel):
-    departments: str = Form(...)
-    tags: Optional[str] = Form(...)
-    category: int = Form(...)
-    file: UploadFile = File(...)
+class MetadataSchema(BaseModel):
+    tags: Optional[List[str]] = []
+    category: Optional[str] = None
+    departments: Optional[List[Union[int, str]]] = []
+    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    
+    class Config:
+        extra = "allow" 
 
 class DocumentCategoryUpdate(BaseModel):
     filename: str
-    categories: List[int]
-
+    doc_metadata: Dict[str, Any] 
 
 class DocumentFilePath(BaseModel):
     filename: str
     file_path: str
+
+class DocumentUpload:
+    def __init__(
+        self,
+        doc_metadata: str = Form(...),
+        file: UploadFile = File(...)
+    ):
+        self.file = file
+        self.metadata_raw = doc_metadata
+
+        try:
+            parsed = json.loads(doc_metadata)
+            self.doc_metadata = MetadataSchema(**parsed)
+        except Exception as e:
+            raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")

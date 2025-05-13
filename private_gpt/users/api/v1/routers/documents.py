@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import uuid
@@ -73,7 +74,7 @@ def list_files(
             schemas.DocumentView(
                 id=doc.id,
                 filename=doc.filename,
-                tags=doc.tags or "", 
+                doc_metadata=doc.doc_metadata or {}, 
                 uploaded_by=get_username(db, doc.uploaded_by),
                 uploaded_at=doc.uploaded_at,
                 is_enabled=doc.is_enabled,
@@ -272,11 +273,12 @@ async def upload_documents(
     try:
         temp_path, sanitized_filename = await doc_manager.save_temp_file(documents.file)
         logger.info(f"Temp file:{temp_path} \n filename: {sanitized_filename}")
+        
         document = await create_documents(
             db=db,
             file_name=sanitized_filename,
             current_user=current_user,
-            departments=documents,
+            documents=documents,  # Pass the entire DocumentUpload object
             log_audit=log_audit,
         )
 
@@ -403,10 +405,12 @@ async def verify_documents(
                 },
                 user_id=current_user.id
             )
-            tags = document.tags if document.tags else ""
-            print(f"TAGS: {tags}")
-            print(f"CATEGORY: {document.categories}")
-            await ingest(request, final_path, tags)
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+            }
+            await ingest(request, final_path, metadata_dict)
             return document
             
         elif checker_in.status == MakerCheckerStatus.REJECTED.value:

@@ -326,7 +326,7 @@ class ChatService:
                 llm=self.llm_component.llm,
             )
 
-    def stream_chat(
+    async def stream_chat(
         self,
         messages: list[ChatMessage],
         use_context: ChatMode.CHAT.value,
@@ -346,8 +346,7 @@ class ChatService:
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
-
-        chat_engine = self._chat_engine(
+        chat_engine = await self._chat_engine(
             system_prompt=system_prompt,
             use_context=use_context,
             context_filter=context_filter,
@@ -356,20 +355,8 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        # sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
-        sources = []
-        seen_nodes = set()
-
-        for node in streaming_response.source_nodes:
-            # This example uses the node's content as the identifier
-            # Replace with whatever makes nodes "the same" in your context
-            node_key = hash(node.content)  # or whatever identifies duplicates
-            
-            if node_key not in seen_nodes:
-                seen_nodes.add(node_key)
-                sources.append(Chunk.from_node(node))
-
-
+        sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+        print("Sources:", sources)
         completion_gen = CompletionGen(
             response=streaming_response.response_gen, sources=sources
         )

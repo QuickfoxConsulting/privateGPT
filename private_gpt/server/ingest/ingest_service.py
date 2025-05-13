@@ -77,7 +77,7 @@ class IngestService:
         #     include_prev_next_rel=True
         # )
         node_parser = SentenceChunkWindowNodeParser.from_defaults(
-            chunk_size=10,
+            chunk_size=5,
             window_metadata_key="window",
             window_size=10,
             original_text_metadata_key="original_text",

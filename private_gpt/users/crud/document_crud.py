@@ -1,3 +1,4 @@
+import os
 from sqlalchemy.sql.expression import desc, asc
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session, joinedload
@@ -9,6 +10,12 @@ from private_gpt.users.models.document_department import document_department_ass
 from private_gpt.users.models.category import document_category_association, Category
 from private_gpt.users.crud.base import CRUDBase
 from private_gpt.constants import ALL_DEPARTMENT
+from sqlalchemy import and_
+
+def get_versioned_filename_pattern(file_name: str) -> str:
+    name, ext = os.path.splitext(file_name)
+    return f"{name}_v%{ext}" 
+
 
 class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
 
@@ -133,6 +140,9 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
 
         return query.all()
     
+    def get_by_base_filename(self, db: Session, file_name: str):
+        pattern = get_versioned_filename_pattern(file_name)
+        return db.query(Document).filter(Document.filename.like(pattern)).first()
 
 class CRUDDocumentVersion(CRUDBase[DocumentVersion, DocumentVersionCreate, DocumentVersionUpdate]):
     def get_by_id(self, db: Session, *, id: int) -> Optional[DocumentVersion]:

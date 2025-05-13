@@ -1517,6 +1517,11 @@ transformers = [
     {version = ">=4.42.0,<4.43.0", markers = "sys_platform == \"darwin\" and platform_machine == \"x86_64\""},
 ]
 
+[[tool.poetry.source]]
+name = "torch"
+url = "https://download.pytorch.org/whl/cu126"
+secondary = true
+
 [[package]]
 name = "docling-parse"
 version = "4.0.1"

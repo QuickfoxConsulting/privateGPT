@@ -39,7 +39,7 @@ class ChatBody(BaseModel):
                         },
                     ],
                     "stream": False,
-                    "use_context": True,
+                    "use_context": "search",
                     "include_sources": True,
                     "context_filter": {
                         "docs_ids": ["c202d5e6-7b69-4869-81cc-dd574ee8ee11"]
@@ -93,7 +93,7 @@ async def chat_completion(
         ChatMessage(content=m.content, role=MessageRole(m.role)) for m in body.messages
     ]
     if body.stream:
-        completion_gen = service.stream_chat(
+        completion_gen = await service.stream_chat(
             messages=all_messages,
             use_context=body.use_context,
             context_filter=body.context_filter,

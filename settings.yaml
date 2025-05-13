@@ -107,8 +107,8 @@ openai:
 ollama:
   llm_model: gemma3:4b
   embedding_model: nomic-embed-text:latest
-  api_base: http://localhost:11434
-  embedding_api_base: http://localhost:11434  # change if your embedding model runs on another ollama
+  api_base: http://ollama:11434
+  embedding_api_base: http://ollama:11434  # change if your embedding model runs on another ollama
   keep_alive: 5m
   request_timeout: 120.0
 

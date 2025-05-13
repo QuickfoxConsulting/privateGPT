@@ -2,6 +2,7 @@ from datetime import datetime
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Boolean, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from private_gpt.users.db.base_class import Base
 from private_gpt.users.models.enums import *
 
@@ -38,7 +39,7 @@ class Document(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(225), nullable=False, unique=True)
-    tags = Column(String(512), nullable=True)
+    doc_metadata = Column(JSONB, nullable=True)  # JSONB for metadata
 
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -68,7 +69,7 @@ class Document(Base):
     departments = relationship(
         "Department",
         secondary="document_department_association",
-        back_populates="documents"
+        back_populates="documents",
     )
     
     categories = relationship(
