@@ -268,7 +268,7 @@ class ChatService:
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
@@ -438,14 +438,7 @@ class ChatService:
         try:
             response = await chat_engine.achat(chat_history)
             import json
-            # try:
-
-            #     title_data = json.loads(response.response)
-            #     return TitleGeneration(title=title_data["title"])
-            # except json.JSONDecodeError:
-            #     return TitleGeneration(title=response.response.strip('{}').replace('"title":', '').strip().strip('"'))
             try:
-                # Extract JSON from the response even if it has prefix like "json"
                 import re
                 match = re.search(r'{\s*"title"\s*:\s*".+?"\s*}', response.response)
                 if match:

@@ -1,5 +1,6 @@
 
 import os
+import traceback
 from typing import Dict, List, Optional, Set
 import fitz  # PyMuPDF
 import pymupdf4llm
@@ -18,6 +19,23 @@ from collections import defaultdict
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.datamodel.base_models import InputFormat
+# from marker.converters.pdf import PdfConverter
+# from marker.models import create_model_dict
+# from marker.config.parser import ConfigParser
+
+# config = {
+#     "output_format": "markdown",
+#     # "use_llm": True,
+#     # "gemini_api_key": "AIzaSyDqn_QqEZR8Q48mmDu0f463JtK7g5jHrGs"
+# }
+# config_parser = ConfigParser(config)
+# converter = PdfConverter(
+#     artifact_dict=create_model_dict(),
+#     config=config_parser.generate_config_dict(),
+#     processor_list=config_parser.get_processors(),
+#     renderer=config_parser.get_renderer(),
+#     # llm_service=config_parser.get_llm_service(), 
+# )
 
 @dataclass
 class TextBlock:
@@ -33,25 +51,25 @@ chunker = LateChunker.from_recipe(
         embedding_model="all-MiniLM-L6-v2", 
         lang="en"
     )
-
 pipeline_options = PdfPipelineOptions(
             # artifacts_path=artifacts_path,
-            # do_ocr=True,
+            do_ocr=True, 
             do_table_structure=True,
-            # do_code_enrichment=True,          # Enable code enrichment for code snippets
+            do_code_enrichment=True,          # Enable code enrichment for code snippets
             do_formula_enrichment=True,         # Enable formula enrichment for mathematical formulas
-            # do_picture_classification=True,   # Classify images if present
+            do_picture_classification=True,   # Classify images if present
             do_picture_description=True,        # Generate descriptive captions for images
-            # generate_page_images=True,        # Capture page images for visual context
-            # images_scale=0.8,                 # Adjust the scale of generated images
+            generate_page_images=True,        # Capture page images for visual context
+            images_scale=0.8,                 # Adjust the scale of generated images
             table_structure_options=dict(
-                mode=TableFormerMode.FAST   # Use an accurate mode for table extraction
+                mode=TableFormerMode.ACCURATE   # Use an accurate mode for table extraction
             ),
-            enable_remote_services=False
+            enable_remote_services=False,
         )
-CONVERTER = DocumentConverter(
-    format_options={
-    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+
+converter = DocumentConverter(
+        format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
     }
 )
 class TextMatcher:
@@ -164,7 +182,8 @@ class CustomPDFReader(BaseReader):
         # ("####", "Header 4"),
         # ("#####", "Header 5"),
     ]
-    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.95):
+    def __init__(self, similarity_threshold: float = 0.95):
+        
         self.text_matcher = TextMatcher(similarity_threshold=similarity_threshold)
 
     def _extract_pdf_metadata(self, doc: fitz.Document) -> Dict:
@@ -242,14 +261,15 @@ class CustomPDFReader(BaseReader):
     def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
         text_blocks = self._extract_pdf_text_with_pages(pdf_path)
         filename = os.path.basename(pdf_path)
-        
         try:
-            result = CONVERTER.convert(pdf_path)
+            result = converter.convert(pdf_path)
             md_text = result.document.export_to_markdown()
-            # md_text = pymupdf4llm.to_markdown(pdf_path)
-
-        except Exception:
-            md_text = "\n\n".join(block.text for block in text_blocks)
+            # rendered = converter(pdf_path)
+            
+            # from marker.output import text_from_rendered
+            # md_text, _, images = text_from_rendered(rendered)
+        except Exception as e:
+            md_text = pymupdf4llm.to_markdown(pdf_path)
         
         blocks_by_page = defaultdict(list)
         for block in text_blocks:
@@ -273,4 +293,3 @@ class CustomPDFReader(BaseReader):
             )
             chunks.append(doc)
         return chunks
-

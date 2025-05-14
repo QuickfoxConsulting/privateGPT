@@ -13,6 +13,8 @@ from private_gpt.paths import models_cache_path, models_path
 from private_gpt.settings.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
 @singleton
 class LLMComponent:
     llm: LLM
@@ -33,10 +35,10 @@ class LLMComponent:
         #         )
         #     except Exception as e:
         #         logger.warning(
-        #             "Failed to download tokenizer %s. Falling back to "
-        #             "default tokenizer.",
-        #             settings.llm.tokenizer,
-        #             e,
+        #             f"Failed to download tokenizer {settings.llm.tokenizer}: {e!s}"
+        #             f"Please follow the instructions in the documentation to download it if needed: "
+        #             f"https://docs.privategpt.dev/installation/getting-started/troubleshooting#tokenizer-setup."
+        #             f"Falling back to default tokenizer."
         #         )
 
         logger.info("Initializing the LLM in mode=%s", llm_mode)
@@ -59,8 +61,7 @@ class LLMComponent:
                     "offload_kqv": True,
                 }
                 self.llm = LlamaCPP(
-                    model_path=str(
-                        models_path / settings.llamacpp.llm_hf_model_file),
+                    model_path=str(models_path / settings.llamacpp.llm_hf_model_file),
                     temperature=settings.llm.temperature,
                     max_new_tokens=settings.llm.max_new_tokens,
                     context_window=settings.llm.context_window,
@@ -119,9 +120,11 @@ class LLMComponent:
                     api_version="",
                     temperature=settings.llm.temperature,
                     context_window=settings.llm.context_window,
-                    max_new_tokens=settings.llm.max_new_tokens,
                     messages_to_prompt=prompt_style.messages_to_prompt,
                     completion_to_prompt=prompt_style.completion_to_prompt,
+                    tokenizer=settings.llm.tokenizer,
+                    timeout=openai_settings.request_timeout,
+                    reuse_client=False,
                 )
             case "ollama":
                 try:
@@ -142,14 +145,31 @@ class LLMComponent:
                     "repeat_penalty": ollama_settings.repeat_penalty,  # ollama llama-cpp
                 }
 
-                self.llm = Ollama(
-                    model=ollama_settings.llm_model,
+                # calculate llm model. If not provided tag, it will be use latest
+                model_name = (
+                    ollama_settings.llm_model + ":latest"
+                    if ":" not in ollama_settings.llm_model
+                    else ollama_settings.llm_model
+                )
+
+                llm = Ollama(
+                    model=model_name,
                     base_url=ollama_settings.api_base,
                     temperature=settings.llm.temperature,
                     context_window=settings.llm.context_window,
                     additional_kwargs=settings_kwargs,
                     request_timeout=ollama_settings.request_timeout,
                 )
+
+                if ollama_settings.autopull_models:
+                    from private_gpt.utils.ollama import check_connection, pull_model
+
+                    if not check_connection(llm.client):
+                        raise ValueError(
+                            f"Failed to connect to Ollama, "
+                            f"check if Ollama server is running on {ollama_settings.api_base}"
+                        )
+                    pull_model(llm.client, model_name)
 
                 if (
                     ollama_settings.keep_alive
@@ -163,11 +183,12 @@ class LLMComponent:
 
                         return wrapper
 
-                    Ollama.chat = add_keep_alive(Ollama.chat)
-                    Ollama.stream_chat = add_keep_alive(Ollama.stream_chat)
-                    Ollama.complete = add_keep_alive(Ollama.complete)
-                    Ollama.stream_complete = add_keep_alive(
-                        Ollama.stream_complete)
+                    Ollama.chat = add_keep_alive(Ollama.chat)  # type: ignore
+                    Ollama.stream_chat = add_keep_alive(Ollama.stream_chat)  # type: ignore
+                    Ollama.complete = add_keep_alive(Ollama.complete)  # type: ignore
+                    Ollama.stream_complete = add_keep_alive(Ollama.stream_complete)  # type: ignore
+
+                self.llm = llm
 
             case "azopenai":
                 try:
@@ -186,6 +207,19 @@ class LLMComponent:
                     api_key=azopenai_settings.api_key,
                     azure_endpoint=azopenai_settings.azure_endpoint,
                     api_version=azopenai_settings.api_version,
+                )
+            case "gemini":
+                try:
+                    from llama_index.llms.gemini import (  # type: ignore
+                        Gemini,
+                    )
+                except ImportError as e:
+                    raise ImportError(
+                        "Google Gemini dependencies not found, install with `poetry install --extras llms-gemini`"
+                    ) from e
+                gemini_settings = settings.gemini
+                self.llm = Gemini(
+                    model_name=gemini_settings.model, api_key=gemini_settings.api_key
                 )
             case "mock":
                 self.llm = MockLLM()

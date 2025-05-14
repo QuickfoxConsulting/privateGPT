@@ -22,7 +22,7 @@ ENV POETRY_VIRTUALENVS_IN_PROJECT=true
 FROM base AS dependencies
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
-ARG POETRY_EXTRAS="ui vector-stores-qdrant llms-ollama embeddings-huggingface"
+ARG POETRY_EXTRAS="ui vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini"
 RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 
 FROM base AS app
@@ -79,7 +79,7 @@ echo "Installing Fastembed"\n\
 pip install fastembed\n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=ollama poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 1' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 1' > /app/startup.sh && chmod +x /app/startup.sh
 
 # NOTE: We're keeping root user for simplicity
 ENTRYPOINT ["/app/startup.sh"]
