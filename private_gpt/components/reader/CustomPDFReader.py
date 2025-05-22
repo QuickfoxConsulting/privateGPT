@@ -1,7 +1,6 @@
-
 import os
-import traceback
 from typing import Dict, List, Optional, Set
+import uuid
 import fitz  # PyMuPDF
 import pymupdf4llm
 from llama_index.core.readers.base import BaseReader
@@ -17,25 +16,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode, AcceleratorDevice, AcceleratorOptions, RapidOcrOptions
 from docling.datamodel.base_models import InputFormat
-# from marker.converters.pdf import PdfConverter
-# from marker.models import create_model_dict
-# from marker.config.parser import ConfigParser
-
-# config = {
-#     "output_format": "markdown",
-#     # "use_llm": True,
-#     # "gemini_api_key": "AIzaSyDqn_QqEZR8Q48mmDu0f463JtK7g5jHrGs"
-# }
-# config_parser = ConfigParser(config)
-# converter = PdfConverter(
-#     artifact_dict=create_model_dict(),
-#     config=config_parser.generate_config_dict(),
-#     processor_list=config_parser.get_processors(),
-#     renderer=config_parser.get_renderer(),
-#     # llm_service=config_parser.get_llm_service(), 
-# )
 
 @dataclass
 class TextBlock:
@@ -51,27 +33,51 @@ chunker = LateChunker.from_recipe(
         embedding_model="all-MiniLM-L6-v2", 
         lang="en"
     )
+
+from huggingface_hub import snapshot_download
+download_path = snapshot_download(repo_id="SWHL/RapidOCR")
+
+det_model_path = os.path.join(
+    download_path, "PP-OCRv4", "en_PP-OCRv3_det_infer.onnx"
+)
+rec_model_path = os.path.join(
+    download_path, "PP-OCRv4", "ch_PP-OCRv4_rec_server_infer.onnx"
+)
+cls_model_path = os.path.join(
+    download_path, "PP-OCRv3", "ch_ppocr_mobile_v2.0_cls_train.onnx"
+)
+ocr_options = RapidOcrOptions(
+    det_model_path=det_model_path,
+    rec_model_path=rec_model_path,
+    cls_model_path=cls_model_path,
+)
+
 pipeline_options = PdfPipelineOptions(
             # artifacts_path=artifacts_path,
-            do_ocr=True, 
+            ocr_options=ocr_options,
+            do_ocr=True,
             do_table_structure=True,
             do_code_enrichment=True,          # Enable code enrichment for code snippets
             do_formula_enrichment=True,         # Enable formula enrichment for mathematical formulas
             do_picture_classification=True,   # Classify images if present
             do_picture_description=True,        # Generate descriptive captions for images
             generate_page_images=True,        # Capture page images for visual context
-            images_scale=0.8,                 # Adjust the scale of generated images
+            # images_scale=0.8,                 # Adjust the scale of generated images
             table_structure_options=dict(
                 mode=TableFormerMode.ACCURATE   # Use an accurate mode for table extraction
             ),
             enable_remote_services=False,
+            accelerator_options = AcceleratorOptions(
+                num_threads=4, device=AcceleratorDevice.AUTO
+            )
         )
 
-converter = DocumentConverter(
+docling_converter = DocumentConverter(
         format_options={
         InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
     }
 )
+
 class TextMatcher:
     def __init__(self, similarity_threshold: float = 0.9, overlap_threshold: float = 0.9):
         self.similarity_threshold = similarity_threshold
@@ -116,14 +122,13 @@ class TextMatcher:
         matched_pages = set()
         chunk_sentences = chunk_text.split('.')
         for sentence in chunk_sentences:
-            if len(sentence.strip()) < 10: 
+            if len(sentence.strip()) < 5: 
                 continue
             for block in text_blocks:
                 if sentence.strip() in self.preprocess_text(block.text):
                     matched_pages.add(block.page_num)
         
         if matched_pages:
-            # Fill gaps in page ranges
             page_list = sorted(matched_pages)
             if len(page_list) > 1:
                 matched_pages = set(self.fill_small_gaps(page_list))
@@ -135,7 +140,7 @@ class TextMatcher:
             return [1]
 
         # Create overlapping windows of text to better match chunks that cross page boundaries
-        window_size = 3
+        window_size = 10
         windowed_texts = []
         windowed_pages = []
         for i in range(len(block_texts)):
@@ -182,7 +187,7 @@ class CustomPDFReader(BaseReader):
         # ("####", "Header 4"),
         # ("#####", "Header 5"),
     ]
-    def __init__(self, similarity_threshold: float = 0.95):
+    def __init__(self, chunk_size: int = 512, similarity_threshold: float = 0.95):
         
         self.text_matcher = TextMatcher(similarity_threshold=similarity_threshold)
 
@@ -261,23 +266,22 @@ class CustomPDFReader(BaseReader):
     def load_data(self, pdf_path: str, extra_info: Optional[Dict] = None) -> List[Document]:
         text_blocks = self._extract_pdf_text_with_pages(pdf_path)
         filename = os.path.basename(pdf_path)
-        try:
-            result = converter.convert(pdf_path)
-            md_text = result.document.export_to_markdown()
-            # rendered = converter(pdf_path)
-            
-            # from marker.output import text_from_rendered
-            # md_text, _, images = text_from_rendered(rendered)
-        except Exception as e:
-            md_text = pymupdf4llm.to_markdown(pdf_path)
         
+        try:
+            result = docling_converter.convert(pdf_path)
+            md_text = result.document.export_to_markdown()
+
+        except Exception:
+            md_text = pymupdf4llm.to_markdown(pdf_path)  
+
         blocks_by_page = defaultdict(list)
         for block in text_blocks:
             blocks_by_page[block.page_num].append(block)
         
         late_chunks = chunker(md_text)
         chunks = []
-        for chunk in late_chunks:
+        document_id = str(uuid.uuid4())
+        for chunk_idx, chunk in enumerate(late_chunks):
             text = chunk.text
             page_numbers = self.text_matcher.find_page_ranges(text, text_blocks)
             chunk_metadata = {
@@ -286,6 +290,12 @@ class CustomPDFReader(BaseReader):
                 'total_pages': max(block.metadata['total_pages'] for block in text_blocks),
                 'title': next(iter(text_blocks)).metadata.get('title', ''), 
                 'author': next(iter(text_blocks)).metadata.get('author', ''),
+                'document_id': document_id,
+                'chunk_id': f"{document_id}_{chunk_idx}",
+                'chunk_index': chunk_idx,
+                'total_chunks': len(text),
+                'prev_chunk_id': f"{document_id}_{chunk_idx-1}" if chunk_idx > 0 else None,
+                'next_chunk_id': f"{document_id}_{chunk_idx+1}" if chunk_idx < len(text)-1 else None,
             }
             doc = Document( 
                 text=text,
@@ -293,3 +303,4 @@ class CustomPDFReader(BaseReader):
             )
             chunks.append(doc)
         return chunks
+

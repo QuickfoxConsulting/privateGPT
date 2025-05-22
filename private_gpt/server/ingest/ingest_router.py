@@ -7,6 +7,7 @@ import aiofiles
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
+from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.users.models.document import DocumentVersion, MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
@@ -242,7 +243,8 @@ async def create_documents(
     docs_in = schemas.DocumentMakerCreate(
         filename=file_name,
         uploaded_by=current_user.id,
-        doc_metadata=metadata_dict
+        doc_metadata=metadata_dict,
+        doc_status=DocumentStatus.INGESTING.value
     )
     
     document = crud.documents.create(db=db, obj_in=docs_in)
@@ -253,7 +255,7 @@ async def create_documents(
         version_number=1,
         status=MakerCheckerStatus.PENDING,
         action_type=MakerCheckerActionType.INSERT,
-        file_path="",  # This will be updated later
+        file_path="",
         uploaded_by=current_user.id,
     )
     document_version = crud.document_versions.create(db=db, obj_in=version_in)

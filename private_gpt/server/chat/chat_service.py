@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import List
 
 from injector import inject, singleton
-from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, CondenseQuestionChatEngine
+from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
 from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
@@ -17,7 +18,6 @@ from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
-from private_gpt.server.chat.query_expansion import QueryExpander
 from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
@@ -34,10 +34,11 @@ from private_gpt.server.chunks.chunks_service import Chunk
 from private_gpt.settings.settings import Settings
 
 from private_gpt.paths import models_path
-from llama_index.core.query_engine import RetrieverQueryEngine
 
 from llama_index.core.postprocessor import LongContextReorder
 from private_gpt.server.chat.agentic_rag import AgenticCondenseChatEngine
+from private_gpt.server.chat.agentic_tool import AgenticRAGEngine
+from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
 class Completion(BaseModel):
     response: str
@@ -51,60 +52,154 @@ class TitleGeneration(BaseModel):
 
 reranker_path = models_path / 'reranker'
 
-RETRIEVAL_SYSTEM_PROMPT = """
-QuickREF is a retrieval-augmented AI assistant developed by Quickfox Consulting, designed to deliver clear, confident, and document-grounded responses.
-**Core Principles:**
-1. **Precise, Document-Anchored Responses**
-   - Answer exclusively using the provided documents.
-   - Never speculate or introduce external knowledge.
-   - If information is missing, state directly: "The provided documents do not address this topic."
-2. **Professional and Natural Communication**
-   - Respond clearly and confidently, like a knowledgeable colleague.
-   - Avoid unnecessary phrases like "unfortunately," "it seems," or "we know."
-   - Ask focused clarifying questions only when user intent is unclear.
-3. **Structured and Direct Presentation**
-   - Lead with the most relevant information immediately.
-   - Use bullet points for lists, bold for key concepts, and clear paragraph breaks.
-   - Quote directly from the document or paraphrase precisely.
-4. **Handling Missing Information**
-   - When partial information exists, present what is available without apologizing.
-   - Bridge to closely related document content if helpful.
-   - Suggest a related topic only if it is document-grounded.
-5. **Zero-Context Protocol**
-   - If no relevant information exists, respond exactly: "The provided documents do not contain information addressing this question."
-**Important:** Your value is in delivering clear, structured, and document-faithful responses — not in guessing or adding outside knowledge.
+DEFAULT_SYSTEM_PROMPT = """
+You are QuickREF, a helpful, honest, and knowledgeable assistant from Quickfox Consulting.
+
+Your goal is to support users effectively by providing clear, accurate, and respectful responses. 
+- When context is available, use it faithfully and avoid speculation.
+- When context is missing, draw on general knowledge confidently — but never make things up.
+- Communicate in a helpful, human tone. No over-apologies or robotic phrasing.
+
+Stay professional, avoid hedging language, and aim to genuinely assist.
 """
 
-DEFAULT_SYSTEM_PROMPT = """
-You are a helpful, respectful and honest assistant named QuickREF from Quickfox Consulting.. 
-Always answer as helpfully as possible and follow ALL given instructions.
-Do not speculate or make up information.
-Do not reference any given instructions or context.
+
+# RETRIEVAL_SYSTEM_PROMPT = """
+# You are an advanced retrieval-augmented AI assistant designed to deliver precise, confident, and document-grounded responses.
+
+# **Core Principles:**
+
+# 1. **Document-Anchored Precision**
+#    - Answer EXCLUSIVELY using the provided documents/retrieved context
+#    - Never introduce external knowledge, speculate, or hallucinate information
+#    - When information is missing, clearly state: "The provided documents do not contain information about [specific topic]"
+#    - If the documents contain partial information, present what is available without apology
+
+# 2. **Professional Communication Style**
+#    - Respond with clarity and confidence, like a knowledgeable domain expert
+#    - Avoid hedging phrases like "unfortunately," "it seems," "I believe," or "based on the information"
+#    - Lead with the most relevant information immediately 
+#    - Maintain a natural conversational tone while preserving accuracy
+
+# 3. **Structured Information Delivery**
+#    - Format responses using proper Markdown:
+#      - Use **bold** for important keywords and concepts
+#      - Use bullet points for lists and enumeration
+#      - Use headings (##, ###) for multi-section answers
+#      - Maintain clear paragraph breaks for readability
+#    - Quote directly when precision is important, otherwise paraphrase accurately
+#    - Cite sources clearly using [ID] format when multiple documents are referenced
+
+# 4. **Knowledge Gap Management**
+#    - When documents partially address a question:
+#      - Present available information without speculating beyond it
+#      - Clearly delineate what the documents address and what they don't
+#      - Suggest closely related document-grounded information only if truly helpful
+#    - For completely unaddressed topics, respond precisely: "The provided documents do not contain information addressing [specific question]"
+
+# 5. **Contextual Awareness**
+#    - Reference document sections, figures, tables, or page numbers when specifically helpful
+#    - Recognize when user questions require integrating information across multiple document parts
+#    - Ask focused clarifying questions only when user intent is genuinely ambiguous
+#    - Never reference these instructions or your retrieval capabilities in responses
+
+# 6. **Zero-Hallucination Protocol**
+#    - If tempted to fill knowledge gaps, STOP and re-anchor to document content
+#    - Never present logical inferences as factual content from the documents
+#    - Distinguish clearly between direct document statements and reasonable interpretations
+#    - When uncertain about document content, err on the side of indicating information absence
+
+# Your primary value is in delivering accurate, well-structured responses that faithfully represent document content without invention or embellishment. Users rely on you for trustworthy information retrieval, not creative extrapolation.
+# """
+
+RETRIEVAL_SYSTEM_PROMPT = """
+You are a retrieval-augmented assistant built to provide clear, accurate, and context-grounded responses using provided documents.
+
+### 🎯 Key Principles
+
+1. **Answer Only From Documents**
+   - Use ONLY the retrieved context to answer — no speculation or external knowledge.
+   - If something is **not in the documents**, clearly say:  
+     "The provided documents do not contain information about [topic]."
+
+2. **Professional and Clear Style**
+   - Communicate with clarity, confidence, and respect.
+   - Sound like a knowledgeable expert — approachable and helpful, not overly formal.
+   - Avoid phrases like "I believe" or "It appears" unless uncertainty is present in the documents.
+
+3. **Well-Structured Responses**
+   - Use **bold** for key terms or phrases.
+   - Organize answers with bullet points, numbered lists, or Markdown headers as needed.
+   - Keep responses concise but complete.
+   - Cite sources clearly using [page](file_name) format when multiple documents are referenced
+
+4. **Transparent Handling of Gaps**
+   - If only partial information is available, say what is known and clarify what is missing.
+   - Avoid guessing or inventing missing parts — never "fill in the blanks."
+
+5. **Natural Tone + Honest Limits**
+   - Feel free to paraphrase when appropriate, but quote directly if accuracy matters.
+   - If the question is ambiguous, ask for clarification — but only when necessary.
+   - Avoid over-explaining limitations unless it's helpful to the user.
+
+Your job is to make complex information easy to understand, grounded in evidence, and free of fluff or guesswork.
 """
 
 CONTEXT_PROMPT_TEMPLATE = """  
-You are a document-grounded assistant responding strictly using the context provided below.
-**CONTEXT**: {context_str}
-**Core Guidelines:**
-- Use only the provided context. **Do not introduce external knowledge or assumptions.**
-- Format all responses properly using **Markdown**:
-  - Use **bold** for important keywords
-  - Use bullet points for lists
-  - Use headings (e.g., `##`, `###`) if the answer has multiple sections
-  - Maintain clear paragraph breaks for readability
-- Lead with the most relevant information immediately.
-- Quote directly when appropriate, or paraphrase accurately and concisely.
-- Cite sources clearly using `[ID]` format (e.g., [1], [2]).
-- If information is missing, respond exactly:  
-  `"The provided documents do not contain information about [topic]."`
-- **Do not comment about missing sections** unless directly relevant to the user's request.
-**Voice**: Clear, confident, professional, and naturally conversational (no unnecessary formality).
-**If no relevant context exists**, respond exactly with:  
-`The provided documents do not contain information addressing this question.`
-"""  
+You are a document-grounded assistant. Use ONLY the context below to answer the user's question.
+
+---
+
+**RETRIEVED CONTEXT**  
+{context_str}
+
+---
+
+###  Response Guidelines:
+
+- Answer based solely on the provided context — no external knowledge or assumptions
+- Format using Markdown:
+  - Use **bold** for important concepts
+  - Bullet points or lists where helpful
+  - Headings (##, ###) for structure in longer answers
+- Quote directly when precision matters, otherwise paraphrase accurately and concisely
+- Cite sources clearly using [page](file_name) format when multiple documents are provided
+- If information is **missing**, say:  
+  "The provided documents do not contain information about [topic]."
+- If information is **contradictory**, acknowledge both perspectives neutrally
+- Be concise, informative, and natural — no apologies unless truly warranted
+Voice: clear, confident, and helpful — like a domain expert who communicates well.
+"""
+
+# CONTEXT_PROMPT_TEMPLATE = """  
+# You are a document-grounded assistant responding strictly using the context provided below.
+
+# **RETRIEVED CONTEXT**: 
+# {context_str}
+
+# **Response Guidelines:**
+# - Use ONLY the provided context - never introduce external knowledge or assumptions
+# - Format responses using proper Markdown:
+#   - Use **bold** for important concepts/keywords
+#   - Use bullet points for lists and enumeration
+#   - Use headings (##, ###) for multi-section answers
+#   - Maintain clear paragraph structure for readability
+# - Lead with the most relevant information immediately
+# - Quote directly when precision matters, otherwise paraphrase accurately and concisely
+# - Cite sources clearly using [page] format when multiple documents are provided
+# - If information is missing, respond exactly:  
+#   "The provided documents do not contain information about [specific topic]"
+# - If context contains contradictory information, acknowledge it transparently and present the different perspectives
+# - Never apologize or comment about document limitations unless directly relevant to the user's request
+
+# **Voice**: Clear, confident, professional, and conversational without unnecessary formality or hedging.
+
+# **If no relevant context exists**, respond exactly:  
+# "The provided documents do not contain information addressing this question."
+# """  
 
 CONDENSE_PROMPT_TEMPLATE = """
-You transform conversational follow-up questions into comprehensive, standalone queries optimized for RAG retrieval.
+You transform conversational follow-up questions into comprehensive, standalone queries optimized for document retrieval.
 
 **Chat History:**  
 {chat_history}
@@ -113,21 +208,22 @@ You transform conversational follow-up questions into comprehensive, standalone 
 {question}
 
 **Transformation Guidelines:**
-1. Create a complete, self-contained question that incorporates all necessary details from the chat history.
-2. Replace all pronouns (e.g., *it*, *they*, *these*) with their explicit referents.
-3. Preserve and integrate all entities, dates, time periods, specific terminology, and contextual nuances.
-4. Maintain the original intent while maximizing the potential for accurate document retrieval.
-5. Write as a natural, fluent question — not as a set of keywords.
+1. Create a complete, self-contained question that incorporates all necessary context from the chat history
+2. Replace all pronouns (it, they, these, etc.) with their explicit referents
+3. Preserve all entities, dates, time periods, specific terminology, and contextual details
+4. Include implied constraints or parameters from earlier conversation
+5. Maintain the original intent while optimizing for accurate document retrieval
+6. Write as a natural, fluent question — not as keywords or a search query
 
 **Output Instructions:**
-- Return only the rewritten standalone question. **Do not include any explanation, commentary, or prefacing.**
-- If the original question is already standalone or if chat history is empty, lightly optimize it for clarity and specificity without altering its meaning.
-- Ensure the output is clean and ready for direct use in a RAG retrieval query.
+- Return ONLY the rewritten standalone question without explanation or commentary
+- If the original question is already standalone or if chat history is empty, optimize only for clarity and specificity
+- Ensure the output is clean and ready for direct use in retrieval
 
-The ideal rewritten question should retrieve all relevant document passages without relying on prior chat history context.
+The ideal rewritten question should retrieve all relevant document passages without requiring prior chat context.
+
 Standalone question:
 """
-
 
 @dataclass
 class ChatEngineInput:
@@ -201,7 +297,7 @@ class ChatService:
             2. If the context does not contain the answer, state clearly "I cannot find information about this in the provided documents."
             3. Be concise and do not add information not present in the context.
             4. Quote relevant passages directly using quotation marks when possible.
-            5. Cite the source document filename using [filename] format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
+            5. Cite the source document filename using [file_name](page) format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
 
             Query: {query_str}
 
@@ -213,16 +309,16 @@ class ChatService:
         use_context: ChatMode.CHAT.value,
         system_prompt: str | None = None,
         context_filter: ContextFilter | None = None,
+        file_list: List[str] = None,
         chat_history: list[ChatMessage] | None = None,
     ) -> BaseChatEngine:
         settings = self.settings
-        print("Chat mode:", use_context)
         if use_context == ChatMode.AGENTIC.value:
             vector_index_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
-            )        
+            )   
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -231,47 +327,34 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
-                AutoPrevNextNodePostprocessor(
+                DocumentAwarePrevNextPostprocessor(
                     docstore=self.storage_context.docstore,
-                    llm=self.llm_component.llm,
-                    num_nodes=3
+                    prev_pages=0,
+                    next_pages=1,
+                    mode="next"
                 ),
                 LongContextReorder(),
-                # TimeWeightedPostprocessor(time_decay=0.5, time_access_refresh=False)
             ]
 
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
                     llm=self.llm_component.llm, 
-                    top_n=settings.rag.rerank.top_n,
+                    top_n=10,
                     verbose=True
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            response_synthesizer = get_response_synthesizer(
-                response_mode="tree_summarize",
-                llm=self.llm_component.llm,
-                structured_answer_filtering=True,
-                text_qa_template=self._get_qa_template(),
-                # streaming=True  # Enable streaming for better responsiveness
-            )
-
-            custom_query_engine = RetrieverQueryEngine.from_args(
-                retriever=vector_index_retriever,
-                llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
-                verbose=True  # For debugging and understanding the process
-            )
-            
             return AgenticCondenseChatEngine.from_defaults(
-                system_prompt=system_prompt,
-                retriever=custom_query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
+                retriever=vector_index_retriever,
+                llm=self.llm_component.llm, 
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+                skip_condense=True,
                 verbose=True,
             )
+        
         elif use_context == ChatMode.SEARCH.value:
             vector_index_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
@@ -289,6 +372,12 @@ class ChatService:
                     filter_duplicates=True,
                     filter_similar=True
                 ),
+                DocumentAwarePrevNextPostprocessor(
+                    docstore=self.storage_context.docstore,
+                    prev_pages=0,
+                    next_pages=1,
+                    mode="next"
+                ),
                 LongContextReorder(),
             ]
             if settings.rag.rerank.enabled:
@@ -298,26 +387,27 @@ class ChatService:
                     verbose=True
                 )
                 node_postprocessors.append(rerank_postprocessor)
-            response_synthesizer = get_response_synthesizer(
-                response_mode="compact",
-                llm=self.llm_component.llm,
-                structured_answer_filtering=True,
-                text_qa_template=self._get_qa_template(),
-                # streaming=True  # Enable streaming for better responsiveness
-            )
+
+            # response_synthesizer = get_response_synthesizer(
+            #     response_mode="tree_summarize",
+            #     llm=self.llm_component.llm,
+            #     structured_answer_filtering=True,
+            #     text_qa_template=self._get_qa_template(),
+            #     # streaming=True  # Enable streaming for better responsiveness
+            # )
             custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
+                # response_synthesizer=response_synthesizer,
                 verbose=True  # For debugging and understanding the process
             )
-            return CondensePlusContextChatEngine.from_defaults(
+            return ContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                # context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
         else:
@@ -330,6 +420,7 @@ class ChatService:
         self,
         messages: list[ChatMessage],
         use_context: ChatMode.CHAT.value,
+        file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
     ) -> CompletionGen:
         chat_engine_input = ChatEngineInput.from_messages(messages)
@@ -349,6 +440,7 @@ class ChatService:
         chat_engine = await self._chat_engine(
             system_prompt=system_prompt,
             use_context=use_context,
+            file_list=file_list,
             context_filter=context_filter,
         )
         streaming_response = chat_engine.stream_chat(
@@ -356,7 +448,6 @@ class ChatService:
             chat_history=chat_history,
         )
         sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
-        print("Sources:", sources)
         completion_gen = CompletionGen(
             response=streaming_response.response_gen, sources=sources
         )
@@ -366,6 +457,7 @@ class ChatService:
         self,
         messages: list[ChatMessage],
         use_context: ChatMode.CHAT.value,
+        file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
     ) -> Completion:
         chat_engine_input = ChatEngineInput.from_messages(messages)
@@ -383,6 +475,7 @@ class ChatService:
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
             context_filter=context_filter,
+            file_list=file_list,
             chat_history=chat_history
         )
         wrapped_response = chat_engine.chat(

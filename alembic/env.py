@@ -18,6 +18,7 @@ from private_gpt.users.models.company import Company
 from private_gpt.users.models.document import DocumentVersion, Document
 from private_gpt.users.models.department import Department
 from private_gpt.users.models.document_department import document_department_association
+from private_gpt.users.models.document_selection import document_selection_association
 from private_gpt.users.models.audit import Audit
 
 # this is the Alembic Config object, which provides

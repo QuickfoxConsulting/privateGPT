@@ -107,6 +107,7 @@ class EmbeddingComponent:
                 self.embedding_model = GeminiEmbedding(
                     api_key=settings.gemini.api_key,
                     model_name=settings.gemini.embedding_model,
+
                 )
             case "mistralai":
                 try:

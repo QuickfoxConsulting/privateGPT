@@ -20,6 +20,7 @@ from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 from private_gpt.users.core.config import settings
 from private_gpt.users import crud, models, schemas
+from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.constants import UNCHECKED_DIR, UPLOAD_DIR
 from private_gpt.manager.document_manager import DocumentManager
 from private_gpt.server.ingest.ingest_router import create_documents, ingest
@@ -46,15 +47,13 @@ def list_files(
     db: Session = Depends(deps.get_db),
     filter: str = Query(None, description="Filter documents by filename"), 
     current_user: models.User = Security(
-        deps.get_current_user,
-        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]], 
+        deps.get_current_user, 
     )
 ) -> Page[schemas.DocumentView]:
     """
     List documents based on user role with pagination and filtering.
     """
     try:
-        # Get base query based on role
         role = current_user.user_role.role.name if current_user.user_role else None
         if role in ("SUPER_ADMIN", "OPERATOR"):
             base_query = crud.documents.get_multi_documents(db)
@@ -74,6 +73,7 @@ def list_files(
             schemas.DocumentView(
                 id=doc.id,
                 filename=doc.filename,
+                doc_status=doc.doc_status,
                 doc_metadata=doc.doc_metadata or {}, 
                 uploaded_by=get_username(db, doc.uploaded_by),
                 uploaded_at=doc.uploaded_at,
@@ -127,10 +127,7 @@ def update_document(
     db: Session = Depends(deps.get_db),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     current_user: models.User = Security(
-        deps.get_current_user,
-        scopes=[Role.ADMIN["name"],
-                Role.SUPER_ADMIN["name"],
-                Role.OPERATOR["name"]]
+        deps.get_current_user
     )
 ):
     '''
@@ -213,7 +210,7 @@ def update_category(
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     current_user: models.User = Security(
         deps.get_current_user,
-        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"], Role.ADMIN["name"]],
     )
 ):
     """
@@ -278,10 +275,9 @@ async def upload_documents(
             db=db,
             file_name=sanitized_filename,
             current_user=current_user,
-            documents=documents,  # Pass the entire DocumentUpload object
+            documents=documents, 
             log_audit=log_audit,
         )
-
         if document.current_version:
             version_update = schemas.DocumentVersionUpdate(
                 file_path=str(temp_path),
@@ -293,7 +289,6 @@ async def upload_documents(
                 db_obj=document.current_version,
                 obj_in=version_update
             )
-
         if not ENABLE_MAKER_CHECKER:
             checker_in = schemas.DocumentUpdate(
                 id=document.id,
@@ -307,7 +302,6 @@ async def upload_documents(
                 log_audit=log_audit,
                 current_user=current_user
             )
-
         return document
 
     except HTTPException:
@@ -328,7 +322,7 @@ async def verify_documents(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,
-        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"], Role.ADMIN['name']],
     )
 ):
     """Verify (approve/reject) a document."""
@@ -410,7 +404,11 @@ async def verify_documents(
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
             }
-            await ingest(request, final_path, metadata_dict)
+            ingest_response = await ingest(request, final_path, metadata_dict)
+            status_update = schemas.StatusUpdate(
+               doc_status=DocumentStatus.READY.value
+            )
+            crud.documents.update(db=db, db_obj=document, obj_in=status_update)
             return document
             
         elif checker_in.status == MakerCheckerStatus.REJECTED.value:
@@ -468,7 +466,6 @@ async def get_document_by_filename(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,
-        # scopes=["documents:read"]  # Add scope for better permission handling
     )
 ):
     """
@@ -481,10 +478,7 @@ async def get_document_by_filename(
     - DocumentFilePath: Object containing filename and relative file path
     """
     try:
-        # Sanitize filename to prevent path traversal
-        safe_filename = os.path.basename(filename)
-        
-        # Get document by filename
+        safe_filename = os.path.basename(filename)        
         document = crud.documents.get_by_filename(db, file_name=safe_filename)
         
         if not document:
@@ -916,6 +910,95 @@ def update_document_associations(
     except Exception as e:
         print(traceback.format_exc())
         logger.error(f"Error updating document associations: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error: Unable to update document associations.",
+        )
+
+@router.post('/document_selection')
+def update_user_document_association(
+    request: Request,
+    documents: schemas.DocumentSelection,
+    db: Session = Depends(deps.get_db),
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    current_user: models.User = Security(
+        deps.get_current_user
+    )
+):
+    """
+    Update the selected document for the given user for query.
+    
+    This endpoint allows users to create a personalized document selection for RAG queries.
+    Selected documents will be used as the primary source for answering the user's questions.
+    
+    Args:
+        request: FastAPI request object
+        documents: Schema containing document IDs to select
+        db: Database session dependency
+        log_audit: Audit logging dependency
+        current_user: Current authenticated user
+        
+    Returns:
+        JSON response with operation status
+        
+    Raises:
+        HTTPException: If document selection operation fails
+    """
+    try:
+        from private_gpt.users.services import DocumentSelectionService
+        
+        service = DocumentSelectionService(db)
+        
+        if len(documents.document_ids) == 0:
+            service.clear_selection(current_user.id)
+            
+            log_audit(
+                user_id=current_user.id,
+                action="document_selection_clear",
+                model="Document",
+                details="User cleared all selected documents"
+            )
+            
+            return {
+                "status": "success",
+                "message": "Successfully cleared all document selections",
+                "selected_count": 0
+            }
+        
+        current_selections = service.get_selected_documents(user_id=current_user.id)
+        current_ids = set(row.id for row in current_selections)
+        new_ids = set(documents.document_ids)
+        
+        to_add = new_ids - current_ids
+        to_remove = current_ids - new_ids
+        
+        if to_remove:
+            service.unselect_documents(current_user.id, list(to_remove))
+        
+        if to_add:
+            service.select_documents(current_user.id, list(to_add))
+        
+        log_audit(
+            user_id=current_user.id,
+            action="document_selection_update",
+            model="Document",
+            details=f"User selected {len(documents.document_ids)} documents (added {len(to_add)}, removed {len(to_remove)})"
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Successfully selected {len(documents.document_ids)} documents",
+            "selected_count": len(documents.document_ids),
+            "changes": {
+                "added": len(to_add),
+                "removed": len(to_remove)
+            }
+        }
+        
+    except Exception as e:
+        trace = traceback.format_exc()
+        logger.error(f"Error updating document associations: {str(e)}\n{trace}")
+        
         raise HTTPException(
             status_code=500,
             detail="Internal Server Error: Unable to update document associations.",

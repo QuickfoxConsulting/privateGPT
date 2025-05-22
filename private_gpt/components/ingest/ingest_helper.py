@@ -30,16 +30,16 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
             VideoAudioReader,
         )
         from llama_index.readers.file.tabular import PandasExcelReader
-        from private_gpt.components.reader.CustomPDFReader import CustomPDFReader
+        from private_gpt.components.reader.LlamaParseReader import LlamaParseReader
     except ImportError as e:
         raise ImportError("`llama-index-readers-file` package not found") from e
 
     default_file_reader_cls: dict[str, type[BaseReader]] = {
         ".hwp": HWPReader,
-        ".pdf": CustomPDFReader,
-        ".docx": DocxReader,
-        ".pptx": PptxReader,
-        ".ppt": PptxReader,
+        ".pdf": LlamaParseReader,
+        ".docx": LlamaParseReader,
+        ".pptx": LlamaParseReader,
+        ".ppt": LlamaParseReader,
         ".pptm": PptxReader,
         ".jpg": ImageReader,
         ".png": ImageReader,
@@ -51,8 +51,8 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
         ".md": MarkdownReader,
         ".mbox": MboxReader,
         ".ipynb": IPYNBReader,
-        ".xlsx": PandasExcelReader,
-        ".xls": PandasExcelReader,
+        ".xlsx": LlamaParseReader,
+        ".xls": LlamaParseReader,
     }
     return default_file_reader_cls
 
@@ -74,20 +74,19 @@ class IngestionHelper:
     """
 
     @staticmethod
-    def transform_file_into_documents(
+    async def transform_file_into_documents(
         file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None
     ) -> list[Document]:
-        documents = IngestionHelper._load_file_to_documents(file_name, file_data)
+        documents = await IngestionHelper._load_file_to_documents(file_name, file_data)
         for document in documents:
             document.metadata.update(file_metadata or {})
-            print("UPDATED METADATA: ", document.metadata)
             document.metadata["file_name"] = file_name
             document.metadata["ingestion_time"] = datetime.now(timezone.utc).isoformat()
         IngestionHelper._exclude_metadata(documents)
         return documents
 
     @staticmethod
-    def _load_file_to_documents(file_name: str, file_data: Path) -> list[Document]:
+    async def _load_file_to_documents(file_name: str, file_data: Path) -> list[Document]:
         logger.debug("Transforming file_name=%s into documents", file_name)
         extension = Path(file_name).suffix
         reader_cls = FILE_READER_CLS.get(extension)
@@ -103,7 +102,7 @@ class IngestionHelper:
             except:
                 return file_data
         logger.debug("Specific reader found for extension=%s", extension)
-        return reader_cls().load_data(file_data)
+        return await reader_cls().load_data(file_data)
 
     @staticmethod
     def _exclude_metadata(documents: list[Document]) -> None:

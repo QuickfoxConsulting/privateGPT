@@ -1,10 +1,11 @@
 from datetime import datetime
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Boolean, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Boolean, UniqueConstraint
+
 from private_gpt.users.db.base_class import Base
-from private_gpt.users.models.enums import *
+from private_gpt.users.models.enums import MakerCheckerActionType, MakerCheckerStatus, DocumentStatus
 
 class DocumentVersion(Base):
     __tablename__ = "document_versions"
@@ -26,7 +27,6 @@ class DocumentVersion(Base):
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     
-    # Specify the foreign keys for the relationship
     document = relationship(
         "Document",
         foreign_keys=[document_id],
@@ -39,8 +39,8 @@ class Document(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(225), nullable=False, unique=True)
-    doc_metadata = Column(JSONB, nullable=True)  # JSONB for metadata
-
+    doc_metadata = Column(JSONB, nullable=True)
+    doc_status = Column(Enum(DocumentStatus), default=DocumentStatus.INGESTING)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_enabled = Column(Boolean, default=True)

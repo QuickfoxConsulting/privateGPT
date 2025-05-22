@@ -13,45 +13,22 @@ from private_gpt.components.ingest.ingest_component import get_ingestion_compone
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
+from private_gpt.components.nodeparser.PassThroughNodeParser import PassthroughNodeParser
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.settings.settings import settings
-
+from llama_index.core.extractors import SummaryExtractor
 if TYPE_CHECKING:
     from llama_index.core.storage.docstore.types import RefDocInfo
 
 logger = logging.getLogger(__name__)
 
 
-
 DEFAULT_CHUNK_SIZE = 512
 SENTENCE_CHUNK_OVERLAP = 100
 
-class SafeSemanticSplitter(SemanticSplitterNodeParser):
-
-    safety_chunker: SentenceSplitter = SentenceSplitter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=SENTENCE_CHUNK_OVERLAP)
-
-    def _parse_nodes(
-            self, 
-            nodes, 
-            show_progress: bool = False, 
-            **kwargs
-    ) -> List[BaseNode]:
-        all_nodes: List[BaseNode] = super()._parse_nodes(nodes=nodes, show_progress=show_progress, **kwargs)
-        all_good = True
-        for node in all_nodes:
-            if node.get_type() == ObjectType.TEXT:
-                node: TextNode= node
-                if self.safety_chunker._token_size(node.text) > self.safety_chunker.chunk_size:
-                    logging.info("Chunk size too big after semantic chunking: switching to static chunking")
-                    all_good = False
-                    break
-            if not all_good:
-                all_nodes = self.safety_chunker._parse_nodes(nodes, show_progress=show_progress, **kwargs)
-        return all_nodes
-    
 
 @singleton
 class IngestService:
@@ -76,11 +53,7 @@ class IngestService:
         #     include_metadata=True,
         #     include_prev_next_rel=True
         # )
-        node_parser = SentenceChunkWindowNodeParser.from_defaults(
-            chunk_size=5,
-            window_metadata_key="window",
-            window_size=10,
-            original_text_metadata_key="original_text",
+        node_parser = PassthroughNodeParser.from_defaults(
             include_metadata=True,
             include_prev_next_rel=True,
         )
@@ -89,12 +62,13 @@ class IngestService:
             embed_model=embedding_component.embedding_model,
             transformations=[
                 node_parser,
+                # SummaryExtractor(llm=self.llm_service.llm, summaries=["prev", "self"]),
                 embedding_component.embedding_model,
             ],
             settings=settings(),
         )
 
-    def _ingest_data(
+    async def _ingest_data(
         self,
         file_name: str,
         file_data: AnyStr,
@@ -111,27 +85,27 @@ class IngestService:
                     path_to_tmp.write_bytes(file_data)
                 else:
                     path_to_tmp.write_text(str(file_data))
-                return self.ingest_file(file_name, path_to_tmp, file_metadata)
+                return await self.ingest_file(file_name, path_to_tmp, file_metadata)
             finally:
                 tmp.close()
                 path_to_tmp.unlink()
 
-    def ingest_file(
+    async def ingest_file(
         self,
         file_name: str,
         file_data: Path,
         file_metadata: dict[str, str] | None = None,
     ) -> list[IngestedDoc]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = self.ingest_component.ingest(file_name, file_data, file_metadata)
+        documents = await self.ingest_component.ingest(file_name, file_data, file_metadata)
         logger.info("Finished ingestion file_name=%s", file_name)
         return [IngestedDoc.from_document(document) for document in documents]
 
-    def ingest_text(
+    async def ingest_text(
         self, file_name: str, text: str, metadata: dict[str, str] | None = None
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting text data with file_name=%s", file_name)
-        return self._ingest_data(file_name, text, metadata)
+        return await self._ingest_data(file_name, text, metadata)
 
     async def ingest_bin_data(
         self,
@@ -141,16 +115,16 @@ class IngestService:
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting binary data with file_name=%s", file_name)
         file_data = raw_file_data.read()
-        return self._ingest_data(file_name, file_data, file_metadata)
+        return await self._ingest_data(file_name, file_data, file_metadata)
     
     async def ingest_url(self, url: str, documents) -> list[IngestedDoc]:
         logger.debug("Ingesting url=%s", url)
-        documents = self.ingest_component.ingest(url, documents)
+        documents = await self.ingest_component.ingest(url, documents)
         return [IngestedDoc.from_document(document) for document in documents]
 
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[IngestedDoc]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[IngestedDoc]:
         logger.info("Ingesting file_names=%s", [f[0] for f in files])
-        documents = self.ingest_component.bulk_ingest(files)
+        documents = await self.ingest_component.bulk_ingest(files)
         logger.info("Finished ingestion file_name=%s", [f[0] for f in files])
         return [IngestedDoc.from_document(document) for document in documents]
 
@@ -180,7 +154,7 @@ class IngestService:
         logger.debug("Found count=%s ingested documents", len(ingested_docs))
         return ingested_docs
 
-    def delete(self, doc_id: str) -> None:
+    async def delete(self, doc_id: str) -> None:
         """Delete an ingested document.
 
         :raises ValueError: if the document does not exist
@@ -188,7 +162,7 @@ class IngestService:
         logger.info(
             "Deleting the ingested document=%s in the doc and index store", doc_id
         )
-        self.ingest_component.delete(doc_id)
+        await self.ingest_component.delete(doc_id)
 
     def get_doc_ids_by_filename(self, filename: str) -> list[str]:
         doc_ids: set[str] = set()
@@ -206,7 +180,6 @@ class IngestService:
         logger.debug("Found count=%s doc_ids for filename '%s'",
                      len(doc_ids), filename)
         return doc_ids
-
 
     def get_doc_ids_by_filename_pattern(self, pattern: str) -> list[str]:
         """

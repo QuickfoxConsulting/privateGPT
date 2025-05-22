@@ -97,7 +97,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
             )
 
         return query.all()
-
+        
     def get_documents_by_categories(
             self, db: Session, *, category_id: int
         ) -> List[Document]:

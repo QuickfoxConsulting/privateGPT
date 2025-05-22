@@ -41,6 +41,7 @@ class Document(BaseModel):
     is_enabled: bool
     filename: str
     doc_metadata: Dict[str, Any] = {}  # JSONB field for all doc_metadata
+    doc_status: str
     uploaded_by: int
     uploaded_at: datetime
     departments: List[DepartmentList] = []  # Keep for backward compatibility
@@ -50,6 +51,7 @@ class Document(BaseModel):
 
 class DocumentMakerChecker(DocumentCreate):
     doc_metadata: Optional[Dict[str, Any]] = None
+    doc_status: str
 
 class DocumentMakerCreate(DocumentMakerChecker):
     pass
@@ -141,6 +143,7 @@ class DocumentView(BaseModel):
     id: int
     is_enabled: bool
     filename: str
+    doc_status: str
     doc_metadata: Dict[str, Any] = {}  # Updated to use JSONB doc_metadata
     uploaded_by: str
     uploaded_at: datetime
@@ -161,6 +164,7 @@ class DocumentView(BaseModel):
                     "category": 1,
                     "custom_field": "custom value"
                 },
+                "doc_status": "INGESTING",
                 "uploaded_by": "john.doe",
                 "uploaded_at": "2024-02-14T12:00:00",
                 "departments": [{"id": 1, "name": "HR"}],
@@ -189,6 +193,7 @@ class DocumentList(DocumentsBase):
     is_enabled: bool
     uploaded_by: int
     uploaded_at: datetime
+    doc_status: str
     vesion: Optional[DocumentVersionOut]
     doc_metadata: Dict[str, Any] = {}
     categories: List[CategoryList] = []
@@ -235,3 +240,17 @@ class DocumentUpload:
             self.doc_metadata = MetadataSchema(**parsed)
         except Exception as e:
             raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
+        
+
+class DocumentSelection(BaseModel):
+    document_ids: Optional[List[int]] = Field(..., description="List of document IDs to select")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "document_ids": [1, 2, 3, 4, 5]
+            }
+        }
+
+class StatusUpdate(BaseModel):
+    doc_status: str

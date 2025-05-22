@@ -8,3 +8,8 @@ class MakerCheckerActionType(PythonEnum):
     INSERT = 'INSERT'
     UPDATE = 'UPDATE'
     DELETE = 'DELETE'
+
+class DocumentStatus(PythonEnum):
+    INGESTING = 'INGESTING'
+    EMBEDDING = 'EMBEDDING'
+    READY = 'READY'

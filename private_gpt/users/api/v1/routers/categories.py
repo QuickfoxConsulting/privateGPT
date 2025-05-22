@@ -12,17 +12,11 @@ from private_gpt.users import crud, models, schemas
 
 router = APIRouter(prefix="/categories", tags=["Categories"])
 
-
 @router.get("", response_model=Page[schemas.Category])
 def list_categories(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,
-        scopes=[
-            Role.ADMIN["name"],
-            Role.SUPER_ADMIN["name"], 
-            Role.OPERATOR["name"]
-            ],
     ),
 ) -> Page[schemas.Category]:
     """
@@ -48,7 +42,8 @@ def create_category(
         deps.get_current_user,
          scopes=[
             Role.SUPER_ADMIN["name"], 
-            Role.OPERATOR["name"]
+            Role.OPERATOR["name"],
+            Role.ADMIN["name"]
         ],
     ),
 ) -> schemas.Category:
@@ -97,8 +92,9 @@ def update_category(
         deps.get_current_user,
         scopes=[
             Role.SUPER_ADMIN["name"], 
-            Role.OPERATOR["name"]
-            ],
+            Role.OPERATOR["name"],
+            Role.ADMIN["name"],
+        ],
     ),
 ) -> schemas.Category:
     """
@@ -125,7 +121,11 @@ def delete_category(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Security(
         deps.get_current_user,
-        scopes=[Role.SUPER_ADMIN["name"]],
+        scopes=[
+            Role.SUPER_ADMIN["name"],
+            Role.OPERATOR["name"],
+            Role.ADMIN["name"]
+        ],
     ),
 ) -> schemas.Category:
     """

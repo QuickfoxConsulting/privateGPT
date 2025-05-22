@@ -40,7 +40,7 @@ class BaseIngestComponent(abc.ABC):
         self.transformations = transformations
 
     @abc.abstractmethod
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
@@ -49,7 +49,7 @@ class BaseIngestComponent(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
@@ -58,11 +58,11 @@ class BaseIngestComponent(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         pass
 
     @abc.abstractmethod
-    def delete(self, doc_id: str) -> None:
+    async def delete(self, doc_id: str) -> None:
         pass
 
 
@@ -131,37 +131,37 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
     ) -> None:
         super().__init__(storage_context, embed_model, transformations, *args, **kwargs)
 
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
         file_metadata: dict[str, Any] | None = None,
     ) -> list[Document]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = IngestionHelper.transform_file_into_documents(
+        documents = await IngestionHelper.transform_file_into_documents(
             file_name, file_data, file_metadata
         )
         logger.info(
             "Transformed file=%s into count=%s documents", file_name, len(documents)
         )
         logger.debug("Saving the documents in the index and doc store")
-        return self._save_docs(documents)
+        return await self._save_docs(documents)
 
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         saved_documents = []
         for file_name, file_data in files:
-            documents = IngestionHelper.transform_file_into_documents(
+            documents = await IngestionHelper.transform_file_into_documents(
                 file_name, file_data
             )
-            saved_documents.extend(self._save_docs(documents))
+            saved_documents.extend(await self._save_docs(documents))
         return saved_documents
     
-    def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
+    async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
         logger.info("Ingesting URL=%s", url)
         logger.debug("Saving the documents in the index and doc store")
-        return self._save_docs(documents)
+        return await self._save_docs(documents)
 
-    def _save_docs(self, documents: list[Document]) -> list[Document]:
+    async def _save_docs(self, documents: list[Document]) -> list[Document]:
         logger.debug("Transforming count=%s documents into nodes", len(documents))
         with self._index_thread_lock:
             for document in documents:
@@ -201,7 +201,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
             processes=self.count_workers
         )
 
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
@@ -217,7 +217,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         logger.debug("Saving the documents in the index and doc store")
         return self._save_docs(documents)
 
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         documents = list(
             itertools.chain.from_iterable(
                 self._file_to_documents_work_pool.starmap(
@@ -232,7 +232,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         )
         return self._save_docs(documents)
 
-    def _save_docs(self, documents: list[Document]) -> list[Document]:
+    async def _save_docs(self, documents: list[Document]) -> list[Document]:
         logger.debug("Transforming count=%s documents into nodes", len(documents))
         nodes = run_transformations(
             documents,  # type: ignore[arg-type]
@@ -253,7 +253,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
             logger.debug("Persisted the index and nodes")
         return documents
 
-    def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
+    async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
         pass
 
 class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
@@ -292,7 +292,7 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
             processes=self.count_workers
         )
 
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
@@ -310,7 +310,7 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         logger.debug("Saving the documents in the index and doc store")
         return self._save_docs(documents)
 
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         # Lightweight threads, used for parallelize the
         # underlying IO calls made in the ingestion
 
@@ -321,7 +321,7 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         )
         return documents
 
-    def _save_docs(self, documents: list[Document]) -> list[Document]:
+    async def _save_docs(self, documents: list[Document]) -> list[Document]:
         logger.debug("Transforming count=%s documents into nodes", len(documents))
         nodes = run_transformations(
             documents,  # type: ignore[arg-type]
@@ -451,7 +451,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
             self.doc_semaphore.release()
             self.doc_q.task_done()  # unblock Q joins
 
-    def _save_docs(
+    async def _save_docs(
         self, files: list[str], documents: list[Document], nodes: list[BaseNode]
     ) -> None:
         try:
@@ -502,7 +502,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         self.node_q.put(("flush", None, None, None))
         self.node_q.join()
 
-    def ingest(
+    async def ingest(
         self,
         file_name: str,
         file_data: Path,
@@ -515,7 +515,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         self._flush()
         return documents
 
-    def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
+    async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         docs = []
         for file_name, file_data in eta(files):
             try:
@@ -529,7 +529,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         self._flush()
         return docs
 
-    def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
+    async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
         pass
 
 def get_ingestion_component(

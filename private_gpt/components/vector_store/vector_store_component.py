@@ -13,7 +13,6 @@ from llama_index.core.vector_stores.types import (
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
 from private_gpt.paths import local_data_path
 from private_gpt.settings.settings import Settings
-from .hybrid_fn import sparse_query_vectors, sparse_doc_vectors, relative_score_fusion_with_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ class VectorStoreComponent:
                             "hnsw_ef_search": 40,
                             "hnsw_dist_method": "vector_cosine_ops",
                         },
-                            hybrid_search=True,
+                        hybrid_search=True,
                     ),
                 )
 
@@ -223,7 +222,30 @@ class VectorStoreComponent:
             sparse_top_k=12, 
             vector_store_query_mode="hybrid",
             alpha=0.5,
-            # vector_store_kwargs={"hybrid_fusion_fn": relative_score_fusion_with_threshold}
+        )
+    
+    def file_vector_retriever(
+        self, 
+        index: VectorStoreIndex, 
+        file_name: str,
+        similarity_top_k: int = 2,
+    )-> VectorIndexRetriever:
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(key="file_name", value=f"{file_name}", condition=FilterCondition.OR),
+            ]
+        )
+        return VectorIndexRetriever(
+            index=index,
+            filters=(
+                filters
+                if self.settings.vectorstore.database != "qdrant"
+                else None
+            ),
+            similarity_top_k=similarity_top_k,
+            sparse_top_k=12,
+            vector_store_query_mode="hybrid",
+            alpha=0.5,
         )
 
     def close(self) -> None:

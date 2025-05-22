@@ -272,6 +272,8 @@ import itertools
 from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
 from fastapi import APIRouter, Depends, Request, Security, HTTPException, status
 from private_gpt.server.ingest.ingest_service import IngestService
+from private_gpt.users.services import DocumentSelectionService
+
 from private_gpt.users.models.document import Document
 from private_gpt.users.models.enums import MakerCheckerStatus
 from pydantic import BaseModel
@@ -404,6 +406,7 @@ async def prompt_completion(
 ) -> ChatResponse | StreamingResponse:
     """Handle chat completion with intelligent context handling and fallbacks."""
     try:
+        # doc_service = DocumentSelectionService(db)
         original_prompt = body.prompt
         original_use_context = body.use_context
         document_status = "not_requested"
@@ -428,13 +431,13 @@ async def prompt_completion(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No department assigned to you"
                 )
-
             documents = crud.documents.get_enabled_documents_by_departments(
                 db,
                 department_id=department.id,
                 category_ids=body.category_id
             )
-            
+            # documents = doc_service.get_enabled_documents(user_id=current_user.id)
+            file_list = [doc.filename for doc in documents]
             if not documents:
                 document_status = "no_documents"
                 is_using_context = False
@@ -512,7 +515,7 @@ async def prompt_completion(
             user_id=current_user.id
         )        
         
-        chat_response = await chat_completion(request, chat_body)
+        chat_response = await chat_completion(request, chat_body, file_list)
         
         if isinstance(chat_response, StreamingResponse):
             return chat_response         
@@ -525,7 +528,6 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
-        
         response = ChatResponse(id=chat.id, response=chat_response)
         return response
 

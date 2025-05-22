@@ -140,6 +140,9 @@ class ChunksService:
                 node, prev_next_chunks, False
             )
             chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
+            same_docs_nodes = self._get_nodes_from_same_document(node)
             retrieved_nodes.append(chunk)
+            retrieved_nodes.append(same_docs_nodes)
+        
 
         return retrieved_nodes

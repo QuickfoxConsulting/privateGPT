@@ -286,14 +286,11 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
         combined_nodes = list(all_nodes_map.values())
 
-        # Apply post-processors
         if self._node_postprocessors:
              for postprocessor in self._node_postprocessors:
                   combined_nodes = postprocessor.postprocess_nodes(
                        combined_nodes, query_bundle=query_bundle # Use original query bundle for postprocessing context
                   )
-
-        # Format context string
         context_str = "\n\n".join(
             [n.node.get_content(metadata_mode=MetadataMode.LLM).strip() for n in combined_nodes]
         )
@@ -369,7 +366,6 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         # 4. Prepare messages for LLM
         self._memory.put(ChatMessage(content=message, role=MessageRole.USER))
 
-        # Format the system prompt using context and query info
         sub_questions_str = "\n".join([f"- {sq}" for sq in sub_queries])
         formatted_context_prompt = self._context_prompt_template.format(
             original_question=standalone_question, # Use the condensed question here
@@ -388,11 +384,8 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         initial_token_count = self._token_counter.estimate_tokens_in_messages(
             [system_message]
         )
-        # Get memory, excluding the latest user message we just added
         final_chat_history = self._memory.get(initial_token_count=initial_token_count)
-
         chat_messages = [system_message] + final_chat_history
-
         return chat_messages, context_source, context_nodes
 
     def _run_agentic_condense_sync(

@@ -61,34 +61,6 @@ class User(Base):
         """Returns string representation of model instance"""
         return "<User {username!r}>".format(username=self.username)
     
-# from sqlalchemy import select, func, update
-# from sqlalchemy.orm import Session
-
-# @event.listens_for(User, 'after_insert')
-# @event.listens_for(User, 'after_delete')
-# def update_total_users(mapper, connection, target):
-#     session = Session.object_session(target)
-#     department_id = target.department_id
-
-#     # Subquery to count total users in the department
-#     total_users_subquery = (
-#         select(func.count(User.id))
-#         .where(User.department_id == department_id)
-#         .scalar_subquery()
-#     )
-    
-#     # Update statement to update total_users for the department
-#     update_stmt = (
-#         update(Department)
-#         .where(Department.id == department_id)
-#         .values(total_users=total_users_subquery)
-#     )
-    
-#     # Execute the update statement
-#     session.execute(update_stmt)
-#     session.commit()
-
-
 @event.listens_for(User, 'before_insert')
 def set_password_created(mapper, connection, target):
     target.password_created = datetime.utcnow()

@@ -14,7 +14,7 @@ from .documents import (
     DepartmentList, DocumentEnable, DocumentDepartmentUpdate, DocumentCheckerUpdate, 
     DocumentMakerCreate, DocumentView, DocumentVerify, 
     DocumentFilter, DocumentCategoryUpdate, DocCatUpdate, UrlUpload, UrlMakerChecker, DocumentUpload,
-    DocumentVersionBase, DocumentVersionCreate, DocumentVersionOut, DocumentVersionUpdate, DocumentFilePath
+    DocumentVersionBase, DocumentVersionCreate, DocumentVersionOut, DocumentVersionUpdate, DocumentFilePath, DocumentSelection, StatusUpdate
 )
 from .department import (
     Department, DepartmentCreate, DepartmentUpdate, DepartmentAdminCreate, DepartmentDelete
