@@ -353,12 +353,12 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         )
         context_source = ToolOutput(
             tool_name="agentic_retriever",
-            content=context_str, # The formatted context string
+            content=context_str, 
             raw_input={
                 "standalone_query": standalone_question,
                 "sub_queries": sub_queries
             },
-            raw_output=context_nodes, # Include the raw nodes as well
+            raw_output=context_nodes,
         )
         logger.debug(f"Retrieved Context: {context_str[:500]}...") # Log snippet
         if self._verbose: print(f"Retrieved Context: {context_str[:500]}...")

@@ -38,7 +38,7 @@ class AgenticRAGEngine(BaseChatEngine):
         document_files: Optional[List[str]] = None,
         tool_name_prefix: str = "doc",
         citation_format: str = "[Document: {file_name}, Page {page}]",
-        similarity_top_k: int = 4
+        similarity_top_k: int = 5
     ):
         self.index = index
         self.callback_manager = callback_manager or CallbackManager([])
@@ -221,7 +221,7 @@ class AgenticRAGEngine(BaseChatEngine):
             "   b) document-specific tools when the query mentions a specific document\n"
             "   c) other tools for supplementary actions\n"
             "4. Synthesize information from multiple sources when needed\n"
-            "5. Always cite sources using exact metadata from documents\n"
+            "5. Always cite sources using [Document: file_name, Page page]\n"
             "6. Acknowledge document limitations when applicable\n"
             "7. Maintain professional, technical tone\n"
             f"{doc_tools_description}"

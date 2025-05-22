@@ -115,7 +115,7 @@ Stay professional, avoid hedging language, and aim to genuinely assist.
 RETRIEVAL_SYSTEM_PROMPT = """
 You are a retrieval-augmented assistant built to provide clear, accurate, and context-grounded responses using provided documents.
 
-### 🎯 Key Principles
+### Key Principles
 
 1. **Answer Only From Documents**
    - Use ONLY the retrieved context to answer — no speculation or external knowledge.
@@ -131,7 +131,6 @@ You are a retrieval-augmented assistant built to provide clear, accurate, and co
    - Use **bold** for key terms or phrases.
    - Organize answers with bullet points, numbered lists, or Markdown headers as needed.
    - Keep responses concise but complete.
-   - Cite sources clearly using [page](file_name) format when multiple documents are referenced
 
 4. **Transparent Handling of Gaps**
    - If only partial information is available, say what is known and clarify what is missing.
@@ -297,7 +296,7 @@ class ChatService:
             2. If the context does not contain the answer, state clearly "I cannot find information about this in the provided documents."
             3. Be concise and do not add information not present in the context.
             4. Quote relevant passages directly using quotation marks when possible.
-            5. Cite the source document filename using [file_name](page) format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
+            5. Cite the source document filename using [page](file_name) format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
 
             Query: {query_str}
 
@@ -329,9 +328,9 @@ class ChatService:
                 ),
                 DocumentAwarePrevNextPostprocessor(
                     docstore=self.storage_context.docstore,
-                    prev_pages=0,
+                    prev_pages=1,
                     next_pages=1,
-                    mode="next"
+                    mode="both"
                 ),
                 LongContextReorder(),
             ]
@@ -354,6 +353,13 @@ class ChatService:
                 skip_condense=True,
                 verbose=True,
             )
+            # return AgenticRAGEngine(
+            #     llm=self.llm_component.llm,
+            #     index=self.index,
+            #     vector_store_component=self.vector_store_component,
+            #     node_postprocessors=node_postprocessors,
+            #     verbose=True,
+            # )
         
         elif use_context == ChatMode.SEARCH.value:
             vector_index_retriever = self.vector_store_component.get_retriever(

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi_pagination import Page, paginate
-from fastapi import File, Form, Query, UploadFile
+from fastapi import File, Form, Query, UploadFile, BackgroundTasks
 from fastapi import APIRouter, Depends, HTTPException, status, Security, Request
 
 from private_gpt.users.api import deps
@@ -254,9 +254,10 @@ def update_category(
             detail="Internal Server Error: Unable to update categories.",
         )
     
-@router.post('/upload', response_model=schemas.Document)
+@router.post('/upload')
 async def upload_documents(
     request: Request,
+    background_tasks: BackgroundTasks,
     documents: schemas.DocumentUpload = Depends(),
     doc_manager: DocumentManager = Depends(deps.get_document_manager),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
@@ -290,18 +291,18 @@ async def upload_documents(
                 obj_in=version_update
             )
         if not ENABLE_MAKER_CHECKER:
-            checker_in = schemas.DocumentUpdate(
-                id=document.id,
-                status=MakerCheckerStatus.APPROVED.value
-            )
-            return await verify_documents(
-                request=request,
-                checker_in=checker_in,
-                doc_manager=doc_manager,
+            # Add auto-approval to background tasks
+            background_tasks.add_task(
+                verify_document_background,
+                document_id=document.id,
+                status=MakerCheckerStatus.APPROVED,
+                current_user_id=current_user.id,
                 db=db,
+                doc_manager=doc_manager,
                 log_audit=log_audit,
-                current_user=current_user
+                request=request
             )
+            return {"status": "upload_complete", "message": "Document uploaded and auto-approval started"}
         return document
 
     except HTTPException:
@@ -313,9 +314,114 @@ async def upload_documents(
             detail="Failed to upload document"
         )
 
+async def verify_document_background(
+    document_id: int,
+    status: MakerCheckerStatus,
+    current_user_id: int,
+    db: Session,
+    doc_manager: DocumentManager,
+    log_audit: models.Audit,
+    request: Request
+):
+    """Background task to handle document verification."""
+    try:
+        document = crud.documents.get_by_id(db, id=document_id)
+        if not document or not document.current_version:
+            logger.error(f"Document or version not found for ID: {document_id}")
+            return
+
+        temp_path = Path(document.current_version.file_path)
+        if not temp_path.exists():
+            logger.error(f"Document file not found at path: {temp_path}")
+            return
+
+        if status == MakerCheckerStatus.APPROVED:
+            final_path, versioned_filename = await doc_manager.approve_document(
+                document_id=document.id,
+                original_filename=document.filename,
+                temp_path=temp_path,
+                version=document.current_version.version_number,
+            )
+            version_update = schemas.DocumentVersionUpdate(
+                status=MakerCheckerStatus.APPROVED,
+                action_type=MakerCheckerActionType.UPDATE, 
+                reviewed_by=current_user_id,
+                reviewed_at=datetime.now(),
+                file_path=str(final_path),
+            )
+            crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
+            
+            checker = schemas.DocumentCheckerUpdate(
+                filename=versioned_filename,
+                is_enabled=True,
+                verified_at=datetime.now(),
+                verified_by=current_user_id,
+                verified=True,
+            )
+            crud.documents.update(db=db, db_obj=document, obj_in=checker)
+            document.filename = versioned_filename
+            db.add(document)
+            db.commit()
+            db.refresh(document)
+
+            log_audit(
+                model='Document',
+                action='update',
+                details={
+                    'filename': document.filename,
+                    'approved_by': str(current_user_id)
+                },
+                user_id=current_user_id
+            )
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+            }
+            await ingest(request, final_path, metadata_dict)
+            status_update = schemas.StatusUpdate(
+               doc_status=DocumentStatus.READY.value
+            )
+            crud.documents.update(db=db, db_obj=document, obj_in=status_update)
+            
+        elif status == MakerCheckerStatus.REJECTED:
+            await doc_manager.reject_document(temp_path)
+            
+            version_update = schemas.DocumentVersionUpdate(
+                action_type=MakerCheckerActionType.DELETE,
+                status=MakerCheckerStatus.REJECTED,
+                reviewed_by=current_user_id,
+                reviewed_at=datetime.now(),
+            )
+            crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
+
+            checker = schemas.DocumentCheckerUpdate(
+                filename=document.filename,
+                is_enabled=False,
+                verified_at=datetime.now(),
+                verified_by=current_user_id,
+                verified=False,
+            )
+            crud.documents.update(db=db, db_obj=document, obj_in=checker)
+            crud.documents.remove(db, id=document.id)
+            
+            log_audit(
+                model='Document',
+                action='update',
+                details={
+                    'filename': document.filename,
+                    'rejected_by': str(current_user_id)
+                },
+                user_id=current_user_id
+            )
+
+    except Exception as e:
+        logger.error(f"Error in background verification: {str(e)}\n{traceback.format_exc()}")
+
 @router.post('/verify')
 async def verify_documents(
     request: Request,
+    background_tasks: BackgroundTasks,
     checker_in: schemas.DocumentUpdate,
     doc_manager: DocumentManager = Depends(deps.get_document_manager),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
@@ -361,94 +467,18 @@ async def verify_documents(
                 detail="Document file not found"
             )
 
-        if checker_in.status == MakerCheckerStatus.APPROVED.value:
-            final_path, versioned_filename = await doc_manager.approve_document(
-                document_id=document.id,
-                original_filename=document.filename,
-                temp_path=temp_path,
-                version=document.current_version.version_number,
-            )
-            version_update = schemas.DocumentVersionUpdate(
-                status=MakerCheckerStatus.APPROVED,
-                action_type=MakerCheckerActionType.UPDATE, 
-                reviewed_by=current_user.id,
-                reviewed_at=datetime.now(),
-                file_path=str(final_path),
-            )
-            crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-            
-            checker = schemas.DocumentCheckerUpdate(
-                filename=versioned_filename,
-                is_enabled=True,
-                verified_at=datetime.now(),
-                verified_by=current_user.id,
-                verified=True,
-            )
-            crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            document.filename = versioned_filename
-            db.add(document)
-            db.commit()
-            db.refresh(document)
+        background_tasks.add_task(
+            verify_document_background,
+            document_id=checker_in.id,
+            status=checker_in.status,
+            current_user_id=current_user.id,
+            db=db,
+            doc_manager=doc_manager,
+            log_audit=log_audit,
+            request=request
+        )
 
-            log_audit(
-                model='Document',
-                action='update',
-                details={
-                    'filename': document.filename,
-                    'approved_by': str(current_user.id)
-                },
-                user_id=current_user.id
-            )
-            metadata_dict = {
-                "tags": document.doc_metadata.get("tags", []),
-                "departments": document.doc_metadata.get("departments", []),
-                "category": document.doc_metadata.get("category", None),
-            }
-            ingest_response = await ingest(request, final_path, metadata_dict)
-            status_update = schemas.StatusUpdate(
-               doc_status=DocumentStatus.READY.value
-            )
-            crud.documents.update(db=db, db_obj=document, obj_in=status_update)
-            return document
-            
-        elif checker_in.status == MakerCheckerStatus.REJECTED.value:
-            await doc_manager.reject_document(temp_path)
-            
-            version_update = schemas.DocumentVersionUpdate(
-                action_type=MakerCheckerActionType.DELETE,
-                status=MakerCheckerStatus.REJECTED,
-                reviewed_by=current_user.id,
-                reviewed_at=datetime.now(),
-            )
-            crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-
-            checker = schemas.DocumentCheckerUpdate(
-                filename=versioned_filename,
-                is_enabled=False,
-                verified_at=datetime.now(),
-                verified_by=current_user.id,
-                verified=False,
-            )
-            crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            crud.documents.remove(db, id=document.id)
-            
-            log_audit(
-                model='Document',
-                action='update',
-                details={
-                    'filename': document.filename,
-                    'rejected_by': str(current_user.id)
-                },
-                user_id=current_user.id
-            )
-            
-            return {"status": "rejected"}
-            
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid status"
-            )
+        return {"status": "verification_started", "message": "Document verification has been started"}
 
     except HTTPException:
         raise
