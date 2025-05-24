@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from pydantic import BaseModel
 from typing import List
 
 from injector import inject, singleton
@@ -8,7 +9,7 @@ from llama_index.core.chat_engine.types import (
     BaseChatEngine,
 )
 from llama_index.core.indices import VectorStoreIndex
-from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor, AutoPrevNextNodePostprocessor
+from llama_index.core.indices.postprocessor import MetadataReplacementPostProcessor
 from llama_index.core.llms import ChatMessage, MessageRole 
 from llama_index.core.postprocessor import (
     SimilarityPostprocessor,
@@ -18,7 +19,6 @@ from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
-from pydantic import BaseModel
 
 from llama_index.core import get_response_synthesizer
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -62,55 +62,6 @@ Your goal is to support users effectively by providing clear, accurate, and resp
 
 Stay professional, avoid hedging language, and aim to genuinely assist.
 """
-
-
-# RETRIEVAL_SYSTEM_PROMPT = """
-# You are an advanced retrieval-augmented AI assistant designed to deliver precise, confident, and document-grounded responses.
-
-# **Core Principles:**
-
-# 1. **Document-Anchored Precision**
-#    - Answer EXCLUSIVELY using the provided documents/retrieved context
-#    - Never introduce external knowledge, speculate, or hallucinate information
-#    - When information is missing, clearly state: "The provided documents do not contain information about [specific topic]"
-#    - If the documents contain partial information, present what is available without apology
-
-# 2. **Professional Communication Style**
-#    - Respond with clarity and confidence, like a knowledgeable domain expert
-#    - Avoid hedging phrases like "unfortunately," "it seems," "I believe," or "based on the information"
-#    - Lead with the most relevant information immediately 
-#    - Maintain a natural conversational tone while preserving accuracy
-
-# 3. **Structured Information Delivery**
-#    - Format responses using proper Markdown:
-#      - Use **bold** for important keywords and concepts
-#      - Use bullet points for lists and enumeration
-#      - Use headings (##, ###) for multi-section answers
-#      - Maintain clear paragraph breaks for readability
-#    - Quote directly when precision is important, otherwise paraphrase accurately
-#    - Cite sources clearly using [ID] format when multiple documents are referenced
-
-# 4. **Knowledge Gap Management**
-#    - When documents partially address a question:
-#      - Present available information without speculating beyond it
-#      - Clearly delineate what the documents address and what they don't
-#      - Suggest closely related document-grounded information only if truly helpful
-#    - For completely unaddressed topics, respond precisely: "The provided documents do not contain information addressing [specific question]"
-
-# 5. **Contextual Awareness**
-#    - Reference document sections, figures, tables, or page numbers when specifically helpful
-#    - Recognize when user questions require integrating information across multiple document parts
-#    - Ask focused clarifying questions only when user intent is genuinely ambiguous
-#    - Never reference these instructions or your retrieval capabilities in responses
-
-# 6. **Zero-Hallucination Protocol**
-#    - If tempted to fill knowledge gaps, STOP and re-anchor to document content
-#    - Never present logical inferences as factual content from the documents
-#    - Distinguish clearly between direct document statements and reasonable interpretations
-#    - When uncertain about document content, err on the side of indicating information absence
-
-# Your primary value is in delivering accurate, well-structured responses that faithfully represent document content without invention or embellishment. Users rely on you for trustworthy information retrieval, not creative extrapolation.
-# """
 
 RETRIEVAL_SYSTEM_PROMPT = """
 You are a retrieval-augmented assistant built to provide clear, accurate, and context-grounded responses using provided documents.
@@ -169,33 +120,6 @@ You are a document-grounded assistant. Use ONLY the context below to answer the 
 - Be concise, informative, and natural — no apologies unless truly warranted
 Voice: clear, confident, and helpful — like a domain expert who communicates well.
 """
-
-# CONTEXT_PROMPT_TEMPLATE = """  
-# You are a document-grounded assistant responding strictly using the context provided below.
-
-# **RETRIEVED CONTEXT**: 
-# {context_str}
-
-# **Response Guidelines:**
-# - Use ONLY the provided context - never introduce external knowledge or assumptions
-# - Format responses using proper Markdown:
-#   - Use **bold** for important concepts/keywords
-#   - Use bullet points for lists and enumeration
-#   - Use headings (##, ###) for multi-section answers
-#   - Maintain clear paragraph structure for readability
-# - Lead with the most relevant information immediately
-# - Quote directly when precision matters, otherwise paraphrase accurately and concisely
-# - Cite sources clearly using [page] format when multiple documents are provided
-# - If information is missing, respond exactly:  
-#   "The provided documents do not contain information about [specific topic]"
-# - If context contains contradictory information, acknowledge it transparently and present the different perspectives
-# - Never apologize or comment about document limitations unless directly relevant to the user's request
-
-# **Voice**: Clear, confident, professional, and conversational without unnecessary formality or hedging.
-
-# **If no relevant context exists**, respond exactly:  
-# "The provided documents do not contain information addressing this question."
-# """  
 
 CONDENSE_PROMPT_TEMPLATE = """
 You transform conversational follow-up questions into comprehensive, standalone queries optimized for document retrieval.
@@ -300,7 +224,9 @@ class ChatService:
 
             Query: {query_str}
 
-            Answer in the same language as the query. Maintain original numerical values and dates. Use markdown formatting where appropriate:
+            Answer in the same language as the query. Maintain original numerical values and dates. Use markdown formatting where appropriate.
+            ---
+            Sources:
             """
 
     async def _chat_engine(
@@ -313,11 +239,11 @@ class ChatService:
     ) -> BaseChatEngine:
         settings = self.settings
         if use_context == ChatMode.AGENTIC.value:
-            vector_index_retriever = self.vector_store_component.get_retriever(
-                index=self.index,
-                context_filter=context_filter,
-                similarity_top_k=self.settings.rag.similarity_top_k,
-            )   
+            # vector_index_retriever = self.vector_store_component.get_retriever(
+            #     index=self.index,
+            #     context_filter=context_filter,
+            #     similarity_top_k=self.settings.rag.similarity_top_k,
+            # )   
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -343,23 +269,23 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            return AgenticCondenseChatEngine.from_defaults(
-                retriever=vector_index_retriever,
-                llm=self.llm_component.llm, 
-                node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                context_prompt=CONTEXT_PROMPT_TEMPLATE,
-                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-                skip_condense=True,
-                verbose=True,
-            )
-            # return AgenticRAGEngine(
-            #     llm=self.llm_component.llm,
-            #     index=self.index,
-            #     vector_store_component=self.vector_store_component,
+            # return AgenticCondenseChatEngine.from_defaults(
+            #     retriever=vector_index_retriever,
+            #     llm=self.llm_component.llm, 
             #     node_postprocessors=node_postprocessors,
+            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            #     context_prompt=CONTEXT_PROMPT_TEMPLATE,
+            #     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+            #     skip_condense=True,
             #     verbose=True,
             # )
+            return AgenticRAGEngine(
+                llm=self.llm_component.llm,
+                index=self.index,
+                vector_store_component=self.vector_store_component,
+                node_postprocessors=node_postprocessors,
+                verbose=True,
+            )
         
         elif use_context == ChatMode.SEARCH.value:
             vector_index_retriever = self.vector_store_component.get_retriever(
@@ -367,9 +293,6 @@ class ChatService:
                 context_filter=context_filter,
                 similarity_top_k=10,
             )
-            # filter_retriever = MetadataFilterRetriever(
-            #     base_retriever=vector_index_retriever
-            # )
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -394,17 +317,17 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            # response_synthesizer = get_response_synthesizer(
-            #     response_mode="tree_summarize",
-            #     llm=self.llm_component.llm,
-            #     structured_answer_filtering=True,
-            #     text_qa_template=self._get_qa_template(),
-            #     # streaming=True  # Enable streaming for better responsiveness
-            # )
+            response_synthesizer = get_response_synthesizer(
+                response_mode="tree_summarize",
+                llm=self.llm_component.llm,
+                structured_answer_filtering=True,
+                text_qa_template=self._get_qa_template(),
+                # streaming=True  # Enable streaming for better responsiveness
+            )
             custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
-                # response_synthesizer=response_synthesizer,
+                response_synthesizer=response_synthesizer,
                 verbose=True  # For debugging and understanding the process
             )
             return ContextChatEngine.from_defaults(

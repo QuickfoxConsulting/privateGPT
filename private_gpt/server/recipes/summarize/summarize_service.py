@@ -30,7 +30,6 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "any unnecessary information or repetition."
 )
 
-
 @singleton
 class SummarizeService:
     @inject

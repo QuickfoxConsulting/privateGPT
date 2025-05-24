@@ -8,6 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libgl1 \
     libglib2.0-0 \
+    libnss3 \   
+    libnspr4 \ 
+    libdbus-1-3 \     
+    libatk1.0-0 \ 
+    libatk-bridge2.0-0 \     
+    libcups2 \         
+    libxkbcommon0 \          
+    libatspi2.0-0 \ 
+    libxcomposite1 \                      
+    libxdamage1 \       
+    libxrandr2 \     
+    libgbm1 \ 
+    libpango-1.0-0 \  
+    libcairo2 \     
+    libasound2 \ 
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install poetry
@@ -24,9 +39,9 @@ ENV POETRY_VIRTUALENVS_IN_PROJECT=true
 FROM base AS dependencies
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
-ARG POETRY_EXTRAS="ui vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini"
+ARG POETRY_EXTRAS="vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini"
 RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
-
+RUN playwright install 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
 ARG HF_TOKEN="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"
@@ -68,20 +83,15 @@ fi\n\
 \n\
 # Apply Alembic database migrations\n\
 echo "Applying database migrations"\n\
-alembic upgrade c5a5dd\n\
-alembic upgrade fe4501\n\
-alembic upgrade 35245d\n\
+alembic upgrade 4e9976d\n\
+alembic upgrade a5d108cc\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
 poetry run python scripts/fixtures.py\n\
 \n\
-# Start the FastAPI application\n\
-echo "Installing Fastembed"\n\
-pip install fastembed rapidocr-onnxruntime duckduckgo-search\n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 3' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 1' > /app/startup.sh && chmod +x /app/startup.sh
 
-# NOTE: We're keeping root user for simplicity
 ENTRYPOINT ["/app/startup.sh"]

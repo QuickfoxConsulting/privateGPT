@@ -22,8 +22,7 @@ class ChatItem(ChatItemBase):
     updated_at: datetime
     rating: Optional[Rating]
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 
 class ChatHistoryBase(BaseModel):
@@ -49,8 +48,7 @@ class ChatHistory(ChatHistoryBase):
     updated_at: datetime
     chat_items: List[ChatItem]
     
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 class ChatDelete(BaseModel):
     conversation_id: uuid.UUID

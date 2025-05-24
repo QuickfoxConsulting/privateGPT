@@ -14,7 +14,6 @@ pyyaml = "^6.0.1"
 watchdog = "^4.0.1"
 transformers = "^4.42.3"
 docx2txt = "^0.8"
-cryptography = "^3.1"
 # LlamaIndex core libs
 llama-index-core = "^0.10.52"
 llama-index-readers-file = "^0.1.27"
@@ -55,7 +54,6 @@ torch = {version ="^2.3.1", optional = true}
 sentence-transformers = {version ="^3.0.1", optional = true}
 
 # Optional UI
-gradio = {version ="^4.37.2", optional = true}
 ffmpy = "0.4.0"
 
 # Optional Google Gemini dependency
@@ -85,6 +83,9 @@ chonkie = "^1.0.6"
 scikit-learn = "^1.6.1"
 fastembed = "^0.6.1"
 llama-parse = "0.4.9"
+llama-index-tools-duckduckgo = "0.2.0"
+crawl4ai = "^0.6.3"
+nest-asyncio = "^1.6.0"
 
 [tool.poetry.extras]
 ui = ["gradio", "ffmpy"]

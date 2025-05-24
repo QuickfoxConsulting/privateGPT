@@ -372,16 +372,20 @@ async def get_latest_version_ids(
     
     return latest_doc_ids
 
-def create_chat_item(db, sender, content, conversation_id):
-    chat_item_create = schemas.ChatItemCreate(
+def create_chat_item(db: Session, sender: str, content: dict, conversation_id: uuid.UUID) -> models.ChatItem:
+    chat_item_create = schemas.ChatItemCreate( 
             sender=sender,
             content=content,
             conversation_id=conversation_id
         )
-    chat_history = crud.chat.get_conversation(db, conversation_id=conversation_id)
-    if not chat_history.title or chat_history.title == "New Chat":
+    chat_history = crud.chat.get_by_id(db, id=conversation_id)
+
+    if not chat_history:
+        raise ValueError(f"Chat history with ID {conversation_id} not found.")
+    if not chat_history.title_generated:
         chat_history.generate_title()
-    return crud.chat_item.create(db, obj_in=chat_item_create)
+    new_chat_item = crud.chat_item.create(db, obj_in=chat_item_create)
+    return new_chat_item
 
 @completions_router.post(
     "/chat",

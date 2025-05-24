@@ -71,46 +71,66 @@ from private_gpt.users.schemas.chat import (
 
 
 class CRUDChat(CRUDBase[ChatHistory, ChatHistoryCreate, ChatHistoryUpdate]):
-    def get_by_id(
-        self, 
-        db: Session, 
-        *, 
-        id: uuid.UUID, 
-        skip: int = 0, 
-        limit: int = 10,
+    # def get_by_id(
+    #     self, 
+    #     db: Session, 
+    #     *, 
+    #     id: uuid.UUID, 
+    #     skip: int = 0, 
+    #     limit: int = 10,
+    #     include_deleted: bool = False
+    # ) -> Optional[ChatHistory]:
+    #     """
+    #     Get a chat history by ID with pagination support for chat items
+        
+    #     Args:
+    #         db: Database session
+    #         id: Conversation UUID
+    #         skip: Number of chat items to skip
+    #         limit: Maximum number of chat items to return
+    #         include_deleted: Whether to include soft-deleted chats
+            
+    #     Returns:
+    #         ChatHistory object if found, None otherwise
+    #     """
+    #     query = db.query(self.model).filter(ChatHistory.conversation_id == id)
+        
+    #     if not include_deleted:
+    #         query = query.filter(ChatHistory.is_deleted == False)
+            
+    #     chat_history = query.first()
+        
+    #     if chat_history:
+    #         chat_history.chat_items = (
+    #             db.query(ChatItem)
+    #             .filter(ChatItem.conversation_id == id)
+    #             .order_by(asc(getattr(ChatItem, 'created_at')))  # Changed to ascending order by index
+    #             .offset(skip)
+    #             .limit(limit)
+    #             .all()
+    #         )
+            
+    #     return chat_history
+
+    def get_by_id(  # New name for clarity, or modify get_by_id
+        self,
+        db: Session,
+        *,
+        id: uuid.UUID,
         include_deleted: bool = False
     ) -> Optional[ChatHistory]:
         """
-        Get a chat history by ID with pagination support for chat items
-        
-        Args:
-            db: Database session
-            id: Conversation UUID
-            skip: Number of chat items to skip
-            limit: Maximum number of chat items to return
-            include_deleted: Whether to include soft-deleted chats
-            
-        Returns:
-            ChatHistory object if found, None otherwise
+        Get a ChatHistory ORM object by ID.
+        This method DOES NOT load or assign paginated chat_items to the instance.
+        Use the 'chat_items' dynamic relationship on the returned object for querying items.
         """
-        query = db.query(self.model).filter(ChatHistory.conversation_id == id)
-        
+        query = db.query(self.model).filter(self.model.conversation_id == id)
+
         if not include_deleted:
-            query = query.filter(ChatHistory.is_deleted == False)
-            
-        chat_history = query.first()
-        
-        if chat_history:
-            chat_history.chat_items = (
-                db.query(ChatItem)
-                .filter(ChatItem.conversation_id == id)
-                .order_by(asc(getattr(ChatItem, 'created_at')))  # Changed to ascending order by index
-                .offset(skip)
-                .limit(limit)
-                .all()
-            )
-            
-        return chat_history
+            query = query.filter(self.model.is_deleted == False)
+
+        chat_history_orm = query.first()
+        return chat_history_orm
     
     def get_conversation(
         self, 

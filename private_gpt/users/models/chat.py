@@ -53,9 +53,9 @@ class ChatHistory(Base):
     chat_items = relationship(
         "ChatItem", 
         back_populates="chat_history", 
-        cascade="all, delete-orphan",
-        order_by="ChatItem.created_at",  # Changed from index to created_at
-        lazy="selectin"  # Optimize for common access pattern
+        cascade="save-update, merge, delete",
+        order_by="ChatItem.created_at.desc()",
+        lazy="dynamic",
     )
     
     title_generated = Column(Boolean, default=False)
