@@ -160,7 +160,7 @@ from private_gpt.manager.document_manager import DocumentManager
 def create_document_manager() -> DocumentManager:
     """Create a cached instance of DocumentManager."""
     
-    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
     ALLOWED_EXTENSIONS = {'.pdf', '.doc', '.docx', '.txt', '.xls', '.jpg', '.mp3', '.md', '.xlsx'}
 
     # Create document manager instance

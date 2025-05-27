@@ -37,6 +37,10 @@ class User(Base):
     password_created = Column(DateTime, nullable=True)
     checker = Column(Boolean, default=False)
 
+    # Failed login attempt tracking
+    failed_login_attempts = Column(Integer, default=0)
+    last_failed_login = Column(DateTime, nullable=True, default=None)
+
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     company = relationship("Company", back_populates="users")
 

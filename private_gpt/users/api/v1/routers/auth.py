@@ -20,7 +20,42 @@ logger = logging.getLogger(__name__)
 LDAP_SERVER = settings.LDAP_SERVER
 LDAP_ENABLE = settings.LDAP_ENABLE
 
+# Login attempt settings
+MAX_FAILED_ATTEMPTS = 5  # Maximum number of failed attempts before lockout
+LOCKOUT_DURATION = 30  # Lockout duration in minutes
+RESET_AFTER = 24  # Reset failed attempts after this many hours
+
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+def check_account_locked(user: models.User) -> bool:
+    """Check if the account is locked due to too many failed attempts."""
+    if not user.failed_login_attempts or user.failed_login_attempts < MAX_FAILED_ATTEMPTS:
+        return False
+        
+    if not user.last_failed_login:
+        return False
+        
+    lockout_until = user.last_failed_login + timedelta(minutes=LOCKOUT_DURATION)
+    if datetime.now() < lockout_until:
+        return True        
+    return False
+
+def reset_failed_attempts(db: Session, user: models.User) -> None:
+    """Reset failed login attempts after successful login."""
+    user_in = schemas.LoginAttempt(
+        failed_login_attempts=0,
+        last_failed_login=None
+    )
+    crud.user.update(db, db_obj=user, obj_in=user_in)
+
+def increment_failed_attempts(db: Session, user: models.User) -> None:
+    """Increment failed login attempts counter."""
+    attempts = (user.failed_login_attempts or 0) + 1
+    user_in = schemas.LoginAttempt(
+        failed_login_attempts=attempts,
+        last_failed_login=datetime.now()
+    )
+    crud.user.update(db, db_obj=user, obj_in=user_in)
 
 def register_user(
     db: Session,
@@ -113,7 +148,6 @@ def login_access_token(
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     db: Session = Depends(deps.get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
-    # active_subscription: models.Subscription = Depends(deps.get_active_subscription)
 ) -> Any:
     """
     OAuth2 compatible token login, get an access token for future requests
@@ -126,20 +160,37 @@ def login_access_token(
                 if existing_user.user_role.role.name == "SUPER_ADMIN":
                     return existing_user
                 else:
-                    username, department = ldap_login(db=db, username=form_data.username, password=form_data.password)
-                    return crud.user.get_by_name(db, name=username)
+                    try:
+                        username, department = ldap_login(db=db, username=form_data.username, password=form_data.password)
+                        return crud.user.get_by_name(db, name=username)
+                    except HTTPException:
+                        if existing_user:
+                            increment_failed_attempts(db, existing_user)
+                        raise
             else:
-                username, department = ldap_login(db=db, username=form_data.username, password=form_data.password)
-                depart = crud.department.get_by_department_name(db, name=department)
+                try:
+                    username, department = ldap_login(db=db, username=form_data.username, password=form_data.password)
+                    depart = crud.department.get_by_department_name(db, name=department)
 
-                if depart:
-                    user = ad_user_register(db=db, email=form_data.username, fullname=username, password=form_data.password, department_id=depart.id)
-                else:
-                    department_in = schemas.DepartmentCreate(name=department)
-                    new_department = crud.department.create(db, obj_in=department_in)
-                    user = ad_user_register(db=db, email=form_data.username, fullname=username, password=form_data.password, department_id=new_department.id)
-                return user
+                    if depart:
+                        user = ad_user_register(db=db, email=form_data.username, fullname=username, password=form_data.password, department_id=depart.id)
+                    else:
+                        department_in = schemas.DepartmentCreate(name=department)
+                        new_department = crud.department.create(db, obj_in=department_in)
+                        user = ad_user_register(db=db, email=form_data.username, fullname=username, password=form_data.password, department_id=new_department.id)
+                    return user
+                except HTTPException:
+                    raise
         return None
+    
+    existing_user = crud.user.get_by_email(db, email=form_data.username)
+    if existing_user and check_account_locked(existing_user):
+        lockout_until = existing_user.last_failed_login + timedelta(minutes=LOCKOUT_DURATION)
+        remaining_time = (lockout_until - datetime.now()).total_seconds() / 60
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Account is locked due to too many failed attempts. Please try again in {int(remaining_time)} minutes."
+        )
     
     if LDAP_ENABLE:
         user = ad_auth(LDAP_ENABLE)
@@ -152,10 +203,23 @@ def login_access_token(
         user = crud.user.authenticate(
             db, email=form_data.username, password=form_data.password
         )
-    if not user:
-        raise HTTPException(
-            status_code=400, detail="Incorrect email or password"
-        )
+        if not user:
+            if existing_user:
+                increment_failed_attempts(db, existing_user)
+                remaining_attempts = MAX_FAILED_ATTEMPTS - (existing_user.failed_login_attempts or 0)
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Incorrect email or password. {remaining_attempts} attempts remaining."
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid email or password."
+                )
+
+    # Reset failed attempts on successful login
+    reset_failed_attempts(db, user)
+    
     access_token_expires = timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
@@ -304,3 +368,28 @@ def register(
               details={'detail': "User created successfully.",'username':fullname}, user_id=current_user.id)
 
     return JSONResponse(content=response_dict, status_code=status.HTTP_201_CREATED)
+
+@router.post("/unlock-account", response_model=schemas.TokenSchema)
+def unlock_account(
+    *,
+    db: Session = Depends(deps.get_db),
+    email: str = Body(...),
+    current_user: models.User = Security(
+        deps.get_current_active_user,
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"]],
+    ),
+) -> Any:
+    """
+    Unlock a user account that has been locked due to too many failed login attempts.
+    Only accessible by admins and super admins.
+    """
+    user = crud.user.get_by_email(db, email=email)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+        
+    reset_failed_attempts(db, user)
+    
+    return {"message": f"Account for {email} has been unlocked successfully."}

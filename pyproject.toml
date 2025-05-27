@@ -86,6 +86,7 @@ llama-parse = "0.4.9"
 llama-index-tools-duckduckgo = "0.2.0"
 crawl4ai = "^0.6.3"
 nest-asyncio = "^1.6.0"
+rich = "^14.0.0"
 
 [tool.poetry.extras]
 ui = ["gradio", "ffmpy"]

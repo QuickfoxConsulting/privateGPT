@@ -12,12 +12,11 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.tools import ToolMetadata, BaseTool, ToolOutput
+from llama_index.core.tools.types import ToolMetadata, ToolOutput
 
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 
 logger = logging.getLogger(__name__)
-
 
 class DocumentSpecificTool(BaseTool):
     """Tool for querying specific documents in the knowledge base with robust context formatting and retry logic."""
@@ -58,21 +57,7 @@ class DocumentSpecificTool(BaseTool):
 
         self.document_retriever = self._create_document_retriever()
 
-        response_synthesizer = get_response_synthesizer(
-            llm=self.llm,
-            response_mode=self.response_mode,
-            structured_answer_filtering=True,
-            text_qa_template=self._get_qa_template(),
-            callback_manager=self.callback_manager,
-            streaming=self.streaming,
-        )
-
-        self.query_engine = RetrieverQueryEngine(
-            retriever=self.document_retriever,
-            response_synthesizer=response_synthesizer,
-            node_postprocessors=self.node_postprocessors,
-            callback_manager=self.callback_manager,
-        )
+        
 
         if self.verbose:
             logger.info(f"[INIT] Document tool created for '{self.file_name}' with tool name '{self._name}'")
@@ -130,53 +115,38 @@ class DocumentSpecificTool(BaseTool):
         )
     
     @property
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> ToolMetadata:
         """Expose tool metadata and schema for integration."""
-        return {
-            "name": self._name,
-            "description": self._description,
-            "args_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": f"Query to run on document '{self.file_name}'."
-                    }
-                },
-                "required": ["query"]
-            },
-            "document_info": {
-                "file_name": self.file_name,
-                "tool_type": "document_specific",
-                "created_at": datetime.now().isoformat()
-            }
-        }
+        return ToolMetadata(
+            name=self._name,
+            description=self._description
+        )
 
-    def __call__(self, query: str) -> str:
-        """Run a query with retry logic and fallback."""
-        return self._run_query(query, is_async=False)
-
-    async def acall(self, query: str) -> str:
-        """Run a query asynchronously with retry logic."""
-        return await self._run_query(query, is_async=True)
-
-    def _log_elapsed(self, start_time: datetime, label: str):
-        if self.verbose:
-            elapsed = (datetime.now() - start_time).total_seconds()
-            logger.info(f"{label} took {elapsed:.2f}s for '{self.file_name}'")
-
-    def _wrap_query(self, query: str) -> str:
-        return f"Regarding document '{self.file_name}': {query}"
-
-    async def _run_query(self, query: str, is_async: bool = False) -> str:
+    def _run_query(self, query: str, is_async: bool = False) -> str:
+        """Run a query with retry logic."""
         start_time = datetime.now()
         retry_count = 0
         enhanced_query = self._wrap_query(query)
 
         while retry_count < self.max_retries:
             try:
+                response_synthesizer = get_response_synthesizer(
+                    llm=self.llm,
+                    response_mode=self.response_mode,
+                    structured_answer_filtering=True,
+                    text_qa_template=self._get_qa_template(),
+                    callback_manager=self.callback_manager,
+                    streaming=self.streaming,
+                )
+
+                self.query_engine = RetrieverQueryEngine(
+                    retriever=self.document_retriever,
+                    response_synthesizer=response_synthesizer,
+                    node_postprocessors=self.node_postprocessors,
+                    callback_manager=self.callback_manager,
+                )
                 if is_async:
-                    response = await self.query_engine.aquery(enhanced_query)
+                    response = self.query_engine.aquery(enhanced_query)
                 else:
                     response = self.query_engine.query(enhanced_query)
 
@@ -188,6 +158,62 @@ class DocumentSpecificTool(BaseTool):
                 if retry_count == self.max_retries:
                     logger.error(f"[FAIL] Final failure on '{self.file_name}' - {e}", exc_info=self.verbose)
                     return f"Error retrieving answer from '{self.file_name}': {str(e)}"
+
+    def __call__(self, query: str) -> ToolOutput:
+        """Run a query with retry logic and fallback."""
+        try:
+            result = self._run_query(query, is_async=False)
+            if not isinstance(result, str):
+                result = str(result)
+            return ToolOutput(
+                content=result,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=result,
+                is_error=False
+            )
+        except Exception as e:
+            error_msg = f"Error retrieving answer from '{self.file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=self.verbose)
+            return ToolOutput(
+                content=error_msg,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=str(e),
+                is_error=True
+            )
+
+    async def acall(self, query: str) -> ToolOutput:
+        """Run a query asynchronously with retry logic."""
+        try:
+            result = await self._run_query(query, is_async=True)
+            if not isinstance(result, str):
+                result = str(result)
+            return ToolOutput(
+                content=result,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=result,
+                is_error=False
+            )
+        except Exception as e:
+            error_msg = f"Error retrieving answer from '{self.file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=self.verbose)
+            return ToolOutput(
+                content=error_msg,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=str(e),
+                is_error=True
+            )
+
+    def _log_elapsed(self, start_time: datetime, label: str):
+        if self.verbose:
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.info(f"{label} took {elapsed:.2f}s for '{self.file_name}'")
+
+    def _wrap_query(self, query: str) -> str:
+        return f"Regarding document '{self.file_name}': {query}"
 
     @classmethod
     def from_defaults(

@@ -6,6 +6,9 @@ and reasoning capabilities through a ReAct agent architecture.
 """
 
 import logging
+import random
+import asyncio
+import time
 from datetime import datetime
 from threading import Thread
 from typing import Any, List, Optional, Dict, Union
@@ -32,12 +35,13 @@ from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
 from private_gpt.server.tools.document_tool import DocumentSpecificTool
 from private_gpt.server.tools.summary_tool import DocumentSummaryTool
 from private_gpt.server.tools.web_tool import Crawl4AITool
+from private_gpt.server.tools.time_tool import TimeTool
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from llama_index.core.agent.react.formatter import ReActChatFormatter
+from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 
 
 logger = logging.getLogger(__name__)
-
 
 class AgenticRAGEngine(BaseChatEngine):
     """
@@ -46,28 +50,6 @@ class AgenticRAGEngine(BaseChatEngine):
     This chat engine combines document retrieval, web search, and reasoning capabilities
     through a ReAct agent architecture. It provides comprehensive document analysis,
     real-time web search, and intelligent source attribution.
-    
-    Features:
-    - Multi-modal tool integration (documents, web search, summaries)
-    - Enhanced context management and memory handling
-    - Structured reasoning with source tracking
-    - Configurable similarity search and post-processing
-    - Async and streaming support
-    
-    Args:
-        llm: The language model to use for reasoning and generation
-        index: Vector store index for document retrieval
-        vector_store_component: Component for vector store operations
-        node_postprocessors: Optional list of node post-processors
-        system_prompt: Custom system prompt (uses default if None)
-        memory: Chat memory buffer (creates default if None)
-        callback_manager: Callback manager for tracing
-        verbose: Enable verbose logging
-        max_iterations: Maximum ReAct iterations
-        document_files: List of document files for specific tools
-        tool_name_prefix: Prefix for document-specific tool names
-        citation_format: Format string for citations
-        similarity_top_k: Number of similar documents to retrieve
     """
 
     def __init__(
@@ -75,6 +57,7 @@ class AgenticRAGEngine(BaseChatEngine):
         llm: LLM,
         index: VectorStoreIndex,
         vector_store_component: VectorStoreComponent,
+        node_store_component: NodeStoreComponent,
         node_postprocessors: Optional[List[BaseNodePostprocessor]] = None,
         system_prompt: Optional[str] = None,
         memory: Optional[ChatMemoryBuffer] = None,
@@ -84,7 +67,11 @@ class AgenticRAGEngine(BaseChatEngine):
         document_files: Optional[List[str]] = None,
         tool_name_prefix: str = "doc",
         citation_format: str = "[Document: {file_name}, Page {page}]",
-        similarity_top_k: int = 5
+        similarity_top_k: int = 5,
+        max_retries: int = 5,
+        base_delay: float = 1.0,
+        max_delay: float = 60.0,
+        jitter: tuple[float, float] = (0.1, 0.3)
     ) -> None:
         """Initialize the AgenticRAGEngine with all necessary components."""
         # Core components
@@ -92,6 +79,7 @@ class AgenticRAGEngine(BaseChatEngine):
         self._index = index
         self._vector_store_component = vector_store_component
         self._node_postprocessors = node_postprocessors or []
+        self._node_store = node_store_component
         
         # Configuration
         self._verbose = verbose
@@ -100,6 +88,12 @@ class AgenticRAGEngine(BaseChatEngine):
         self._tool_name_prefix = tool_name_prefix
         self._citation_format = citation_format
         self._similarity_top_k = similarity_top_k
+        
+        # Rate limit handling
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._max_delay = max_delay
+        self._jitter = jitter
         
         # Callback management
         self.callback_manager = callback_manager or CallbackManager([])
@@ -136,12 +130,6 @@ class AgenticRAGEngine(BaseChatEngine):
 
     @property
     def chat_history(self) -> List[ChatMessage]:
-        """
-        Get the chat history from memory.
-        
-        Returns:
-            List of chat messages from the current session
-        """
         return self._memory.get_all()
 
     def reset(self) -> None:
@@ -150,12 +138,6 @@ class AgenticRAGEngine(BaseChatEngine):
         logger.debug("Chat memory reset")
 
     def _build_tools(self) -> List[BaseTool]:
-        """
-        Construct comprehensive toolset with enhanced RAG tool configuration.
-        
-        Returns:
-            List of configured tools for the agent
-        """
         tools = []
         
         # Primary document retrieval tool
@@ -166,13 +148,17 @@ class AgenticRAGEngine(BaseChatEngine):
         doc_tools = self._create_document_specific_tools()
         tools.extend(doc_tools)
         
-        # Summary tools
+        # # Summary tools
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
         
         # Web search tools
         web_tools = self._create_web_tools()
         tools.extend(web_tools)
+        
+        # Add time tool
+        time_tool = TimeTool()
+        tools.append(time_tool)
         
         # Validate and return tools
         validated_tools = self._validate_tools(tools)
@@ -232,6 +218,10 @@ class AgenticRAGEngine(BaseChatEngine):
         """Create tools for specific document analysis."""
         tools = []
         
+        if not self._document_files:
+            logger.warning("No document files provided for document-specific tools")
+            return tools
+            
         for file_name in self._document_files:
             try:
                 tool = DocumentSpecificTool(
@@ -247,6 +237,7 @@ class AgenticRAGEngine(BaseChatEngine):
                     verbose=self._verbose
                 )
                 tools.append(tool)
+                logger.info(f"Created document tool for {file_name}")
                 
             except Exception as e:
                 logger.error(f"Failed to create document tool for {file_name}: {e}")
@@ -257,23 +248,26 @@ class AgenticRAGEngine(BaseChatEngine):
         """Create document summary tools."""
         tools = []
         
+        if not self._document_files:
+            logger.warning("No document files provided for summary tools")
+            return tools
+            
         for file_name in self._document_files:
             try:
                 tool = DocumentSummaryTool(
                     index=self._index,
                     llm=self._llm,
+                    node_store_component=self._node_store,
+                    vector_store_component=self._vector_store_component,
                     file_name=file_name,
                     callback_manager=self.callback_manager,
                     tool_name_prefix="summary",
                     citation_format=self._citation_format,
                     similarity_top_k=self._similarity_top_k,
                     verbose=self._verbose,
-                    settings=None  # Optional settings parameter
                 )
                 tools.append(tool)
-                
-                if self._verbose:
-                    logger.info(f"Created summary tool for {file_name}")
+                logger.info(f"Created summary tool for {file_name}")
                 
             except Exception as e:
                 logger.error(f"Failed to create summary tool for {file_name}: {e}")
@@ -285,12 +279,10 @@ class AgenticRAGEngine(BaseChatEngine):
         tools = []
         
         try:
-            # DuckDuckGo search tool
             search_tool_spec = DuckDuckGoSearchToolSpec()
             search_tools = search_tool_spec.to_tool_list()
             tools.extend(search_tools)
             
-            # Web crawling tool
             crawl_tool = Crawl4AITool()
             tools.append(crawl_tool)
             
@@ -299,7 +291,6 @@ class AgenticRAGEngine(BaseChatEngine):
                 
         except Exception as e:
             logger.error(f"Failed to create web tools: {e}")
-            
         return tools
 
     def _validate_tools(self, tools: List[BaseTool]) -> List[BaseTool]:
@@ -319,7 +310,6 @@ class AgenticRAGEngine(BaseChatEngine):
                 
             seen_names.add(tool_name)
             valid_tools.append(tool)
-        print(f"VALID TOOLS: {valid_tools}")
         return valid_tools
 
     def _get_qa_template(self) -> PromptTemplate:
@@ -382,125 +372,191 @@ class AgenticRAGEngine(BaseChatEngine):
 
     def _get_default_system_prompt(self) -> str:
         """Generate a comprehensive system prompt that follows ReAct format with RAG capabilities."""
-        doc_list = ""
-        if self._document_files:
-            doc_list = "\nAvailable Documents:\n" + "\n".join(
-                f"• {doc}" for doc in self._document_files
-            )
-
         return """
         # ReAct Agent System Prompt
-        You are a reasoning agent capable of handling a wide range of tasks—from answering questions and analyzing documents to summarizing content and providing actionable recommendations.
-        ## Tools
-        You have access to a wide variety of tools. Use them in any sequence necessary to break down and solve the task at hand. You are responsible for decomposing complex tasks and invoking tools for subtasks as needed.
+
+        You are an intelligent reasoning agent designed to solve complex tasks through systematic thinking and tool usage. Your core strength lies in breaking down problems, reasoning through solutions, and utilizing available tools effectively.
+
+        ## Your Capabilities
+        - **Analytical Reasoning**: Break down complex problems into manageable components
+        - **Tool Orchestration**: Use multiple tools in sequence to gather and process information
+        - **Multi-modal Processing**: Handle text, documents, web content, and structured data
+        - **Adaptive Communication**: Match your response style to the user's needs and context
+
+        ## Available Tools
         You have access to the following tools:
         {tool_desc}
 
-        ---
-        ## Core ReAct Format (Reasoning + Action)
-        Use the following pattern to interact with tools:
+        ## Core ReAct Methodology
+
+        ### Standard Format
+        Follow this precise pattern for tool interactions:
+
         ```
-        Thought: The current language of the user is: (user's language). I need to use a tool to help answer the question.
+        Thought: [Your reasoning about what needs to be done next]
         Action: tool_name
         Action Input: {{"param1": "value1", "param2": "value2"}}
         ```
-        Tool output will follow this format:
-        ```
-        Observation: tool response
-        ```
-        Repeat the cycle (Thought → Action → Observation) until you can respond confidently. Then conclude with one of:
 
-        **If you can answer:**
+        After each action, you'll receive:
         ```
-        Thought: I can answer without using any more tools. I'll use the user's language to answer.
-        Answer: [your final answer here]
+        Observation: [Tool response/output]
         ```
-        **If you cannot answer:**
-        ```
-        Thought: I cannot answer the question with the provided tools.
-        Answer: [reason or limitation in user's language]
-        ```
-        ---
-        ## Response Modes
-        Adapt your response style to the type of query:
-        ### 1. **Simple Questions / Casual Conversation**
-        - Use a direct, friendly tone
-        - Answer without formal structure
-        - Avoid unnecessary tool usage
 
-        ### 2. **Research / Analytical Tasks**
-        Structure your response as:
+        ### Completion Patterns
+        End your reasoning cycle with one of these conclusions:
+
+        **When you can provide a complete answer:**
+        ```
+        Thought: I have sufficient information to provide a comprehensive answer.
+        Answer: [Your detailed response in the user's language]
+        ```
+
+        **When you cannot answer:**
+        ```
+        Thought: I cannot provide a satisfactory answer due to [specific limitation].
+        Answer: [Clear explanation of limitations and any partial insights you can offer]
+        ```
+
+        ## Information Gathering Strategy
+
+        ### Priority Order
+        1. **Internal Knowledge**: Start with your existing knowledge for context
+        2. **Document Retrieval**: Use `document_retriever` for uploaded/available documents
+        3. **Web Search**: Use `DuckDuckGoSearchTool` for current events, recent developments, or missing information
+        4. **Content Extraction**: Use `crawl4ai_scraper` to extract content from relevant URLs
+        5. **Cross-Verification**: Compare multiple sources for accuracy
+
+        ### Research Best Practices
+        - **Currency First**: For time-sensitive topics, always search for the most recent information
+        - **Source Quality**: Prioritize authoritative, credible sources
+        - **Multiple Perspectives**: Gather information from diverse, reliable sources
+        - **Fact Verification**: Cross-check critical claims across sources
+
+        ## Response Adaptation
+
+        ### Query Classification
+        Automatically identify the query type and adapt accordingly:
+
+        **Simple/Conversational Queries**
+        - Direct, friendly responses
+        - Minimal tool usage unless necessary
+        - Natural, conversational tone
+
+        **Research/Analytical Tasks**
+        - Structured, comprehensive analysis
+        - Multiple tool usage for thorough investigation
+        - Professional, detailed formatting
+
+        **Technical/Professional Questions**
+        - Domain-specific terminology and precision
+        - Actionable insights and recommendations
+        - Detailed citations and evidence
+
+        ### Response Structure for Complex Tasks
 
         ```markdown
         # Executive Summary
-        - Key findings and conclusions
+        [Key findings and main conclusions - 2-3 bullet points]
 
-        # Analysis
-        ## Topic A
-        - Insight with citation [page](doc.pdf)
-        - Supporting evidence
+        # Detailed Analysis
+        ## [Primary Topic/Finding]
+        - Core insight with supporting evidence
+        - Citation: [source reference]
 
-        ## Topic B
-        - Insight with citation
-        - Supporting evidence
+        ## [Secondary Topic/Finding]
+        - Supporting analysis
+        - Citation: [source reference]
 
-        # Supporting Evidence
-        - Quotes, data, or links
+        # Evidence Base
+        [Direct quotes, data points, or specific references that support your analysis]
 
-        # Limitations
-        - Gaps in data or confidence
+        # Confidence & Limitations
+        [Any uncertainties, data gaps, or areas requiring further investigation]
         ```
 
-        ### 3. **Technical / Professional Questions**
-        - Provide technical accuracy
-        - Use domain-appropriate terminology
-        - Give specific, actionable insights
-        - Add citations or references if applicable
+        ## Citation Standards
 
-        ## Citation Guidelines
+        ### Document Citations
+        Format: `[page/section](document_name)`
+        Example: `[p. 42](compliance_manual.pdf)` or `[Section 3.2](technical_spec.docx)`
 
-        **Document Citations:** `[page](document_name)`  
-        Example: `[42](compliance_manual.pdf)`
+        ### Web Citations
+        Format: `[descriptive_title](URL)`
+        Example: `[OpenAI API Documentation](https://platform.openai.com/docs)`
 
-        **Web Citations:** `[title](url)`  
-        Example: `[OpenAI Docs](https://openai.com/docs)`
+        ### Multiple Sources
+        When synthesizing from multiple sources: `[Source 1](ref1), [Source 2](ref2)`
 
-        ## Quality Standards
+        ## Quality Assurance
 
-        - **Accuracy:** Validate with available tools and sources
-        - **Completeness:** Cover all relevant aspects of the query
-        - **Clarity:** Keep responses well-organized and easy to understand
-        - **Attribution:** Always cite sources when using external or document data
-        - **Relevance:** Focus strictly on what helps answer the user's query
+        ### Accuracy Standards
+        - Verify facts across multiple reliable sources
+        - Distinguish between confirmed facts and interpretations
+        - Acknowledge when information is preliminary or uncertain
 
-        ## Adaptive Strategy
-        1. **Assess the Query Type**
-        - Is it conversational, analytical, technical, or something else?
+        ### Completeness Criteria
+        - Address all aspects of the user's query
+        - Provide context necessary for understanding
+        - Include relevant background information when helpful
 
-        2. **Match the Response Style**
-        - Use structure and formality only if the query calls for it
+        ### Clarity Requirements
+        - Use clear, accessible language appropriate to the audience
+        - Structure information logically
+        - Define technical terms when necessary
 
-        3. **Use Tools Thoughtfully**
-        - Only when they meaningfully improve the answer
+        ## Language and Tone
 
-        4. **Stay in the User's Language**
-        - Always match the user's preferred language
+        ### Language Matching
+        - Always respond in the user's preferred language
+        - Maintain consistent language throughout the interaction
+        - Preserve technical terms in their original language when appropriate
 
-        5. **Acknowledge Uncertainty**
-        - Be transparent about limitations or ambiguous areas
-        6. **Put User Needs First**
-        - Prioritize helpfulness over rigid format
+        ### Tone Adaptation
+        - **Professional**: For business, technical, or formal queries
+        - **Conversational**: For casual questions or personal topics
+        - **Educational**: For learning-oriented requests
+        - **Analytical**: For research and investigation tasks
+
+        ## Error Handling and Limitations
+
+        ### When Tools Fail
+        - Acknowledge the limitation clearly
+        - Provide alternative approaches when possible
+        - Offer partial information if available
+
+        ### When Information is Insufficient
+        - Be transparent about what you don't know
+        - Suggest additional resources or approaches
+        - Provide confidence levels for your conclusions
+
+        ### When Conflicting Information Exists
+        - Present multiple perspectives fairly
+        - Indicate the reliability of different sources
+        - Help users understand the nature of the disagreement
+
+        ## Core Operating Principles
+
+        1. **Think Before Acting**: Always start with a clear thought about what you need to accomplish
+        2. **Tool Efficiency**: Use the minimum necessary tools to achieve comprehensive results
+        3. **Source Hierarchy**: Prioritize authoritative, recent, and relevant sources
+        4. **User-Centric**: Adapt your approach to what best serves the user's specific needs
+        5. **Transparent Reasoning**: Make your thought process clear and followable
+        6. **Iterative Improvement**: Build upon previous observations to refine your approach
+
+        ## Success Metrics
+
+        Your effectiveness is measured by:
+        - **Accuracy**: Factual correctness and reliable sourcing
+        - **Completeness**: Comprehensive coverage of the query
+        - **Relevance**: Direct applicability to the user's needs
+        - **Clarity**: Easy to understand and well-organized responses
+        - **Efficiency**: Achieving thorough results without unnecessary tool usage
+
         ---
-        ## Core Principles
-        - Begin tool use with a Thought
-        - Default to internal documents before external sources
-        - Cite and reference carefully following citations guidelines
-        - Keep tone professional, helpful, and clear
-        - Tailor responses to be either quick or comprehensive as needed
-        ---
-        ## Your Goal
-        Deliver accurate, well-reasoned, and user-appropriate answers—whether it's a fast fact, a structured analysis, or a technical deep dive.
-        """
+
+        Remember: Your goal is to be a reliable, intelligent assistant that thinks systematically, uses tools effectively, and delivers valuable insights tailored to each user's specific needs and context.
+    """
 
     def _sync_memory(self, chat_history: Optional[List[ChatMessage]]) -> None:
         """Synchronize memory with provided chat history."""
@@ -516,6 +572,32 @@ class AgenticRAGEngine(BaseChatEngine):
             sources=getattr(response, 'sources', []),
             source_nodes=getattr(response, 'source_nodes', [])
         )
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        """Check if the error is a rate limit error."""
+        error_str = str(error).lower()
+        return any(msg in error_str for msg in [
+            "rate limit",
+            "too many requests",
+            "429",
+            "resource exhausted",
+            "quota exceeded"
+        ])
+
+    def _get_retry_delay(self, attempt: int) -> float:
+        """Calculate delay with exponential backoff and jitter."""
+        delay = min(self._base_delay * (2 ** attempt), self._max_delay)
+        jitter = random.uniform(*self._jitter)
+        return delay * (1 + jitter)
+
+    async def _handle_rate_limit(self, attempt: int, error: Exception) -> None:
+        """Handle rate limit error with exponential backoff."""
+        delay = self._get_retry_delay(attempt)
+        logger.warning(
+            f"Rate limit hit, retrying in {delay:.1f} seconds "
+            f"(attempt {attempt + 1}/{self._max_retries})"
+        )
+        await asyncio.sleep(delay)
 
     @trace_method("chat")
     def chat(
@@ -535,29 +617,39 @@ class AgenticRAGEngine(BaseChatEngine):
         """
         self._sync_memory(chat_history)
         
-        try:
-            response = self._agent.chat(message)
-            
-            # Ensure message is stored in memory
-            if hasattr(response, 'message') and response.message:
-                self._memory.put(response.message)
-            else:
-                # Fallback: create message from response
-                message = ChatMessage(
-                    content=getattr(response, 'response', str(response)),
-                    role=MessageRole.ASSISTANT
+        for attempt in range(self._max_retries):
+            try:
+                response = self._agent.chat(message)
+                
+                # Ensure message is stored in memory
+                if hasattr(response, 'message') and response.message:
+                    self._memory.put(response.message)
+                else:
+                    # Fallback: create message from response
+                    message = ChatMessage(
+                        content=getattr(response, 'response', str(response)),
+                        role=MessageRole.ASSISTANT
+                    )
+                    self._memory.put(message)
+                
+                return self._format_response(response)
+                
+            except Exception as e:
+                if self._is_rate_limit_error(e) and attempt < self._max_retries - 1:
+                    delay = self._get_retry_delay(attempt)
+                    logger.warning(
+                        f"Rate limit hit, retrying in {delay:.1f} seconds "
+                        f"(attempt {attempt + 1}/{self._max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                
+                logger.error(f"Chat error: {e}", exc_info=self._verbose)
+                return AgentChatResponse(
+                    response="I encountered an error while processing your request. Please try again.",
+                    sources=[],
+                    source_nodes=[]
                 )
-                self._memory.put(message)
-            
-            return self._format_response(response)
-            
-        except Exception as e:
-            logger.error(f"Chat error: {e}", exc_info=self._verbose)
-            return AgentChatResponse(
-                response="I encountered an error while processing your request. Please try again.",
-                sources=[],
-                source_nodes=[]
-            )
 
     @trace_method("stream_chat")
     def stream_chat(
@@ -577,31 +669,41 @@ class AgenticRAGEngine(BaseChatEngine):
         """
         self._sync_memory(chat_history)
         
-        try:
-            response = self._agent.stream_chat(message)
-            
-            result = StreamingAgentChatResponse(
-                chat_stream=response.response_gen,
-                sources=getattr(response, 'sources', []),
-                source_nodes=getattr(response, 'source_nodes', [])
-            )
-            
-            # Handle memory update in background thread
-            Thread(
-                target=result.write_response_to_history, 
-                args=(self._memory,),
-                daemon=True
-            ).start()
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Stream chat error: {e}", exc_info=self._verbose)
-            return StreamingAgentChatResponse(
-                chat_stream=iter(["I encountered an error while processing your request."]),
-                sources=[],
-                source_nodes=[]
-            )
+        for attempt in range(self._max_retries):
+            try:
+                response = self._agent.stream_chat(message)
+                
+                result = StreamingAgentChatResponse(
+                    chat_stream=response.response_gen,
+                    sources=getattr(response, 'sources', []),
+                    source_nodes=getattr(response, 'source_nodes', [])
+                )
+                
+                # Handle memory update in background thread
+                Thread(
+                    target=result.write_response_to_history, 
+                    args=(self._memory,),
+                    daemon=True
+                ).start()
+                
+                return result
+                
+            except Exception as e:
+                if self._is_rate_limit_error(e) and attempt < self._max_retries - 1:
+                    delay = self._get_retry_delay(attempt)
+                    logger.warning(
+                        f"Rate limit hit, retrying in {delay:.1f} seconds "
+                        f"(attempt {attempt + 1}/{self._max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                
+                logger.error(f"Stream chat error: {e}", exc_info=self._verbose)
+                return StreamingAgentChatResponse(
+                    chat_stream=iter(["I encountered an error while processing your request."]),
+                    sources=[],
+                    source_nodes=[]
+                )
 
     @trace_method("achat")
     async def achat(
@@ -621,28 +723,33 @@ class AgenticRAGEngine(BaseChatEngine):
         """
         self._sync_memory(chat_history)
         
-        try:
-            response = await self._agent.achat(message)
-            
-            # Ensure message is stored in memory
-            if hasattr(response, 'message') and response.message:
-                self._memory.put(response.message)
-            else:
-                message = ChatMessage(
-                    content=getattr(response, 'response', str(response)),
-                    role=MessageRole.ASSISTANT
+        for attempt in range(self._max_retries):
+            try:
+                response = await self._agent.achat(message)
+                
+                # Ensure message is stored in memory
+                if hasattr(response, 'message') and response.message:
+                    self._memory.put(response.message)
+                else:
+                    message = ChatMessage(
+                        content=getattr(response, 'response', str(response)),
+                        role=MessageRole.ASSISTANT
+                    )
+                    self._memory.put(message)
+                
+                return self._format_response(response)
+                
+            except Exception as e:
+                if self._is_rate_limit_error(e) and attempt < self._max_retries - 1:
+                    await self._handle_rate_limit(attempt, e)
+                    continue
+                
+                logger.error(f"Async chat error: {e}", exc_info=self._verbose)
+                return AgentChatResponse(
+                    response="I encountered an error while processing your request. Please try again.",
+                    sources=[],
+                    source_nodes=[]
                 )
-                self._memory.put(message)
-            
-            return self._format_response(response)
-            
-        except Exception as e:
-            logger.error(f"Async chat error: {e}", exc_info=self._verbose)
-            return AgentChatResponse(
-                response="I encountered an error while processing your request. Please try again.",
-                sources=[],
-                source_nodes=[]
-            )
 
     @trace_method("astream_chat")
     async def astream_chat(
@@ -662,28 +769,33 @@ class AgenticRAGEngine(BaseChatEngine):
         """
         self._sync_memory(chat_history)
         
-        try:
-            response = await self._agent.astream_chat(message)
-            
-            result = StreamingAgentChatResponse(
-                chat_stream=response.response_gen,
-                sources=getattr(response, 'sources', []),
-                source_nodes=getattr(response, 'source_nodes', [])
-            )
-            
-            # Handle memory update in background thread
-            Thread(
-                target=result.write_response_to_history, 
-                args=(self._memory,),
-                daemon=True
-            ).start()
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Async stream chat error: {e}", exc_info=self._verbose)
-            return StreamingAgentChatResponse(
-                chat_stream=iter(["I encountered an error while processing your request."]),
-                sources=[],
-                source_nodes=[]
-            )
+        for attempt in range(self._max_retries):
+            try:
+                response = await self._agent.astream_chat(message)
+                
+                result = StreamingAgentChatResponse(
+                    chat_stream=response.response_gen,
+                    sources=getattr(response, 'sources', []),
+                    source_nodes=getattr(response, 'source_nodes', [])
+                )
+                
+                # Handle memory update in background thread
+                Thread(
+                    target=result.write_response_to_history, 
+                    args=(self._memory,),
+                    daemon=True
+                ).start()
+                
+                return result
+                
+            except Exception as e:
+                if self._is_rate_limit_error(e) and attempt < self._max_retries - 1:
+                    await self._handle_rate_limit(attempt, e)
+                    continue
+                
+                logger.error(f"Async stream chat error: {e}", exc_info=self._verbose)
+                return StreamingAgentChatResponse(
+                    chat_stream=iter(["I encountered an error while processing your request."]),
+                    sources=[],
+                    source_nodes=[]
+                )

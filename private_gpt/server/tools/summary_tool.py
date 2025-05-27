@@ -16,8 +16,11 @@ from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.response_synthesizers import ResponseMode
 from llama_index.core.prompts import PromptTemplate
-
-from private_gpt.settings.settings import Settings
+from llama_index.core.tools.types import ToolMetadata, ToolOutput
+from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.components.vector_store.vector_store_component import (
+    VectorStoreComponent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +75,6 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "BEGIN YOUR SUMMARY:"
 )
 
-
 class DocumentSummaryTool(BaseTool):
     """Tool for getting a summary of a document."""
 
@@ -81,6 +83,8 @@ class DocumentSummaryTool(BaseTool):
         file_name: str,
         llm: LLM,
         index: VectorStoreIndex,
+        node_store_component: NodeStoreComponent,
+        vector_store_component: VectorStoreComponent,
         callback_manager: Optional[CallbackManager] = None,
         tool_name_prefix: str = "summary",
         citation_format: str = "[Document: {file_name}, Page {page}]",
@@ -90,7 +94,6 @@ class DocumentSummaryTool(BaseTool):
         cache_size: int = 100,
         streaming: bool = False,
         response_mode: str = "tree_summarize",
-        settings: Optional[Settings] = None,
     ):
         self.file_name = file_name
         self.llm = llm
@@ -103,13 +106,15 @@ class DocumentSummaryTool(BaseTool):
         self.cache_size = cache_size
         self.streaming = streaming
         self.response_mode = response_mode
-        self.settings = settings or Settings()
 
         self._name = f"{tool_name_prefix}_{self._generate_safe_name(file_name)}"
         self._description = self._generate_tool_description(file_name)
 
-        # Initialize storage context from the index
-        self.storage_context = self.index.storage_context
+        self.storage_context = StorageContext.from_defaults(
+            vector_store=vector_store_component.vector_store,
+            docstore=node_store_component.doc_store,
+            index_store=node_store_component.index_store,
+        )
 
         if self.verbose:
             logger.info(f"[INIT] Summary tool created for '{self.file_name}' with tool name '{self._name}'")
@@ -141,7 +146,6 @@ class DocumentSummaryTool(BaseTool):
             
             if self.verbose:
                 logger.info(f"Found {len(nodes)} nodes for file '{filename}'")
-            
             return nodes
         except Exception as e:
             logger.error(f"Error getting nodes for file '{filename}': {e}")
@@ -177,7 +181,7 @@ class DocumentSummaryTool(BaseTool):
             llm=self.llm,
             response_mode=ResponseMode.TREE_SUMMARIZE,
             streaming=self.streaming,
-            use_async=self.settings.summarize.use_async,
+            use_async=is_async,
             text_qa_template=PromptTemplate(DEFAULT_SUMMARIZE_PROMPT)
         )
 
@@ -189,6 +193,9 @@ class DocumentSummaryTool(BaseTool):
                     response = query_engine.query(enhanced_query)
 
                 self._log_elapsed(start_time, "Summary query")
+                # Ensure response is converted to string
+                if response is None:
+                    return f"No response generated for file: {self.file_name}"
                 return str(response)
             except Exception as e:
                 retry_count += 1
@@ -197,33 +204,79 @@ class DocumentSummaryTool(BaseTool):
                     logger.error(f"[FAIL] Final failure on '{self.file_name}' - {e}", exc_info=self.verbose)
                     return f"Error retrieving summary from '{self.file_name}': {str(e)}"
 
-    def __call__(self, query: str) -> str:
-        return self._run_query(query, is_async=False)
+    def __call__(self, query: str) -> ToolOutput:
+        """Run a query with retry logic and fallback."""
+        try:
+            # Create a synchronous version of the query
+            result = self._run_query_sync(query)
+            if not isinstance(result, str):
+                result = str(result)
+            return ToolOutput(
+                content=result,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=result,
+                is_error=False
+            )
+        except Exception as e:
+            error_msg = f"Error retrieving summary from '{self.file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=self.verbose)
+            return ToolOutput(
+                content=error_msg,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=str(e),
+                is_error=True
+            )
 
-    async def acall(self, query: str) -> str:
-        return await self._run_query(query, is_async=True)
+    def _run_query_sync(self, query: str) -> str:
+        """Synchronous wrapper for _run_query."""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def run_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._run_query(query, is_async=False))
+            finally:
+                loop.close()
+        
+        # Run the async code in a separate thread to avoid event loop conflicts
+        with ThreadPoolExecutor() as executor:
+            return executor.submit(run_in_thread).result()
+
+    async def acall(self, query: str) -> ToolOutput:
+        """Run a query asynchronously with retry logic."""
+        try:
+            result = await self._run_query(query, is_async=True)
+            if not isinstance(result, str):
+                result = str(result)
+            return ToolOutput(
+                content=result,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=result,
+                is_error=False
+            )
+        except Exception as e:
+            error_msg = f"Error retrieving summary from '{self.file_name}': {str(e)}"
+            logger.error(error_msg, exc_info=self.verbose)
+            return ToolOutput(
+                content=error_msg,
+                tool_name=self._name,
+                raw_input={"query": query},
+                raw_output=str(e),
+                is_error=True
+            )
 
     @property
-    def metadata(self) -> Dict[str, Any]:
-        return {
-            "name": self._name,
-            "description": self._description,
-            "args_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": f"Query to run on document '{self.file_name}'."
-                    }
-                },
-                "required": ["query"]
-            },
-            "document_info": {
-                "file_name": self.file_name,
-                "tool_type": "document_summary",
-                "created_at": datetime.now().isoformat()
-            }
-        }
+    def metadata(self) -> ToolMetadata:
+        """Get tool metadata."""
+        return ToolMetadata(
+            name=self._name,
+            description=self._description
+        )
 
     @classmethod
     def from_defaults(

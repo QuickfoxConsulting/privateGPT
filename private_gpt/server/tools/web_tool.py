@@ -1,10 +1,10 @@
 import re
 import json
 import asyncio
+import logging
 from typing import Any, Dict
 from urllib.parse import urlparse
 from crawl4ai import AsyncWebCrawler
-import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.core.tools import BaseTool

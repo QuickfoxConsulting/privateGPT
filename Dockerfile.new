@@ -39,7 +39,7 @@ ENV POETRY_VIRTUALENVS_IN_PROJECT=true
 FROM base AS dependencies
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
-ARG POETRY_EXTRAS="vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini"
+ARG POETRY_EXTRAS="vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini storage-nodestore-postgres"
 RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 RUN playwright install 
 FROM base AS app
@@ -83,8 +83,8 @@ fi\n\
 \n\
 # Apply Alembic database migrations\n\
 echo "Applying database migrations"\n\
-alembic upgrade 4e9976d\n\
-alembic upgrade a5d108cc\n\
+alembic upgrade 0c3bba0d99f7\n\
+alembic upgrade d06186f6137d\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
@@ -92,6 +92,6 @@ poetry run python scripts/fixtures.py\n\
 \n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 1' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
 
 ENTRYPOINT ["/app/startup.sh"]

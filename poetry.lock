@@ -9959,4 +9959,4 @@ vector-stores-qdrant = ["llama-index-vector-stores-qdrant"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.12"
-content-hash = "8d38830e4ff31dc2bfdfa7c65d9639b13c0f2947199e9e4111063d550ad40d79"
+content-hash = "b5701bab28a7085130047ab0decca16d4af0824036f309884aadff4daeb11d0d"

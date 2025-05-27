@@ -59,7 +59,7 @@ llm:
 rag:
   similarity_top_k: 10
   #This value controls how many "top" documents the RAG returns to use in the context.
-  similarity_value: 0.5
+  similarity_value: 0.6
   #This value is disabled by default.  If you enable this settings, the RAG will only use articles that meet a certain percentage score.
   rerank:
     enabled: true
@@ -101,7 +101,7 @@ vectorstore:
   database: qdrant
 
 nodestore:
-  database: simple
+  database: postgres
 
 milvus:
   uri: local_data/private_gpt/milvus/milvus_local.db
@@ -114,9 +114,9 @@ qdrant:
 postgres:
   host: db
   port: 5432
-  database: postgres
-  user: postgres
-  password: postgres
+  database: quickref
+  user: admin
+  password: admin
   schema_name: private_gpt
 
 sagemaker:

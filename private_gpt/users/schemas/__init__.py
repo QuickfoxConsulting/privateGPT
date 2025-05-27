@@ -2,7 +2,7 @@ from .role import Role, RoleCreate, RoleInDB, RoleUpdate
 from .token import TokenSchema, TokenPayload
 from .user import (
     User, UserCreate, UserInDB, UserUpdate, UserBaseSchema, Profile, 
-    UsernameUpdate, DeleteUser, UserAdminUpdate, UserAdmin, PasswordUpdate
+    UsernameUpdate, DeleteUser, UserAdminUpdate, UserAdmin, PasswordUpdate, LoginAttempt
 )
 from .user_role import UserRole, UserRoleCreate, UserRoleInDB, UserRoleUpdate
 from .subscription import (

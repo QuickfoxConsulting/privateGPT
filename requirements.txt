@@ -104,7 +104,7 @@ multidict==6.4.3
 multiprocess==0.70.18
 mypy==1.15.0
 mypy_extensions==1.1.0
-nest-asyncio==1.6.0
+nest-asyncio>=1.5.8
 networkx==3.4.2
 ninja==1.11.1.4
 nltk==3.9.1
@@ -160,7 +160,7 @@ regex==2024.11.6
 requests==2.32.3
 requests-toolbelt==1.0.0
 retry-async==0.1.4
-rich==14.0.0
+rich>=13.7.0
 rich-toolkit==0.14.4
 rpds-py==0.24.0
 rsa==4.9.1

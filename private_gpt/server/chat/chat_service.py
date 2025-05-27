@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pydantic import BaseModel
 from typing import List
-
+from datetime import datetime
 from injector import inject, singleton
 from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
 from llama_index.core.chat_engine.types import (
@@ -51,10 +51,11 @@ class TitleGeneration(BaseModel):
     title: str
 
 reranker_path = models_path / 'reranker'
+current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-DEFAULT_SYSTEM_PROMPT = """
+DEFAULT_SYSTEM_PROMPT = f"""
 You are QuickREF, a helpful, honest, and knowledgeable assistant from Quickfox Consulting.
-
+Current date is {current_date}.
 Your goal is to support users effectively by providing clear, accurate, and respectful responses. 
 - When context is available, use it faithfully and avoid speculation.
 - When context is missing, draw on general knowledge confidently — but never make things up.
@@ -63,9 +64,9 @@ Your goal is to support users effectively by providing clear, accurate, and resp
 Stay professional, avoid hedging language, and aim to genuinely assist.
 """
 
-RETRIEVAL_SYSTEM_PROMPT = """
+RETRIEVAL_SYSTEM_PROMPT = f"""
 You are a retrieval-augmented assistant built to provide clear, accurate, and context-grounded responses using provided documents.
-
+Current date is {current_date}
 ### Key Principles
 
 1. **Answer Only From Documents**
@@ -207,6 +208,7 @@ class ChatService:
             embed_model=embedding_component.embedding_model,
             show_progress=True,
         )
+        self.node_store = node_store_component
 
     def _get_qa_template(self) -> str:
         """Custom QA template with better context integration."""
@@ -282,8 +284,11 @@ class ChatService:
             return AgenticRAGEngine(
                 llm=self.llm_component.llm,
                 index=self.index,
+                document_files=file_list,
+                node_store_component=self.node_store,
                 vector_store_component=self.vector_store_component,
                 node_postprocessors=node_postprocessors,
+                max_iterations=20,
                 verbose=True,
             )
         
@@ -291,7 +296,7 @@ class ChatService:
             vector_index_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
-                similarity_top_k=10,
+                similarity_top_k=5,
             )
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
@@ -317,26 +322,36 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            response_synthesizer = get_response_synthesizer(
-                response_mode="tree_summarize",
-                llm=self.llm_component.llm,
-                structured_answer_filtering=True,
-                text_qa_template=self._get_qa_template(),
-                # streaming=True  # Enable streaming for better responsiveness
-            )
-            custom_query_engine = RetrieverQueryEngine.from_args(
+            # response_synthesizer = get_response_synthesizer(
+            #     response_mode="tree_summarize",
+            #     llm=self.llm_component.llm,
+            #     structured_answer_filtering=True,
+            #     text_qa_template=self._get_qa_template(),
+            #     # streaming=True  # Enable streaming for better responsiveness
+            # )
+            # custom_query_engine = RetrieverQueryEngine.from_args(
+            #     retriever=vector_index_retriever,
+            #     llm=self.llm_component.llm,
+            #     response_synthesizer=response_synthesizer,
+            #     verbose=True  # For debugging and understanding the process
+            # )
+            # return ContextChatEngine.from_defaults(
+            #     system_prompt=system_prompt,
+            #     retriever=custom_query_engine,
+            #     llm=self.llm_component.llm,  # Takes no effect at the moment
+            #     node_postprocessors=node_postprocessors,
+            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            #     # context_prompt=CONTEXT_PROMPT_TEMPLATE,
+            #     verbose=True,
+            # )
+            return AgenticCondenseChatEngine.from_defaults(
                 retriever=vector_index_retriever,
-                llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
-                verbose=True  # For debugging and understanding the process
-            )
-            return ContextChatEngine.from_defaults(
-                system_prompt=system_prompt,
-                retriever=custom_query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
+                llm=self.llm_component.llm, 
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                # context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+                skip_condense=True,
                 verbose=True,
             )
         else:

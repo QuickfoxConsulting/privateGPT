@@ -29,6 +29,9 @@ class UsernameUpdate(BaseModel):
 class UserUpdate(BaseModel):
 	last_login: Optional[datetime] = None
 
+class LoginAttempt(BaseModel):
+	failed_login_attempts: int
+	last_failed_login: Optional[datetime] = None
 
 class UserLoginSchema(BaseModel):
 	email: EmailStr = Field(alias="email")
