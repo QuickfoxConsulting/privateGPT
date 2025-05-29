@@ -369,7 +369,7 @@ def register(
 
     return JSONResponse(content=response_dict, status_code=status.HTTP_201_CREATED)
 
-@router.post("/unlock-account", response_model=schemas.TokenSchema)
+@router.post("/unlock-account")
 def unlock_account(
     *,
     db: Session = Depends(deps.get_db),

@@ -28,9 +28,9 @@ embedding:
   mode: gemini
 
 gemini:
-  api_key: AIzaSyBT7j8ehU2DqB998AnCiGaharGaBTcRQjY
+  api_key: AIzaSyBHpnkkAv02r731CVmCM3b8Fl9wt9RaH9I
   model: models/gemini-2.0-flash
-  embedding_model: models/gemini-embedding-exp-03-07
+  embedding_model: models/text-embedding-004
 
 # embedding:
 #   # Should be matching the value above in most cases

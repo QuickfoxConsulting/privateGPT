@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import Optional
 
@@ -72,6 +71,13 @@ class UserAdminUpdate(BaseModel):
 	username: Optional[str] = None
 	role: Optional[str] = None
 	department_id: Optional[int] = None
+
+class UserDepartmentUpdate(BaseModel):
+	username: Optional[str] = None
+	department_id: Optional[int] = None
+
+	class Config:
+		orm_mode = True
 
 class UserAdmin(BaseModel):
 	username: str

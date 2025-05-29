@@ -38,6 +38,7 @@ from private_gpt.paths import models_path
 from llama_index.core.postprocessor import LongContextReorder
 from private_gpt.server.chat.agentic_rag import AgenticCondenseChatEngine
 from private_gpt.server.chat.agentic_tool import AgenticRAGEngine
+from private_gpt.server.chat.search_tool import SearchRAGEngine
 from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
 class Completion(BaseModel):
@@ -271,16 +272,6 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            # return AgenticCondenseChatEngine.from_defaults(
-            #     retriever=vector_index_retriever,
-            #     llm=self.llm_component.llm, 
-            #     node_postprocessors=node_postprocessors,
-            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            #     context_prompt=CONTEXT_PROMPT_TEMPLATE,
-            #     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-            #     skip_condense=True,
-            #     verbose=True,
-            # )
             return AgenticRAGEngine(
                 llm=self.llm_component.llm,
                 index=self.index,
@@ -296,7 +287,7 @@ class ChatService:
             vector_index_retriever = self.vector_store_component.get_retriever(
                 index=self.index,
                 context_filter=context_filter,
-                similarity_top_k=5,
+                similarity_top_k=self.settings.rag.similarity_top_k,
             )
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
@@ -312,7 +303,7 @@ class ChatService:
                     next_pages=1,
                     mode="next"
                 ),
-                LongContextReorder(),
+            LongContextReorder(),
             ]
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
@@ -322,38 +313,49 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            # response_synthesizer = get_response_synthesizer(
-            #     response_mode="tree_summarize",
-            #     llm=self.llm_component.llm,
-            #     structured_answer_filtering=True,
-            #     text_qa_template=self._get_qa_template(),
-            #     # streaming=True  # Enable streaming for better responsiveness
-            # )
-            # custom_query_engine = RetrieverQueryEngine.from_args(
-            #     retriever=vector_index_retriever,
-            #     llm=self.llm_component.llm,
-            #     response_synthesizer=response_synthesizer,
-            #     verbose=True  # For debugging and understanding the process
-            # )
-            # return ContextChatEngine.from_defaults(
-            #     system_prompt=system_prompt,
-            #     retriever=custom_query_engine,
-            #     llm=self.llm_component.llm,  # Takes no effect at the moment
-            #     node_postprocessors=node_postprocessors,
-            #     # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            #     # context_prompt=CONTEXT_PROMPT_TEMPLATE,
-            #     verbose=True,
-            # )
-            return AgenticCondenseChatEngine.from_defaults(
+            response_synthesizer = get_response_synthesizer(
+                response_mode="tree_summarize",
+                llm=self.llm_component.llm,
+                structured_answer_filtering=True,
+                text_qa_template=self._get_qa_template(),
+                # streaming=True  # Enable streaming for better responsiveness
+            )
+            custom_query_engine = RetrieverQueryEngine.from_args(
                 retriever=vector_index_retriever,
-                llm=self.llm_component.llm, 
+                llm=self.llm_component.llm,
+                response_synthesizer=response_synthesizer,
+                verbose=True  # For debugging and understanding the process
+            )
+            return ContextChatEngine.from_defaults(
+                system_prompt=system_prompt,
+                retriever=custom_query_engine,
+                llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                context_prompt=CONTEXT_PROMPT_TEMPLATE,
-                system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-                skip_condense=True,
+                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+                # context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
             )
+            # return AgenticCondenseChatEngine.from_defaults(
+            #     retriever=vector_index_retriever,
+            #     llm=self.llm_component.llm, 
+            #     node_postprocessors=node_postprocessors,
+            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
+            #     context_prompt=CONTEXT_PROMPT_TEMPLATE,
+            #     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+            #     skip_condense=True,
+            #     verbose=True,
+            # )
+            # return SearchRAGEngine(
+            #     llm=self.llm_component.llm,
+            #     index=self.index,
+            #     document_files=file_list,
+            #     node_store_component=self.node_store,
+            #     vector_store_component=self.vector_store_component,
+            #     node_postprocessors=node_postprocessors,
+            #     max_iterations=5,
+            #     verbose=True,
+            # )
+        
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=DEFAULT_SYSTEM_PROMPT,

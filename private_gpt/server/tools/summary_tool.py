@@ -32,7 +32,11 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "{context_str}\n"
     "---------------------\n\n"
     
-    "INSTRUCTIONS:\n"
+    "### Document Citations\n"
+    "Format: `[page](document_name)`\n"
+    "Example: `[page 42](compliance_manual.pdf)` or `[Section 3.2](technical_spec.docx)`\n\n"
+    
+    "### Instructions\n"
     "1. Only use the provided context. Do not add external information or assumptions.\n"
     "2. Write in clear, technical, and neutral language. Focus strictly on factual accuracy.\n"
     "3. Use professional Markdown with clear section headers, bullets, and subheadings.\n"
@@ -41,13 +45,15 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "6. If context is missing, ambiguous, or contradictory, document it under 'Limitations'.\n"
     "7. Include all available metadata (e.g., version, dates) if referenced in the context.\n\n"
     
-    "RESPONSE FORMAT (use exactly this structure):\n"
+    "### Response Format\n"
     "# Executive Summary\n"
     "- Brief overview of the document's purpose and findings\n"
     "- Summary of key themes or insights\n\n"
-    "- Document Structure\n"
+    
+    "## Document Structure\n"
     "- High-level breakdown of the document's layout and intent\n"
     "- Major sections and what they cover\n\n"
+    
     "# Key Findings\n"
     "## <Theme 1: Descriptive Title>\n"
     "- Core finding with citation [page](document)\n"
@@ -55,13 +61,16 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "## <Theme 2: Descriptive Title>\n"
     "- Insight or issue described\n"
     "- Supporting facts or examples with citation [page](document)\n\n"
+    
     "# Supporting Evidence\n"
     "- Bullet list of key quotes, data points, or references\n"
     "- Format each: \"Quote or data point\" — [page](document)\n\n"
+    
     "# Limitations & Considerations\n"
     "- Scope constraints or omitted areas\n"
     "- Ambiguities, contradictions, or unclear points in the document\n"
-    "- Recommendations for further analysis (if applicable)\n"
+    "- Recommendations for further analysis (if applicable)\n\n"
+    
     "QUERY:\n"
     "{query_str}\n\n"
     "BEGIN YOUR SUMMARY:"

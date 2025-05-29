@@ -24,16 +24,13 @@ from llama_index.core.tools import BaseTool, QueryEngineTool
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.llms import LLM
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.schema import NodeWithScore
 from llama_index.core.prompts.base import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core import get_response_synthesizer
 from llama_index.core.indices.vector_store import VectorStoreIndex
-from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
 
 from private_gpt.server.tools.document_tool import DocumentSpecificTool
 from private_gpt.server.tools.summary_tool import DocumentSummaryTool
-from private_gpt.server.tools.web_tool import Crawl4AITool
 from private_gpt.server.tools.time_tool import TimeTool
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from llama_index.core.agent.react.formatter import ReActChatFormatter
@@ -42,7 +39,7 @@ from private_gpt.components.node_store.node_store_component import NodeStoreComp
 
 logger = logging.getLogger(__name__)
 
-class AgenticRAGEngine(BaseChatEngine):
+class SearchRAGEngine(BaseChatEngine):
     """
     Advanced RAG-enhanced ReAct Agent with improved context handling and source tracking.
     
@@ -144,16 +141,16 @@ class AgenticRAGEngine(BaseChatEngine):
         tools.append(rag_tool)
         
         # Document-specific tools
-        doc_tools = self._create_document_specific_tools()
-        tools.extend(doc_tools)
+        # doc_tools = self._create_document_specific_tools()
+        # tools.extend(doc_tools)
         
         # # Summary tools
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
         
         # Web search tools
-        web_tools = self._create_web_tools()
-        tools.extend(web_tools)
+        # web_tools = self._create_web_tools()
+        # tools.extend(web_tools)
         
         # Add time tool
         time_tool = TimeTool()
@@ -273,25 +270,6 @@ class AgenticRAGEngine(BaseChatEngine):
                 
         return tools
 
-    def _create_web_tools(self) -> List[BaseTool]:
-        """Create web search and crawling tools."""
-        tools = []
-        
-        try:
-            search_tool_spec = DuckDuckGoSearchToolSpec()
-            search_tools = search_tool_spec.to_tool_list()
-            tools.extend(search_tools)
-            
-            crawl_tool = Crawl4AITool()
-            tools.append(crawl_tool)
-            
-            if self._verbose:
-                logger.info(f"Created {len(tools)} web tools")
-                
-        except Exception as e:
-            logger.error(f"Failed to create web tools: {e}")
-        return tools
-
     def _validate_tools(self, tools: List[BaseTool]) -> List[BaseTool]:
         """Validate tools for name uniqueness and proper configuration."""
         seen_names = set()
@@ -371,10 +349,8 @@ class AgenticRAGEngine(BaseChatEngine):
         ### Priority Order
         1. **Document-Specific Tools**: Use the appropriate document tool for specific document queries
         2. **General Document Retrieval**: Use `document_retriever` for broader searches
-        3. **Web Search**: Use `DuckDuckGoSearchTool` for current events or missing information
-        4. **Content Extraction**: Use `crawl4ai_scraper` for web content
-        5. **Cross-Verification**: Compare multiple sources for accuracy
-
+        3. **Summary Tools**: Use `summary_tool` for summarization
+        4. **Cross-Verification**: Compare multiple sources for accuracy
 
         ## Core Operating Principles
 
@@ -385,15 +361,11 @@ class AgenticRAGEngine(BaseChatEngine):
         5. **Transparent Reasoning**: Make your thought process clear and followable
         6. **Iterative Improvement**: Build upon previous observations to refine your approach
 
-        ## Citation Standards
+         ## Citation Standards
 
         ### Document Citations
         Format: `[page](document_name)`
         Example: `[page 42](compliance_manual.pdf)` or `[Section 3.2](technical_spec.docx)`
-
-        ### Web Citations
-        Format: `[descriptive_title](URL)`
-        Example: `[OpenAI API Documentation](https://platform.openai.com/docs)`
 
         ### Multiple Sources
         When synthesizing from multiple sources: `[Source 1](ref1), [Source 2](ref2)`

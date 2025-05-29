@@ -324,12 +324,16 @@ def admin_update_user(
     Uses a database transaction to ensure atomicity.
     """
     try:
+        print(f"Received update request for user {user_update.id} with data: {user_update.dict()}")
+        
         existing_user = crud.user.get_by_id(db, id=user_update.id)
         if not existing_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User not found with id: {user_update.id}",
             )
+
+        print(f"Found existing user: {existing_user.username}, current department: {existing_user.department_id}")
 
         old_detail = {
             'username': existing_user.username,
@@ -366,23 +370,27 @@ def admin_update_user(
             update_data["username"] = user_update.username
         if user_update.department_id:
             update_data["department_id"] = user_update.department_id
+            print(f"Adding department_id {user_update.department_id} to update_data")
 
         if update_data:
-            crud.user.update(db, db_obj=existing_user, obj_in=update_data)
+            print(f"Update data before creating schema: {update_data}")
+            user_in = schemas.UserDepartmentUpdate(
+                **update_data
+            )
+            print(f"Created update schema with data: {user_in.model_dump()}")
+            updated_user = crud.user.update(db, db_obj=existing_user, obj_in=user_in)
+            print(f"User after update - username: {updated_user.username}, department: {updated_user.department_id}")
 
         new_detail = {
             'username': user_update.username or existing_user.username,
             'role': user_update.role or old_detail['role'],
             'department': user_update.department_id or old_detail['department']
         }
-
         details = {
             'before': old_detail,
             'after': new_detail,
         }
-
         log_audit_user(request, db, current_user, 'update', details)
-
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={"message": "User updated successfully"}
@@ -391,7 +399,8 @@ def admin_update_user(
     except HTTPException:
         raise  # Rethrow FastAPI HTTP errors
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
+        print(f"Database error: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -399,6 +408,7 @@ def admin_update_user(
         )
 
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

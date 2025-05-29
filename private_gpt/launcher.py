@@ -89,6 +89,8 @@ def create_app(root_injector: Injector) -> FastAPI:
                 'http://192.168.101.6:3000',
                 "http://192.168.1.167",
                 'http://192.168.101.167:3000',
+                "http://18.224.145.213",
+                "http://18.224.145.213:3000",
                 "ws://localhost:3000",
                 "ws://localhost",
             ],

@@ -89,9 +89,10 @@ alembic upgrade d06186f6137d\n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
 poetry run python scripts/fixtures.py\n\
+playwright install \n\
 \n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 4' > /app/startup.sh && chmod +x /app/startup.sh
 
 ENTRYPOINT ["/app/startup.sh"]
