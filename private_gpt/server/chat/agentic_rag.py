@@ -54,7 +54,7 @@ The following sections contain relevant information retrieved based on the sub-q
 2.  Use **ONLY** the information present in the **Context Documents** section above.
 3.  Do **NOT** use any prior knowledge or information outside the provided context.
 4.  If the context does not contain enough information to answer the original question fully, state what information is missing or cannot be found in the documents.
-5.  Cite relevant source document filenames (e.g., `[file_name.pdf]`) after the information they support, if the filename is available in the context metadata.
+5.  Cite relevant source document node IDs or filenames in square brackets (e.g., `[node_id_123]` or `[file_name.pdf]`) after the information they support, if the node ID or filename is available in the context metadata. When using information from a context document, always cite its node ID or filename inline.
 6.  Be detailed, clear, and well-organized in your response.
 """
 
@@ -446,25 +446,85 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
         return chat_messages, context_source, context_nodes
 
+    def _extract_cited_node_ids(self, response: str) -> set:
+        """Extract cited node IDs or filenames from the LLM response."""
+        import re
+        # Matches [node_id_123] or [file.pdf]
+        pattern = r'\[([\w\-\.]+)\]'
+        return set(re.findall(pattern, response))
+
+    def _filter_nodes_by_citation(self, cited_ids: set, nodes: list) -> list:
+        """Filter nodes to only those cited in the response (by node_id or filename)."""
+        filtered = []
+        for node in nodes:
+            node_id = getattr(node.node, 'node_id', None)
+            filename = node.node.metadata.get('file_name') or node.node.metadata.get('filename')
+            if node_id in cited_ids or (filename and filename in cited_ids):
+                filtered.append(node)
+        return filtered
+
+    def _llm_post_analysis_attribution(self, response: str, nodes: list) -> list:
+        """Ask the LLM to identify which nodes were used in the answer."""
+        prompt = (
+            "Given the following answer and context nodes, return a JSON list of node IDs that contributed information to the answer.\n"
+            "Answer:\n"
+            f"{response}\n"
+            "Context Nodes (format: Node ID: Content):\n"
+        )
+        for node in nodes:
+            node_id = getattr(node.node, 'node_id', None)
+            content = node.node.get_content(metadata_mode=MetadataMode.LLM).strip()
+            prompt += f"{node_id}: {content}\n"
+        prompt += "\nReturn a JSON array of node IDs, e.g. [\"node_id_1\", \"node_id_2\"]"
+        analysis_response = self._llm.complete(prompt)
+        import json
+        try:
+            used_node_ids = json.loads(analysis_response.text)
+            return [node for node in nodes if getattr(node.node, 'node_id', None) in used_node_ids]
+        except Exception as e:
+            logger.error(f"LLM post-analysis parsing failed: {e}")
+            return []
+
+    def _react_agent_attribution(self, response: str, nodes: list) -> list:
+        """Use a ReACT agent to attribute sources if available. Placeholder for integration."""
+        # This is a placeholder. You would integrate your ReACT agent here.
+        # For now, just return all nodes (no filtering)
+        return nodes
 
     # --- Public Chat Methods ---
 
     @trace_method("chat")
     def chat(
-        self, message: str, chat_history: Optional[List[ChatMessage]] = None
+        self, message: str, chat_history: Optional[List[ChatMessage]] = None,
+        attribution_method: str = "inline_citation"  # or "llm_post_analysis" or "react_agent"
     ) -> AgentChatResponse:
         chat_messages, context_source, context_nodes = self._run_agentic_condense_sync(
             message, chat_history
         )
-
         chat_response = self._llm.chat(chat_messages)
         assistant_message = chat_response.message
-        self._memory.put(assistant_message) # Add AI response to memory
+        self._memory.put(assistant_message)
+
+        # Attribution logic
+        if attribution_method == "inline_citation":
+            cited_ids = self._extract_cited_node_ids(assistant_message.content)
+            used_nodes = self._filter_nodes_by_citation(cited_ids, context_nodes)
+        elif attribution_method == "llm_post_analysis":
+            used_nodes = self._llm_post_analysis_attribution(assistant_message.content, context_nodes)
+        elif attribution_method == "react_agent":
+            used_nodes = self._react_agent_attribution(assistant_message.content, context_nodes)
+        else:
+            used_nodes = context_nodes
 
         return AgentChatResponse(
             response=str(assistant_message.content),
-            sources=[context_source], # Provide context source info
-            source_nodes=context_nodes,
+            sources=[ToolOutput(
+                tool_name="agentic_retriever",
+                content=context_source.content,
+                raw_input=context_source.raw_input,
+                raw_output=used_nodes
+            )],
+            source_nodes=used_nodes,
         )
 
     @trace_method("chat")
@@ -490,20 +550,36 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
     @trace_method("chat")
     async def achat(
-        self, message: str, chat_history: Optional[List[ChatMessage]] = None
+        self, message: str, chat_history: Optional[List[ChatMessage]] = None,
+        attribution_method: str = "inline_citation"
     ) -> AgentChatResponse:
         chat_messages, context_source, context_nodes = await self._arun_agentic_condense(
             message, chat_history
         )
-
         chat_response = await self._llm.achat(chat_messages)
         assistant_message = chat_response.message
         self._memory.put(assistant_message)
 
+        # Attribution logic
+        if attribution_method == "inline_citation":
+            cited_ids = self._extract_cited_node_ids(assistant_message.content)
+            used_nodes = self._filter_nodes_by_citation(cited_ids, context_nodes)
+        elif attribution_method == "llm_post_analysis":
+            used_nodes = self._llm_post_analysis_attribution(assistant_message.content, context_nodes)
+        elif attribution_method == "react_agent":
+            used_nodes = self._react_agent_attribution(assistant_message.content, context_nodes)
+        else:
+            used_nodes = context_nodes
+
         return AgentChatResponse(
             response=str(assistant_message.content),
-            sources=[context_source],
-            source_nodes=context_nodes,
+            sources=[ToolOutput(
+                tool_name="agentic_retriever",
+                content=context_source.content,
+                raw_input=context_source.raw_input,
+                raw_output=used_nodes
+            )],
+            source_nodes=used_nodes,
         )
 
     @trace_method("chat")

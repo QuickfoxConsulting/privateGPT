@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     ENABLE_MAKER_CHECKER: bool
 
     HF_TOKEN: str
+    SERPER_API: str
+    LLAMA_PARSE: str
     VECTOR_DB: str
 
     REDIS_HOST: str

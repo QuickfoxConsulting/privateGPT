@@ -1,12 +1,14 @@
 import os
-from pathlib import Path
 import uuid
-from typing import IO, Dict, List, Optional, Union
+from pathlib import Path
 from dataclasses import dataclass
+from typing import IO, Dict, List, Optional, Union
 
-from llama_index.core.readers.base import BaseReader
-from llama_index.core.schema import Document
 from llama_parse import LlamaParse
+from llama_index.core.schema import Document
+from llama_index.core.readers.base import BaseReader
+
+from private_gpt.users.core.config import settings
 
 @dataclass
 class TextBlock:
@@ -24,16 +26,15 @@ class LlamaParseReader(BaseReader):
     def __init__(
         self,
         chunk_size: int = 512,
-        num_workers: int = 4,
+        num_workers: int = 2,
         result_type: str = "markdown",
         verbose: bool = True,
     ):
-        self.api_key = "llx-jph9ZiAlC2KXd7L7fqPQfQ66Z0aROZq7KU8ToqVjwL0DvBEP"
+        self.api_key = settings.LLAMA_PARSE
         self.chunk_size = chunk_size
         self.num_workers = num_workers
         self.result_type = result_type
         self.verbose = verbose
-
         self.parser = LlamaParse(
             api_key=self.api_key,
             num_workers=self.num_workers,
