@@ -88,6 +88,7 @@ crawl4ai = "^0.6.3"
 nest-asyncio = "^1.6.0"
 rich = "^14.0.0"
 redis = "^6.4.0"
+hf-xet = "^1.1.10"
 
 [tool.poetry.extras]
 ui = ["gradio", "ffmpy"]

@@ -10,7 +10,7 @@ from private_gpt.server.cache.cache_service import CacheService, FAQSearchResult
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/faq", tags=["FAQ Management"])
+router = APIRouter(prefix="/v1/faq", tags=["FAQ Management"])
 
 @router.post("/", response_model=schemas.FAQ, status_code=status.HTTP_201_CREATED)
 def create_faq(

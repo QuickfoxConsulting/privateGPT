@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Iterator
-from typing import Literal
+from typing import Literal, Optional
 
 from llama_index.core.llms import ChatResponse, CompletionResponse
 from pydantic import BaseModel, Field
@@ -39,7 +39,7 @@ class OpenAIChoice(BaseModel):
     delta: OpenAIDelta | None = None
     message: OpenAIMessage | None = None
     sources: list[Chunk] | None = None
-    index: int = 0
+    cache_id: Optional[str] = None
 
 
 class OpenAICompletion(BaseModel):
@@ -60,6 +60,7 @@ class OpenAICompletion(BaseModel):
         text: str | None,
         finish_reason: str | None = None,
         sources: list[Chunk] | None = None,
+        cache_id: Optional[str] | None = None,
     ) -> "OpenAICompletion":
         return OpenAICompletion(
             id=str(uuid.uuid4()),
@@ -71,6 +72,7 @@ class OpenAICompletion(BaseModel):
                     message=OpenAIMessage(role="assistant", content=text),
                     finish_reason=finish_reason,
                     sources=sources,
+                    cache_id=cache_id,
                 )
             ],
         )
@@ -101,13 +103,13 @@ class OpenAICompletion(BaseModel):
 
 
 def to_openai_response(
-    response: str | ChatResponse, sources: list[Chunk] | None = None
+    response: str | ChatResponse, sources: list[Chunk] | None = None, cache_id: Optional[str] | None = None
 ) -> OpenAICompletion:
     if isinstance(response, ChatResponse):
-        return OpenAICompletion.from_text(response.delta, finish_reason="stop")
+        return OpenAICompletion.from_text(response.delta, finish_reason="stop", cache_id=cache_id)
     else:
         return OpenAICompletion.from_text(
-            response, finish_reason="stop", sources=sources
+            response, finish_reason="stop", sources=sources, cache_id=cache_id
         )
 
 

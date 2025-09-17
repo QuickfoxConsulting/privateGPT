@@ -284,3 +284,48 @@ class FAQService:
         except Exception as e:
             logger.error(f"Failed to refresh all FAQ cache through FAQService: {str(e)}")
             return 0
+
+    def increment_cache_hit_frequency(self, db: Session, faq_id: int) -> bool:
+        """Increment the frequency count for a FAQ when there's a cache hit.
+        
+        This method increments the frequency counter in both the database and cache
+        to track how often FAQs are accessed. This should be called whenever a FAQ
+        is served from cache to maintain accurate usage statistics.
+        
+        Args:
+            db: Database session
+            faq_id: ID of the FAQ to increment frequency for
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info(f"Processing cache hit frequency increment for FAQ {faq_id}")
+        
+        try:
+            # Increment frequency in database using CRUD operation
+            success = crud.faq.increment_frequency(db, faq_id=faq_id)
+            if not success:
+                logger.warning(f"Failed to increment frequency in database for FAQ {faq_id}")
+                return False
+            
+            # Update the FAQ in cache to reflect the new frequency
+            try:
+                # Get the updated FAQ from database with new frequency
+                updated_faq = crud.faq.get(db, id=faq_id)
+                if updated_faq:
+                    # Update in cache with new frequency count
+                    self.cache_service.update_faq(updated_faq)
+                    logger.info(f"Successfully updated frequency count for FAQ {faq_id} in both database and cache")
+                else:
+                    logger.warning(f"FAQ {faq_id} not found in database after frequency increment")
+                    return False
+            except Exception as cache_e:
+                logger.warning(f"Failed to update FAQ {faq_id} frequency in cache: {cache_e}")
+                # Don't return False here as database update was successful
+                # Cache will be eventually consistent
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error incrementing frequency count for FAQ {faq_id}: {e}")
+            return False

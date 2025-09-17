@@ -523,7 +523,6 @@ async def prompt_completion(
         )        
         
         chat_response = await chat_completion(request, chat_body, file_list)
-        
         if isinstance(chat_response, StreamingResponse):
             return chat_response         
         
@@ -536,24 +535,38 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
-        print(f"AI RESPONSE: {ai_response}")
         cache_response = {
             "content": ai_response["choices"][0]["message"]["content"],
             "sources": ai_response["choices"][0]["sources"]
         }
 
         try:
-            ## ADD IN CACHE
-            faq_service = request.state.injector.get(FAQService)
-            cache_in = FAQCreate(
-                question=original_prompt,
-                answer=cache_response,
-                category='cache'
-            )
-            faq_service.create_faq(db, cache_in, current_user.id)
+            # Get FAQ service once
+            faq_service = request.state.injector.get(FAQService)            
+            cache_id = ai_response["choices"][0].get("cache_id")
+            if cache_id:
+                # Convert cache_id string back to integer for database operations
+                try:
+                    cache_id_int = int(cache_id)
+                    success = faq_service.increment_cache_hit_frequency(db, cache_id_int)
+                    if success:
+                        logger.info(f"Successfully incremented frequency for cached FAQ {cache_id}")
+                    else:
+                        logger.warning(f"Failed to increment frequency for cached FAQ {cache_id}")
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Invalid cache_id format '{cache_id}': {e}")
+            else:
+                # This is a new interaction - optionally create FAQ for future caching
+                # Only create FAQ if it meets certain criteria (e.g., not already exists)
+                cache_in = FAQCreate(
+                    question=original_prompt,
+                    answer=cache_response,
+                    category='cache'
+                )
+                new_faq = faq_service.create_faq(db, cache_in, current_user.id)
+                logger.info(f"Created new FAQ entry {new_faq.id} for potential future caching")
         except Exception as e:
-            print("ERROR")
-            logger.error(f"ERROR WHEN ADDING FAQ IN CACHE: {e}")
+            logger.error(f"Error handling FAQ cache operations: {e}", exc_info=True)
     
         response = ChatResponse(id=chat.id, response=chat_response)
         return response

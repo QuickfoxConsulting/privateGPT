@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from injector import inject, singleton
 from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
@@ -48,6 +48,7 @@ from private_gpt.server.cache.cache_service import CacheService
 logger = logging.getLogger(__name__)
 
 class Completion(BaseModel):
+    cache_id: Optional[str] = None
     response: str
     sources: list[Chunk] | None = None
 
@@ -242,7 +243,7 @@ class ChatService:
             Sources:
             """
 
-    def _check_faq_cache(self, cache_service: CacheService, question: str) -> str | None:
+    def _check_faq_cache(self, cache_service: CacheService, question: str) -> dict | None:
         """Check if the question matches a frequently asked question in cache using vector similarity.
         
         For general users, we prioritize FAQ responses to ensure consistency across all users.
@@ -259,7 +260,6 @@ class ChatService:
         if not cache_service.is_connected:
             logger.info("Cache service not connected, skipping FAQ cache check")
             return None
-            
         try:
             # Search for similar questions in FAQ cache using vector similarity
             # For general users, we use a lower threshold to catch more matches
@@ -267,10 +267,10 @@ class ChatService:
             logger.info("Calling FAQ cache search with threshold=0.9, limit=3")
             search_results = cache_service.search_faqs(question, limit=3, similarity_threshold=0.9)
             logger.info(f"FAQ cache search returned {len(search_results)} results")
-            logger.info(f"Search RESULTS: {search_results}")
 
             if search_results:
                 best_match = search_results[0]
+                faq_id = getattr(getattr(best_match, "faq", None), "id", None)
                 similarity_info = getattr(best_match, 'similarity', 'unknown')
                 logger.info(
                     f"FAQ match found - Question: {best_match.faq.question[:50]}... Similarity: {similarity_info}"
@@ -281,17 +281,16 @@ class ChatService:
                     content = answer_dict.get("content", "")
                     sources = answer_dict.get("sources", [])
                     logger.info(f"Returning FAQ answer: {content[:100]}...")
-                    return {"content": content, "sources": sources}
+                    return {"id": str(faq_id), "content": content, "sources": sources}
                 else:
                     # backward compatibility if stored as plain string
                     logger.info(f"Returning FAQ answer (string): {str(answer_dict)[:100]}...")
-                    return {"content": str(answer_dict), "sources": []}
+                    return {"id": str(faq_id), "content": str(answer_dict), "sources": []}
             else:
-                logger.info("No FAQ match found")
+                logger.info({"content": "No FAQ match found"})
 
         except Exception as e:
             logger.error(f"Error checking FAQ cache: {e}", exc_info=True)
-            
         return None
 
     async def _chat_engine(
@@ -483,11 +482,11 @@ class ChatService:
         ## Check whether the query answer is in the cache
         cache_answer = None
         if cache_service and last_message and (use_context == ChatMode.SEARCH.value):
-            logger.info("FINDING CACHE DATA>>>>")
             cache_answer = self._check_faq_cache(cache_service, last_message)
 
             if cache_answer:
                 completion = Completion(
+                    cache_id=cache_answer["id"],
                     response=cache_answer["content"],
                     sources=cache_answer["sources"]
                 )
@@ -511,7 +510,7 @@ class ChatService:
         )
         
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
-        completion = Completion(response=wrapped_response.response, sources=sources)
+        completion = Completion(response=wrapped_response.response, sources=sources, cache_id=None)
         return completion
 
     async def generate_title(

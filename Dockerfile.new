@@ -44,8 +44,10 @@ RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 RUN playwright install 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
-ARG HF_TOKEN="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"
-ENV HF_TOKEN=${HF_TOKEN}
+# ARG HF_TOKEN="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"
+ARG HF_TOKEN
+ENV HF_TOKEN=$HF_TOKEN
+# ENV HF_TOKEN=${HF_TOKEN}
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
