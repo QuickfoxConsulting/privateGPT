@@ -15,12 +15,19 @@ from private_gpt.server.ingest.ingest_router import ingest_router
 from private_gpt.server.completions.completions_router import completions_router
 from private_gpt.server.embeddings.embeddings_router import embeddings_router
 from private_gpt.server.recipes.summarize.summarize_router import summarize_router
+from private_gpt.server.cache.cache_router import router as cache_router
 from private_gpt.users.api.v1.routers.websocket_router import websocket_router
 
 logger = logging.getLogger(__name__)
 
 def create_app(root_injector: Injector) -> FastAPI:
     """Create the FastAPI application with dependency injection."""
+    
+    # Initialize cache management
+    try:
+        _initialize_cache_management(root_injector)
+    except Exception as e:
+        logger.error(f"Failed to initialize cache management: {str(e)}")
     
     app = FastAPI()
     
@@ -40,6 +47,7 @@ def create_app(root_injector: Injector) -> FastAPI:
     app.include_router(summarize_router)
     app.include_router(health_router)
     app.include_router(websocket_router)
+    app.include_router(cache_router)
     app.include_router(api_router)
     
     # Define a function to get injector from request
@@ -99,3 +107,29 @@ def create_app(root_injector: Injector) -> FastAPI:
         )
     
     return app
+
+def _initialize_cache_management(injector: Injector) -> None:
+    """Initialize cache management with warming and eviction policies."""
+    try:
+        # Get required services
+        from private_gpt.server.cache.cache_manager import CacheManager
+        cache_manager = injector.get(CacheManager)
+        
+        # Warm cache on startup
+        from private_gpt.users.db.session import SessionLocal
+        db = SessionLocal()
+        try:
+            cache_manager.warm_cache_on_startup(db, limit=50)
+        finally:
+            db.close()
+            
+        # Start background cache management
+        cache_manager.start_background_cache_management(
+            db_session_factory=SessionLocal,
+            warm_interval=3600,  # Every hour
+            eviction_interval=1800  # Every 30 minutes
+        )
+        
+        logger.info("Cache management initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize cache management: {str(e)}")

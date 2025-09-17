@@ -110,6 +110,8 @@ milvus:
 
 qdrant:
   path: http://qdrant:6333
+  # path: http://localhost:6333
+  # path: local_data/private_gpt/qdrant
 
 postgres:
   host: db
@@ -150,3 +152,9 @@ gemini:
   api_key: ${GOOGLE_API_KEY:}
   model: models/gemini-pro
   embedding_model: models/embedding-001
+
+
+redis:
+  host: redis
+  port: 6379
+  db: 0

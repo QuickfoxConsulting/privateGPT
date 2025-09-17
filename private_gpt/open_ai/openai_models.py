@@ -20,10 +20,12 @@ class OpenAIMessage(BaseModel):
 
     Role could be the assistant or system
     (providing a default response, not AI generated).
+    Optionally supports an image (base64 string, URL, or file path) for multimodal chat.
     """
 
     role: Literal["assistant", "system", "user"] = Field(default="user")
     content: str | None
+    image: str | None = None  # base64 string, URL, or file path
 
 
 class OpenAIChoice(BaseModel):

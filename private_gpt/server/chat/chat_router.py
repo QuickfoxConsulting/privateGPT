@@ -1,9 +1,11 @@
+from functools import cache
 from typing import Dict, List
 from fastapi import APIRouter, Depends, Request
 from llama_index.core.llms import ChatMessage, MessageRole
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+from private_gpt.server.cache.cache_service import CacheService
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.open_ai.openai_models import (
@@ -13,6 +15,8 @@ from private_gpt.open_ai.openai_models import (
     to_openai_sse_stream,
 )
 from private_gpt.server.chat.chat_service import ChatService
+from private_gpt.server.cache.faq_service import FAQService
+
 from private_gpt.server.utils.auth import authenticated
 
 chat_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
@@ -33,10 +37,12 @@ class ChatBody(BaseModel):
                         {
                             "role": "system",
                             "content": "You are a rapper. Always answer with a rap.",
+                            "image": None
                         },
                         {
                             "role": "user",
                             "content": "How do you fry an egg?",
+                            "image": "<base64-image-string>"
                         },
                     ],
                     "stream": False,
@@ -90,6 +96,8 @@ async def chat_completion(
     ```
     """
     service = request.state.injector.get(ChatService)
+    cache_service = request.state.injector.get(CacheService)
+
     all_messages = [
         ChatMessage(content=m.content, role=MessageRole(m.role)) for m in body.messages
     ]
@@ -98,7 +106,8 @@ async def chat_completion(
             messages=all_messages,
             use_context=body.use_context,
             context_filter=body.context_filter,
-            file_list=file_list
+            file_list=file_list,
+            cache_service=cache_service,
         )
         return StreamingResponse(
             to_openai_sse_stream(
@@ -112,7 +121,8 @@ async def chat_completion(
             messages=all_messages,
             use_context=body.use_context,
             context_filter=body.context_filter,
-            file_list=file_list
+            file_list=file_list,
+            cache_service=cache_service,
         )
         return to_openai_response(
             completion.response, completion.sources if body.include_sources else None

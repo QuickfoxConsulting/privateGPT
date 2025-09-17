@@ -263,8 +263,11 @@
 #         )
 
 
+import json
 import os
 from pathlib import Path
+from private_gpt.server.cache.faq_service import FAQService
+from private_gpt.users.schemas.faq import FAQCreate
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.server.chat.chat_service import ChatService
 from private_gpt.users import crud, models, schemas
@@ -524,6 +527,7 @@ async def prompt_completion(
         if isinstance(chat_response, StreamingResponse):
             return chat_response         
         
+        ## ADD IN DB
         ai_response = chat_response.model_dump(mode="json")
         
         chat = create_chat_item(
@@ -532,6 +536,25 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
+        print(f"AI RESPONSE: {ai_response}")
+        cache_response = {
+            "content": ai_response["choices"][0]["message"]["content"],
+            "sources": ai_response["choices"][0]["sources"]
+        }
+
+        try:
+            ## ADD IN CACHE
+            faq_service = request.state.injector.get(FAQService)
+            cache_in = FAQCreate(
+                question=original_prompt,
+                answer=cache_response,
+                category='cache'
+            )
+            faq_service.create_faq(db, cache_in, current_user.id)
+        except Exception as e:
+            print("ERROR")
+            logger.error(f"ERROR WHEN ADDING FAQ IN CACHE: {e}")
+    
         response = ChatResponse(id=chat.id, response=chat_response)
         return response
 

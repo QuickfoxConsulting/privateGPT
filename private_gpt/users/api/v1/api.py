@@ -1,5 +1,6 @@
 from private_gpt.users.api import deps
 from private_gpt.users.api.v1.routers import auth, roles, user_roles, users, subscriptions, companies, departments, documents, audits, chat_history, categories
+# Note: FAQ router is now in server/cache/cache_router.py
 from fastapi import APIRouter
 
 api_router = APIRouter(prefix="/v1")

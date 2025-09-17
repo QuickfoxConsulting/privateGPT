@@ -6,28 +6,6 @@ from typing import Optional
 
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.theme import Theme
-
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "red",
-    "debug": "green",
-    "critical": "red bold",
-    "traceback.border": "red",
-    "traceback.border.syntax_error": "red",
-    "traceback.arrow": "red",
-    "traceback.exc_type": "red bold",
-    "traceback.exc_value": "red",
-    "traceback.exc_traceback": "red",
-    "traceback.stack.syntax_error": "red",
-    "traceback.stack": "red",
-    "traceback.filename": "cyan",
-    "traceback.lineno": "cyan",
-    "traceback.name": "cyan",
-    "traceback.path": "cyan",
-    "traceback.text": "white",
-})
 
 def setup_logging(
     log_level: str = "INFO",
@@ -44,19 +22,14 @@ def setup_logging(
         rich_tracebacks: Whether to use rich traceback formatting
         rich_markup: Whether to enable rich markup in log messages
     """
-    # Create console for rich output
-    console = Console(theme=custom_theme)
-    
-    # Configure rich handler
+    # Configure rich handler with default theme to avoid compatibility issues
     rich_handler = RichHandler(
-        console=console,
         show_time=True,
         show_path=True,
         rich_tracebacks=rich_tracebacks,
         markup=rich_markup,
         tracebacks_show_locals=True,
         tracebacks_extra_lines=3,
-        tracebacks_theme=custom_theme,
     )
     
     # Set up root logger
@@ -96,4 +69,4 @@ def setup_logging(
     # Log startup message
     logging.info(f"Logging configured with level: {log_level}")
     if log_file:
-        logging.info(f"Log file: {log_file}") 
+        logging.info(f"Log file: {log_file}")

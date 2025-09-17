@@ -8,3 +8,4 @@ from .department_crud import department
 from .audit_crud import audit
 from .chat_crud import chat, chat_item
 from .category_crud import category
+from .faq_crud import faq

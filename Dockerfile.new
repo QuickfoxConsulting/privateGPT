@@ -44,7 +44,7 @@ RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 RUN playwright install 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
-ARG HF_TOKEN="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"
+ARG HF_TOKEN="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"
 ENV HF_TOKEN=${HF_TOKEN}
 
 ENV PYTHONUNBUFFERED=1
@@ -85,6 +85,7 @@ fi\n\
 echo "Applying database migrations"\n\
 alembic upgrade 0c3bba0d99f7\n\
 alembic upgrade d06186f6137d\n\
+alembic upgrade b3579174f52d\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\

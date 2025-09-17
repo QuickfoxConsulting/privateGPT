@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from llama_index.core.postprocessor import (
 )
 from llama_index.core.storage import StorageContext
 from llama_index.core.types import TokenGen
+from private_gpt.server.cache.faq_service import FAQService
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
 
@@ -41,9 +43,14 @@ from private_gpt.server.chat.agentic_tool import AgenticRAGEngine
 from private_gpt.server.chat.search_tool import SearchRAGEngine
 from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
+from private_gpt.server.cache.cache_service import CacheService
+
+logger = logging.getLogger(__name__)
+
 class Completion(BaseModel):
     response: str
     sources: list[Chunk] | None = None
+
 class CompletionGen(BaseModel):
     response: TokenGen
     sources: list[Chunk] | None = None
@@ -155,6 +162,7 @@ class ChatEngineInput:
     system_message: ChatMessage | None = None
     last_message: ChatMessage | None = None
     chat_history: list[ChatMessage] | None = None
+    last_image: str | None = None  # Add image support
 
     @classmethod
     def from_messages(cls, messages: list[ChatMessage]) -> "ChatEngineInput":
@@ -168,6 +176,7 @@ class ChatEngineInput:
             if len(messages) > 0 and messages[-1].role == MessageRole.USER
             else None
         )
+        last_image = getattr(messages[-1], 'image', None) if last_message else None
         if system_message:
             messages.pop(0)
         if last_message:
@@ -178,6 +187,7 @@ class ChatEngineInput:
             system_message=system_message,
             last_message=last_message,
             chat_history=chat_history,
+            last_image=last_image,
         )
 
 @singleton
@@ -210,7 +220,7 @@ class ChatService:
             show_progress=True,
         )
         self.node_store = node_store_component
-
+        
     def _get_qa_template(self) -> str:
         """Custom QA template with better context integration."""
         return """Context information is below:
@@ -231,6 +241,58 @@ class ChatService:
             ---
             Sources:
             """
+
+    def _check_faq_cache(self, cache_service: CacheService, question: str) -> str | None:
+        """Check if the question matches a frequently asked question in cache using vector similarity.
+        
+        For general users, we prioritize FAQ responses to ensure consistency across all users.
+        We use a more aggressive matching strategy to catch similar questions.
+        
+        Args:
+            question: The user's question
+            
+        Returns:
+            Cached answer if found, None otherwise
+        """
+        logger.info(f"Checking FAQ cache for question: '{question}'")
+        # Check if cache service is connected
+        if not cache_service.is_connected:
+            logger.info("Cache service not connected, skipping FAQ cache check")
+            return None
+            
+        try:
+            # Search for similar questions in FAQ cache using vector similarity
+            # For general users, we use a lower threshold to catch more matches
+            # and increase the limit to get more potential matches
+            logger.info("Calling FAQ cache search with threshold=0.9, limit=3")
+            search_results = cache_service.search_faqs(question, limit=3, similarity_threshold=0.9)
+            logger.info(f"FAQ cache search returned {len(search_results)} results")
+            logger.info(f"Search RESULTS: {search_results}")
+
+            if search_results:
+                best_match = search_results[0]
+                similarity_info = getattr(best_match, 'similarity', 'unknown')
+                logger.info(
+                    f"FAQ match found - Question: {best_match.faq.question[:50]}... Similarity: {similarity_info}"
+                )
+
+                answer_dict = best_match.faq.answer
+                if isinstance(answer_dict, dict):
+                    content = answer_dict.get("content", "")
+                    sources = answer_dict.get("sources", [])
+                    logger.info(f"Returning FAQ answer: {content[:100]}...")
+                    return {"content": content, "sources": sources}
+                else:
+                    # backward compatibility if stored as plain string
+                    logger.info(f"Returning FAQ answer (string): {str(answer_dict)[:100]}...")
+                    return {"content": str(answer_dict), "sources": []}
+            else:
+                logger.info("No FAQ match found")
+
+        except Exception as e:
+            logger.error(f"Error checking FAQ cache: {e}", exc_info=True)
+            
+        return None
 
     async def _chat_engine(
         self,
@@ -368,13 +430,16 @@ class ChatService:
         use_context: ChatMode.CHAT.value,
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
+        cache_service: CacheService | None = None,
     ) -> CompletionGen:
+        # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
             else None
         )
+    
         system_prompt = (
             chat_engine_input.system_message.content
             if chat_engine_input.system_message
@@ -405,14 +470,30 @@ class ChatService:
         use_context: ChatMode.CHAT.value,
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
+        cache_service: CacheService | None = None,
     ) -> Completion:
+        # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
             else None
         )
-        
+
+        ## Check whether the query answer is in the cache
+        cache_answer = None
+        if cache_service and last_message and (use_context == ChatMode.SEARCH.value):
+            logger.info("FINDING CACHE DATA>>>>")
+            cache_answer = self._check_faq_cache(cache_service, last_message)
+
+            if cache_answer:
+                completion = Completion(
+                    response=cache_answer["content"],
+                    sources=cache_answer["sources"]
+                )
+                return completion
+
+        ## If not:
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
@@ -428,6 +509,7 @@ class ChatService:
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
+        
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources)
         return completion
@@ -438,24 +520,23 @@ class ChatService:
     ) -> TitleGeneration:
         """Generates a concise, 3-5 word title with an emoji summarizing the chat history."""
         DEFAULT_TITLE_GENERATION_PROMPT_TEMPLATE = """### Task: You are a title generator.
-            Generate a concise, 3-5 word title with an emoji summarizing the chat history.
+            Generate a concise, 3-5 word title summarizing the chat history.
             
             ### Guidelines:
             - The title should clearly represent the main theme or subject of the conversation.
-            - Use emojis that enhance understanding of the topic, but avoid quotation marks or special formatting.
             - Write the title in the chat's primary language; default to English if multilingual.
             - Prioritize accuracy over excessive creativity; keep it clear and simple.
-            
+            doc
             ### Output:
             Strict follow JSON format: { "title": "your concise title here" }
             
             ### Examples:
-            - { "title": "📉 Stock Market Trends" },
-            - { "title": "🍪 Perfect Chocolate Chip Recipe" },
+            - { "title": "Stock Market Trends" },
+            - { "title": "Perfect Chocolate Chip Recipe" },
             - { "title": "Evolution of Music Streaming" },
             - { "title": "Remote Work Productivity Tips" },
             - { "title": "Artificial Intelligence in Healthcare" },
-            - { "title": "🎮 Video Game Development Insights" }
+            - { "title": "Video Game Development Insights" }
             
             ### Chat History:
             <chat_history>

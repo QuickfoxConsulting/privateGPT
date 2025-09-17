@@ -586,6 +586,26 @@ class MilvusSettings(BaseModel):
     )
 
 
+class RedisSettings(BaseModel):
+    """Redis configuration for caching and other Redis-based features."""
+    host: str = Field(
+        "localhost",
+        description="The server hosting the Redis instance",
+    )
+    port: int = Field(
+        6379,
+        description="The port on which the Redis instance is accessible",
+    )
+    password: str | None = Field(
+        None,
+        description="The password to use to connect to the Redis instance",
+    )
+    db: int = Field(
+        0,
+        description="The Redis database number to use",
+    )
+
+
 class Settings(BaseModel):
     server: ServerSettings
     data: DataSettings
@@ -603,6 +623,10 @@ class Settings(BaseModel):
     nodestore: NodeStoreSettings
     rag: RagSettings
     summarize: SummarizeSettings
+    redis: RedisSettings = Field(
+        default_factory=lambda: RedisSettings(),
+        description="Redis configuration for caching and other Redis-based features"
+    )
     qdrant: QdrantSettings | None = None
     postgres: PostgresSettings | None = None
     clickhouse: ClickHouseSettings | None = None
@@ -635,7 +659,3 @@ def settings() -> Settings:
     from private_gpt.di import global_injector
 
     return global_injector.get(Settings)
-
-
-
-

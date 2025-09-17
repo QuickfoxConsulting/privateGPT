@@ -27,3 +27,6 @@ from .chat import (
 from .category import (
     Category, CategoryCreate, CategoryUpdate, CategoryList, CategoryDelete
 )
+from .faq import (
+    FAQ, FAQSearch, FAQCategory, FAQCreate, FAQUpdate, FAQList, 
+)

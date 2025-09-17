@@ -21,7 +21,7 @@ from private_gpt.utils.logging_config import setup_logging
 log_dir = Path("logs")
 log_file = log_dir / f"private_gpt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 setup_logging(
-    log_level=settings().logging.level,
+    log_level="INFO",  # Use a default log level instead of accessing non-existent settings().logging.level
     log_file=log_file,
     rich_tracebacks=True,
     rich_markup=True
