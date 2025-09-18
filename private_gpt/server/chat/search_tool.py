@@ -144,7 +144,7 @@ class SearchRAGEngine(BaseChatEngine):
         # doc_tools = self._create_document_specific_tools()
         # tools.extend(doc_tools)
         
-        # # Summary tools
+        # Summary tools
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
         
@@ -412,7 +412,7 @@ class SearchRAGEngine(BaseChatEngine):
 
         Please ALWAYS start with a Thought.
 
-        NEVER surround your response with markdown code markers. You may use code markers within your response if you need to.
+        NEVER surround your response with code markers. You may use code markers within your response if you need to.
 
         Please use a valid JSON format for the Action Input. Do NOT do this {{'input': 'hello world', 'num_beams': 5}}.
 
@@ -444,11 +444,40 @@ class SearchRAGEngine(BaseChatEngine):
 
     def _format_response(self, response: Any) -> AgentChatResponse:
         """Format agent response into standardized chat response."""
+        answer = getattr(response, 'response', str(response))
+        
+        # Remove trailing code blocks if present and not part of actual content
+        answer = self._remove_trailing_empty_code_blocks(answer)
+        
         return AgentChatResponse(
-            response=getattr(response, 'response', str(response)),
+            response=answer,
             sources=getattr(response, 'sources', []),
             source_nodes=getattr(response, 'source_nodes', [])
         )
+
+    def _remove_trailing_empty_code_blocks(self, text: str) -> str:
+        """Remove trailing empty code blocks that are not part of actual code content."""
+        lines = text.split('\n')
+        
+        # Work backwards from the end to find trailing empty code blocks
+        i = len(lines) - 1
+        while i >= 0:
+            line = lines[i].strip()
+            # If we find a non-empty line that's not a code block marker, stop
+            if line and line != '```':
+                break
+            # If we find a code block marker, check if it's at the very end
+            if line == '```':
+                # Check if this is the last line or if the following lines are just whitespace
+                if i == len(lines) - 1 or all(not lines[j].strip() for j in range(i + 1, len(lines))):
+                    # Remove this code block marker and any trailing empty lines
+                    lines = lines[:i]
+                    # Continue checking for more trailing code blocks
+                else:
+                    break
+            i -= 1
+            
+        return '\n'.join(lines).rstrip()
 
     def _is_rate_limit_error(self, error: Exception) -> bool:
         """Check if the error is a rate limit error."""

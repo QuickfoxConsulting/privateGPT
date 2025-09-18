@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 class CRUDFAQ(CRUDBase[FAQ, FAQCreate, FAQUpdate]):
     """CRUD operations for FAQ model."""
     
-    def create_with_user(self, db: Session, *, obj_in: FAQCreate, user_id: int) -> FAQ:
-        """Create a new FAQ with user information."""
+    def create_with_user(self, db: Session, *, obj_in: FAQCreate, user_id: int, faq_id: Optional[int] = None) -> FAQ:
+        """Create a new FAQ with user information and optional predefined ID."""
         db_obj = FAQ(
+            id=faq_id,  # Use predefined ID if provided, otherwise let database auto-generate
             question=obj_in.question,
             answer=obj_in.answer,
             category=obj_in.category,

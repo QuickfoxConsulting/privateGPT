@@ -33,6 +33,9 @@ class FAQService:
             bool: True if initialization successful, False otherwise
         """
         try:
+            # Initialize the ID counter to ensure unique IDs
+            self.cache_service.initialize_faq_id_counter(db)
+            
             return self.cache_service.initialize_with_warming(
                 db_session=db, 
                 warm_cache=warm_cache, 
@@ -53,8 +56,18 @@ class FAQService:
         Returns:
             FAQ: Created FAQ
         """
-        # Create in database
-        db_faq = crud.faq.create_with_user(db, obj_in=faq_in, user_id=user_id)
+        # First, try to get an ID from the cache
+        # This follows the user's request to get the ID from cache first
+        faq_id = None
+        try:
+            faq_id = self.cache_service.generate_faq_id()
+            logger.debug(f"Got FAQ ID {faq_id} from cache")
+        except Exception as e:
+            logger.warning(f"Failed to get FAQ ID from cache: {e}")
+        
+        # Create in database using the ID from cache if available
+        # If cache ID generation failed, let database auto-generate the ID
+        db_faq = crud.faq.create_with_user(db, obj_in=faq_in, user_id=user_id, faq_id=faq_id)
         
         # Add to cache
         try:
@@ -329,3 +342,54 @@ class FAQService:
         except Exception as e:
             logger.error(f"Error incrementing frequency count for FAQ {faq_id}: {e}")
             return False
+
+    def batch_increment_cache_hit_frequency(self, db: Session, faq_ids: List[int]) -> Dict[int, bool]:
+        """Batch increment frequency counts for multiple FAQs.
+        
+        This method provides better performance for multiple FAQ frequency updates
+        by reducing database round trips.
+        
+        Args:
+            db: Database session
+            faq_ids: List of FAQ IDs to increment frequency for
+            
+        Returns:
+            Dict[int, bool]: Mapping of FAQ IDs to success status
+        """
+        results = {}
+        
+        try:
+            # Batch increment frequencies in database
+            for faq_id in faq_ids:
+                try:
+                    success = crud.faq.increment_frequency(db, faq_id=faq_id)
+                    results[faq_id] = success
+                except Exception as e:
+                    logger.error(f"Failed to increment frequency for FAQ {faq_id}: {e}")
+                    results[faq_id] = False
+            
+            # Batch update cache with new frequencies
+            try:
+                updated_faqs = []
+                for faq_id in faq_ids:
+                    if results[faq_id]:  # Only update cache if database update succeeded
+                        updated_faq = crud.faq.get(db, id=faq_id)
+                        if updated_faq:
+                            updated_faqs.append(updated_faq)
+                
+                # Batch update all FAQs in cache
+                for updated_faq in updated_faqs:
+                    try:
+                        self.cache_service.update_faq(updated_faq)
+                        logger.info(f"Successfully updated FAQ {updated_faq.id} in cache")
+                    except Exception as cache_e:
+                        logger.warning(f"Failed to update FAQ {updated_faq.id} in cache: {cache_e}")
+                        results[updated_faq.id] = False  # Mark as failed if cache update fails
+                        
+            except Exception as batch_cache_e:
+                logger.error(f"Failed to batch update FAQs in cache: {batch_cache_e}")
+                
+        except Exception as e:
+            logger.error(f"Error in batch increment frequency operation: {e}")
+            
+        return results
