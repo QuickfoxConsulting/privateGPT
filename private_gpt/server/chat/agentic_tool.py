@@ -151,9 +151,9 @@ class AgenticRAGEngine(BaseChatEngine):
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
         
-        # Web search tools
-        web_tools = self._create_web_tools()
-        tools.extend(web_tools)
+        # # Web search tools
+        # web_tools = self._create_web_tools()
+        # tools.extend(web_tools)
         
         # Add time tool
         time_tool = TimeTool()
@@ -352,7 +352,7 @@ class AgenticRAGEngine(BaseChatEngine):
 
             1.  **Think Systematically**: Always start with a `Thought` to outline your plan. Break down complex problems into smaller, logical steps.
             2.  **Use Tools Efficiently**: Select the best tool for each step. Do not use more than **5 tool calls** unless absolutely necessary. Each call must build upon the last. Stop when you have enough information.
-            3.  **Prioritize Source Quality**: Prefer authoritative, recent, and relevant sources. Use document-specific tools first, then general document retrieval, then web search.
+            3.  **Prioritize Source Quality**: Prefer authoritative, recent, and relevant sources. Use document-specific tools first, then general document retrieval.
             4.  **Verify and Synthesize**: Cross-reference information from multiple sources to ensure accuracy.
             5.  **Adapt to the User**: Tailor the language, technical depth, and format of your response to the user's query and profile. Your success is measured by the accuracy, completeness, and clarity of your answer.
 
@@ -366,12 +366,7 @@ class AgenticRAGEngine(BaseChatEngine):
 
             1.  **Check for Specific Documents**: If the user mentions a specific document, use the corresponding `doc_[document_name]` tool first.
             2.  **General Document Search**: If the query is about internal knowledge but no specific document is named, use `document_retriever`.
-            3.  **Web & Real-time Search**:
-                *   Use `serper_web_search` for general questions, current events, or information not found in documents.
-                *   Use `serper_news_search` for recent news topics.
-                *   Use `serper_instant_search` for quick facts or knowledge graph lookups.
-            4.  **Web Page Content**: If you need to analyze the content of a specific URL, use `crawl4ai_scraper`.
-            5.  **Final Step - Cross-Verification**: Before answering, use a different tool (e.g., web search to verify a document claim) if you have medium or low confidence in the initial information.
+            3.  **Final Step - Cross-Verification**: Before answering, use a different tool (e.g., web search to verify a document claim) if you have medium or low confidence in the initial information.
 
             ### Document Tool Rules
             - Use the exact tool name (e.g., `doc_2023_report_v1_pdf`).

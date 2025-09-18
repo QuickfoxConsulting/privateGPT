@@ -46,17 +46,18 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )      
-        # node_parser = SentenceWindowNodeParser.from_defaults(
-        #     window_size=20,
-        #     window_metadata_key="window",
-        #     original_text_metadata_key="original_text",
-        #     include_metadata=True,
-        #     include_prev_next_rel=True
-        # )
-        node_parser = PassthroughNodeParser.from_defaults(
+        node_parser = SentenceChunkWindowNodeParser.from_defaults(
+            chunk_size=10,
+            window_size=5,
+            window_metadata_key="window",
+            original_text_metadata_key="original_text",
             include_metadata=True,
-            include_prev_next_rel=True,
+            include_prev_next_rel=True
         )
+        # node_parser = PassthroughNodeParser.from_defaults(
+        #     include_metadata=True,
+        #     include_prev_next_rel=True,
+        # )
         self.ingest_component = get_ingestion_component(
             self.storage_context,
             embed_model=embedding_component.embedding_model,
