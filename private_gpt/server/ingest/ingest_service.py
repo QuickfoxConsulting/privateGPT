@@ -14,6 +14,8 @@ from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
 from private_gpt.components.nodeparser.PassThroughNodeParser import PassthroughNodeParser
+from private_gpt.components.nodeparser.MarkdownAwareNodeParser import MarkdownAwareNodeParser
+from private_gpt.components.nodeparser.AdaptiveNodeParser import AdaptiveNodeParser
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -46,14 +48,27 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )      
-        node_parser = SentenceChunkWindowNodeParser.from_defaults(
-            chunk_size=10,
-            window_size=5,
-            window_metadata_key="window",
-            original_text_metadata_key="original_text",
-            include_metadata=True,
-            include_prev_next_rel=True
+        # Use adaptive parser that automatically selects the best strategy
+        node_parser = AdaptiveNodeParser.from_defaults(
+            chunk_size=700,
+            chunk_overlap=100,
+            markdown_threshold=0.3
         )
+        # Alternative: Use markdown-aware parser directly for PDFs processed with LlamaParse
+        # node_parser = MarkdownAwareNodeParser.from_defaults(
+        #     chunk_size=1024,
+        #     chunk_overlap=100,
+        #     preserve_headers=True,
+        #     min_chunk_size=100
+        # )
+        # node_parser = SentenceChunkWindowNodeParser.from_defaults(
+        #     chunk_size=10,
+        #     window_size=5,
+        #     window_metadata_key="window",
+        #     original_text_metadata_key="original_text",
+        #     include_metadata=True,
+        #     include_prev_next_rel=True
+        # )
         # node_parser = PassthroughNodeParser.from_defaults(
         #     include_metadata=True,
         #     include_prev_next_rel=True,

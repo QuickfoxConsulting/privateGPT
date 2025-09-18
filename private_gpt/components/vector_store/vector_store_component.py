@@ -13,6 +13,7 @@ from llama_index.core.vector_stores.types import (
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
 from private_gpt.paths import local_data_path
 from private_gpt.settings.settings import Settings
+from private_gpt.components.vector_store.enhanced_retriever import EnhancedFileRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -225,27 +226,22 @@ class VectorStoreComponent:
         )
     
     def file_vector_retriever(
-        self, 
-        index: VectorStoreIndex, 
+        self,
+        index: VectorStoreIndex,
         file_name: str,
-        similarity_top_k: int = 2,
-    )-> VectorIndexRetriever:
-        filters = MetadataFilters(
-            filters=[
-                MetadataFilter(key="file_name", value=f"{file_name}", condition=FilterCondition.OR),
-            ]
-        )
-        return VectorIndexRetriever(
+        similarity_top_k: int = 5,
+        enable_cross_page_retrieval: bool = True,
+        preserve_page_context: bool = True,
+        context_window_expansion: float = 1.5,
+    ):
+        """Create a file-specific vector retriever with enhanced capabilities."""
+        return EnhancedFileRetriever(
             index=index,
-            filters=(
-                filters
-                if self.settings.vectorstore.database != "qdrant"
-                else None
-            ),
+            file_name=file_name,
             similarity_top_k=similarity_top_k,
-            sparse_top_k=12,
-            vector_store_query_mode="hybrid",
-            alpha=0.5,
+            enable_cross_page_retrieval=enable_cross_page_retrieval,
+            preserve_page_context=preserve_page_context,
+            context_window_expansion=context_window_expansion,
         )
 
     def close(self) -> None:

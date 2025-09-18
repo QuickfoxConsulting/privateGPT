@@ -6,6 +6,8 @@ import numpy as np
 from pydantic import BaseModel, Field
 from injector import inject, singleton
 
+from sqlalchemy import func
+
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.cache.cache_component import CacheComponent, CacheStatus
 from private_gpt.users.schemas import FAQ 

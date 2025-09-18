@@ -70,17 +70,18 @@ class AgenticRAGEngine(BaseChatEngine):
         max_retries: int = 5,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
-        jitter: tuple[float, float] = (0.1, 0.3)
+        jitter: tuple[float, float] = (0.1, 0.3),
+        enable_cross_page_context: bool = True,
+        enhanced_citation_format: bool = True,
+        context_window_expansion: float = 1.5,
     ) -> None:
         """Initialize the AgenticRAGEngine with all necessary components."""
-        # Core components
         self._llm = llm
         self._index = index
         self._vector_store_component = vector_store_component
         self._node_postprocessors = node_postprocessors or []
         self._node_store = node_store_component
         
-        # Configuration
         self._verbose = verbose
         self._max_iterations = max_iterations
         self._document_files = document_files or []
@@ -88,19 +89,19 @@ class AgenticRAGEngine(BaseChatEngine):
         self._citation_format = citation_format
         self._similarity_top_k = similarity_top_k
         
-        # Rate limit handling
+        self._enable_cross_page_context = enable_cross_page_context
+        self._enhanced_citation_format = enhanced_citation_format
+        self._context_window_expansion = context_window_expansion
+        
         self._max_retries = max_retries
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._jitter = jitter
         
-        # Callback management
         self.callback_manager = callback_manager or CallbackManager([])
         
-        # Memory initialization
         self._memory = memory or self._create_default_memory()
         
-        # Agent initialization
         self._agent = self._create_agent(system_prompt)
         
         logger.info(f"AgenticRAGEngine initialized with {len(self._document_files)} documents")
@@ -214,7 +215,7 @@ class AgenticRAGEngine(BaseChatEngine):
         )
 
     def _create_document_specific_tools(self) -> List[BaseTool]:
-        """Create tools for specific document analysis."""
+        """Create tools for specific document analysis with enhanced capabilities."""
         tools = []
         
         if not self._document_files:
@@ -233,10 +234,12 @@ class AgenticRAGEngine(BaseChatEngine):
                     tool_name_prefix=self._tool_name_prefix,
                     citation_format=self._citation_format,
                     similarity_top_k=self._similarity_top_k,
-                    verbose=self._verbose
+                    verbose=self._verbose,
+                    enable_cross_page_retrieval=self._enable_cross_page_context,
+                    preserve_page_context=True,
                 )
                 tools.append(tool)
-                logger.info(f"Created document tool for {file_name}")
+                logger.info(f"Created enhanced document tool for {file_name}")
                 
             except Exception as e:
                 logger.error(f"Failed to create document tool for {file_name}: {e}")
@@ -329,6 +332,7 @@ class AgenticRAGEngine(BaseChatEngine):
             "4. **Cite sources precisely and consistently**:\n"
             "   - Do NOT use numeric citations like [1], [2], etc. For every web source, always use a markdown link in the format [Article Title](https://example.com) directly after the relevant statement.\n"
             "   - From documents: `[Page 5](document.pdf)`\n"
+            "   - For content spanning multiple pages: `[Pages 5-7](document.pdf)`\n"
             "   - From web sources: `[Article Title](https://example.com)`\n"
             "   - Place citations **inline immediately after each referenced statement**.\n"
             "5. **Synthesize overlapping information** across sources and highlight agreement or conflict between them.\n"
@@ -336,7 +340,8 @@ class AgenticRAGEngine(BaseChatEngine):
             "7. Use a formal, factual, and neutral tone. Avoid speculative or subjective language.\n"
             "8. Include key metadata (e.g., document titles, authors, publication years, tools, version numbers) when mentioned in the context.\n"
             "9. Follow a step-by-step reasoning approach where appropriate, especially when summarizing technical or multi-part content.\n"
-            "10. **At the end of your answer, always include a 'Sources' section listing all documents or URLs referenced in your answer.**\n\n"
+            "11. **Preserve exact page numbers** from source documents. When content spans multiple pages, indicate the full range (e.g., Pages 5-7).\n"
+            "12. **Group related information** from the same document section even if it appears in separate chunks.\n\n"
             "QUERY:\n"
             "{query_str}\n\n"
             "BEGIN YOUR RESPONSE:"
@@ -397,7 +402,7 @@ class AgenticRAGEngine(BaseChatEngine):
 
             ---
             ## **CRITICAL: OUTPUT FORMAT**
-            You MUST follow this format precisely. **NEVER** wrap your entire response in markdown code blocks.
+            You MUST follow this format precisely. **NEVER** wrap your entire response in code blocks.
 
             **Step 1: Reasoning and Tool Use (Repeat as needed)**
             ```

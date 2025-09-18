@@ -37,6 +37,8 @@ class DocumentSpecificTool(BaseTool):
         cache_size: int = 100,
         streaming: bool = False,
         response_mode: str = "tree_summarize",
+        enable_cross_page_retrieval: bool = True,
+        preserve_page_context: bool = True,
     ):
         self.file_name = file_name
         self.llm = llm
@@ -51,13 +53,13 @@ class DocumentSpecificTool(BaseTool):
         self.cache_size = cache_size
         self.streaming = streaming
         self.response_mode = response_mode
+        self.enable_cross_page_retrieval = enable_cross_page_retrieval
+        self.preserve_page_context = preserve_page_context
 
         self._name = f"{tool_name_prefix}_{self._generate_safe_name(file_name)}"
         self._description = self._generate_tool_description(file_name)
 
         self.document_retriever = self._create_document_retriever()
-
-        
 
         if self.verbose:
             logger.info(f"[INIT] Document tool created for '{self.file_name}' with tool name '{self._name}'")
@@ -81,12 +83,16 @@ class DocumentSpecificTool(BaseTool):
         )
 
     def _create_document_retriever(self) -> BaseRetriever:
-        """Create a document retriever filtered by file name."""
+        """Create a document retriever filtered by file name with enhanced capabilities."""
         try:
+            # Use enhanced file vector retriever that can handle cross-page content
             return self.vector_store_component.file_vector_retriever(
                 index=self.index,
                 file_name=self.file_name,
-                similarity_top_k=self.similarity_top_k
+                similarity_top_k=self.similarity_top_k,
+                # Pass new parameters for enhanced retrieval
+                enable_cross_page_retrieval=self.enable_cross_page_retrieval,
+                preserve_page_context=self.preserve_page_context
             )
         except Exception as e:
             logger.exception(f"[ERROR] Failed to create retriever for '{self.file_name}': {e}")
@@ -108,7 +114,9 @@ class DocumentSpecificTool(BaseTool):
                 f"3. Cite like: {self.citation_format.format(file_name=self.file_name, page='X')}\n"
                 "4. If data is missing, explicitly say so.\n"
                 "5. Add metadata when relevant (page, section, etc).\n"
-                "6. Synthesize when multiple contexts apply.\n\n"
+                "6. Synthesize when multiple contexts apply.\n"
+                "7. When content spans multiple pages, indicate the full page range.\n"
+                "8. Preserve exact page numbers from source documents in citations.\n\n"
                 "Query: {query_str}\n\n"
                 "Comprehensive Answer:"
             )
