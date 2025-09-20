@@ -148,7 +148,7 @@ def delete_ingested(request: Request, doc_id: str) -> None:
 from pathlib import Path
 
 @ingest_router.post("/ingest/file/delete", tags=["Ingestion"])
-def delete_file(
+async def delete_file(
         request: Request,
         delete_input: DeleteFilename,
         log_audit: models.Audit = Depends(deps.get_audit_logger),
@@ -169,10 +169,12 @@ def delete_file(
                 logger.info(f"Deleting file at: {upload_path}")
                 filename = os.path.basename(upload_path)
                 doc_ids = service.get_doc_ids_by_filename(filename)
+                logger.info(f"Deleting doc ids: {doc_ids}")
                 if doc_ids:
                     for doc_id in doc_ids:
-                        service.delete(doc_id)
+                        await service.delete(doc_id)
                 try:
+                    upload_path = Path(upload_path)
                     if upload_path.exists():
                         os.remove(upload_path)
                 except Exception as e:

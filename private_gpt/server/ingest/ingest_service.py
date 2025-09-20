@@ -14,6 +14,7 @@ from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
 from private_gpt.components.nodeparser.PassThroughNodeParser import PassthroughNodeParser
+from private_gpt.components.nodeparser.LateChunkNodeParser import LateChunkNodeParser
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CHUNK_SIZE = 512
 SENTENCE_CHUNK_OVERLAP = 100
-
+WINDOW_SIZE = 5
 
 @singleton
 class IngestService:
@@ -46,8 +47,16 @@ class IngestService:
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )      
-        node_parser = SentenceChunkWindowNodeParser.from_defaults(
-            chunk_size=10,
+        # node_parser = SentenceChunkWindowNodeParser.from_defaults(
+        #     chunk_size=10,
+        #     window_size=5,
+        #     window_metadata_key="window",
+        #     original_text_metadata_key="original_text",
+        #     include_metadata=True,
+        #     include_prev_next_rel=True
+        # )
+        node_parser = LateChunkNodeParser.from_defaults(
+            chunk_size=DEFAULT_CHUNK_SIZE,
             window_size=5,
             window_metadata_key="window",
             original_text_metadata_key="original_text",
