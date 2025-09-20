@@ -24,6 +24,7 @@ from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.constants import UNCHECKED_DIR, UPLOAD_DIR
 from private_gpt.manager.document_manager import DocumentManager
 from private_gpt.server.ingest.ingest_router import create_documents, ingest
+from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 
 logger = logging.getLogger(__name__)
@@ -300,7 +301,11 @@ async def upload_documents(
                 db=db,
                 doc_manager=doc_manager,
                 log_audit=log_audit,
-                request=request
+                request=request,
+                chunk_size=documents.chunk_size,
+                chunk_overlap=documents.chunk_overlap,
+                window_size=documents.window_size,
+                strategy=documents.strategy
             )
             return {"status": "upload_complete", "message": "Document uploaded and auto-approval started"}
         return document
@@ -321,7 +326,11 @@ async def verify_document_background(
     db: Session,
     doc_manager: DocumentManager,
     log_audit: models.Audit,
-    request: Request
+    request: Request,
+    chunk_size: int = 512,
+    chunk_overlap: int = 100,
+    window_size: int = 3,
+    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ):
     """Background task to handle document verification."""
     try:
@@ -378,7 +387,15 @@ async def verify_document_background(
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
             }
-            await ingest(request, final_path, metadata_dict)
+            await ingest(
+                request, 
+                final_path, 
+                metadata_dict,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                window_size=window_size,
+                strategy=strategy
+            )
             status_update = schemas.StatusUpdate(
                doc_status=DocumentStatus.READY.value
             )
@@ -475,7 +492,11 @@ async def verify_documents(
             db=db,
             doc_manager=doc_manager,
             log_audit=log_audit,
-            request=request
+            request=request,
+            chunk_size=512,  # Default values since these aren't provided in this endpoint
+            chunk_overlap=100,
+            window_size=3,
+            strategy=ChunkingStrategy.LATE_CHUNKING
         )
 
         return {"status": "verification_started", "message": "Document verification has been started"}

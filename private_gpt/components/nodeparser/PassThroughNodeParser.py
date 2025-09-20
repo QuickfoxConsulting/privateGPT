@@ -66,6 +66,25 @@ class PassthroughNodeParser(NodeParser):
                 doc,
                 id_func=self.id_func,
             )
+            
+            # Ensure document IDs are preserved
+            for node in nodes:
+                if hasattr(doc, 'doc_id') and doc.doc_id:
+                    node.metadata["document_id"] = doc.doc_id
+                    node.metadata["doc_id"] = doc.doc_id
+                elif doc.metadata and "document_id" in doc.metadata:
+                    node.metadata["document_id"] = doc.metadata["document_id"]
+                    node.metadata["doc_id"] = doc.metadata["document_id"]
+                elif doc.metadata and "doc_id" in doc.metadata:
+                    node.metadata["document_id"] = doc.metadata["doc_id"]
+                    node.metadata["doc_id"] = doc.metadata["doc_id"]
+                
+                # Ensure the node has the correct ref_doc_id set
+                if "doc_id" in node.metadata:
+                    node.ref_doc_id = node.metadata["doc_id"]
+                elif hasattr(doc, 'doc_id') and doc.doc_id:
+                    node.ref_doc_id = doc.doc_id
+            
             all_nodes.extend(nodes)
 
         return all_nodes

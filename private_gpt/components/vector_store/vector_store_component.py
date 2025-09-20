@@ -24,7 +24,9 @@ def _doc_id_metadata_filter(
 
     if context_filter is not None and context_filter.docs_ids is not None:
         for doc_id in context_filter.docs_ids:
+            # Use both doc_id and document_id for backward compatibility
             filters.filters.append(MetadataFilter(key="doc_id", value=doc_id))
+            filters.filters.append(MetadataFilter(key="document_id", value=doc_id))
 
     return filters
 

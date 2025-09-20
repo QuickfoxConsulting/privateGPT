@@ -7,7 +7,7 @@ import os
 import threading
 from pathlib import Path
 from queue import Queue
-from typing import Any
+from typing import Any, List
 
 from llama_index.core.data_structs import IndexDict
 from llama_index.core.embeddings.utils import EmbedType
@@ -38,15 +38,6 @@ class BaseIngestComponent(abc.ABC):
         self.storage_context = storage_context
         self.embed_model = embed_model
         self.transformations = transformations
-
-    @abc.abstractmethod
-    async def ingest(
-        self,
-        file_name: str,
-        file_data: Path,
-        file_metadata: dict[str, Any] | None = None,
-    ) -> list[Document]:
-        pass
 
     @abc.abstractmethod
     async def ingest(
@@ -165,6 +156,19 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
         logger.debug("Transforming count=%s documents into nodes", len(documents))
         with self._index_thread_lock:
             for document in documents:
+                # Ensure document has a doc_id before insertion
+                if not hasattr(document, 'doc_id') or not document.doc_id:
+                    import uuid
+                    document.doc_id = str(uuid.uuid4())
+                    if not document.metadata:
+                        document.metadata = {}
+                    document.metadata["doc_id"] = document.doc_id
+                    document.metadata["document_id"] = document.doc_id
+                
+                # Ensure ref_doc_id is set for the document
+                if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
+                    document.ref_doc_id = document.doc_id
+                    
                 self._index.insert(document, show_progress=True)
             logger.debug("Persisting the index and nodes")
             # persist the index and nodes
@@ -458,8 +462,30 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
             logger.info(
                 f"Saving {len(files)} files ({len(documents)} documents / {len(nodes)} nodes)"
             )
+            # Ensure all nodes have proper ref_doc_id before insertion
+            for node in nodes:
+                if isinstance(node, TextNode) and not node.ref_doc_id:
+                    if node.metadata and "doc_id" in node.metadata:
+                        node.ref_doc_id = node.metadata["doc_id"]
+                    elif hasattr(node, 'source_doc_id') and node.source_doc_id:
+                        node.ref_doc_id = node.source_doc_id
+                        
             self._index.insert_nodes(nodes)
             for document in documents:
+                # Ensure document has a doc_id before setting hash
+                if not hasattr(document, 'doc_id') or not document.doc_id:
+                    # Generate a new doc_id if one doesn't exist
+                    import uuid
+                    document.doc_id = str(uuid.uuid4())
+                    if not document.metadata:
+                        document.metadata = {}
+                    document.metadata["doc_id"] = document.doc_id
+                    document.metadata["document_id"] = document.doc_id
+                    
+                # Ensure ref_doc_id is set for the document
+                if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
+                    document.ref_doc_id = document.doc_id
+                    
                 self._index.docstore.set_document_hash(
                     document.get_doc_id(), document.hash
                 )

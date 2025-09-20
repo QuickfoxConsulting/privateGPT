@@ -26,9 +26,34 @@ class IngestedDoc(BaseModel):
     
     @staticmethod
     def from_document(document: Document) -> "IngestedDoc":
+        # Extract doc_id from document, prioritizing document.doc_id, then metadata
+        doc_id = None
+        if hasattr(document, 'doc_id') and document.doc_id:
+            doc_id = document.doc_id
+        elif document.metadata and 'doc_id' in document.metadata and document.metadata['doc_id']:
+            doc_id = document.metadata['doc_id']
+        elif document.metadata and 'document_id' in document.metadata and document.metadata['document_id']:
+            doc_id = document.metadata['document_id']
+        
+        # Generate a new doc_id if one doesn't exist
+        if not doc_id:
+            import uuid
+            doc_id = str(uuid.uuid4())
+        
+        # Ensure the document has the doc_id set
+        document.doc_id = doc_id
+        if not document.metadata:
+            document.metadata = {}
+        document.metadata["doc_id"] = doc_id
+        document.metadata["document_id"] = doc_id
+        
+        # Ensure ref_doc_id is set for the document
+        if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
+            document.ref_doc_id = doc_id
+        
         return IngestedDoc(
             object="ingest.document",
-            doc_id=document.doc_id,
+            doc_id=doc_id,
             doc_metadata=IngestedDoc.curate_metadata(document.metadata),
         )
 

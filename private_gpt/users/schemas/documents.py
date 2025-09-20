@@ -6,6 +6,7 @@ from fastapi import Form, UploadFile, File
 
 from .category import CategoryList
 from private_gpt.users.models.enums import *
+from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 
 class DocumentsBase(BaseModel):
     filename: str
@@ -229,17 +230,30 @@ class DocumentFilePath(BaseModel):
 class DocumentUpload:
     def __init__(
         self,
-        doc_metadata: str = Form(...),
-        file: UploadFile = File(...)
+        doc_metadata: str = Form(None),  # Made this optional by changing from Form(...) to Form(None)
+        file: UploadFile = File(...),
+        chunk_size: int = Form(512),
+        chunk_overlap: int = Form(100),
+        window_size: int = Form(3),
+        strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
     ):
         self.file = file
         self.metadata_raw = doc_metadata
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.window_size = window_size
+        self.strategy = strategy
 
-        try:
-            parsed = json.loads(doc_metadata)
-            self.doc_metadata = MetadataSchema(**parsed)
-        except Exception as e:
-            raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
+        # Handle optional metadata
+        if doc_metadata and doc_metadata.strip():  # Check if metadata exists and is not empty
+            try:
+                parsed = json.loads(doc_metadata)
+                self.doc_metadata = MetadataSchema(**parsed)
+            except Exception as e:
+                raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
+        else:
+            # Provide default empty metadata if none provided
+            self.doc_metadata = MetadataSchema()
         
 
 class DocumentSelection(BaseModel):
