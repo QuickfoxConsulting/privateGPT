@@ -85,9 +85,10 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
                 embed_model=self.embed_model,
                 transformations=self.transformations,
             )
-        except ValueError:
+            logger.debug("Successfully loaded existing index")
+        except ValueError as e:
             # There are no index in the storage context, creating a new one
-            logger.info("Creating a new vector store index")
+            logger.info("Creating a new vector store index: %s", str(e))
             index = VectorStoreIndex.from_documents(
                 [],
                 storage_context=self.storage_context,
@@ -97,18 +98,41 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
                 transformations=self.transformations,
             )
             index.storage_context.persist(persist_dir=local_data_path)
+            logger.debug("Created and persisted new index")
+        except Exception as e:
+            logger.error(f"Failed to initialize index: {str(e)}")
+            raise
         return index
 
     def _save_index(self) -> None:
-        self._index.storage_context.persist(persist_dir=local_data_path)
+        try:
+            self._index.storage_context.persist(persist_dir=local_data_path)
+            logger.debug("Successfully saved index to %s", local_data_path)
+        except Exception as e:
+            logger.error(f"Failed to save index to {local_data_path}: {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}")
+            # Log additional details about the storage context
+            try:
+                logger.error(f"Storage context details - vector_store: {type(self._index.storage_context.vector_store)}, "
+                           f"docstore: {type(self._index.storage_context.docstore)}, "
+                           f"index_store: {type(self._index.storage_context.index_store)}")
+            except Exception as inner_e:
+                logger.error(f"Failed to get storage context details: {str(inner_e)}")
+            raise
 
     def delete(self, doc_id: str) -> None:
         with self._index_thread_lock:
-            # Delete the document from the index
-            self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+            try:
+                # Delete the document from the index
+                self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                logger.debug(f"Successfully deleted document with doc_id={doc_id}")
 
-            # Save the index
-            self._save_index()
+                # Save the index
+                self._save_index()
+                logger.debug(f"Successfully saved index after deleting document {doc_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete document with doc_id={doc_id}: {str(e)}")
+                raise
 
 
 class SimpleIngestComponent(BaseIngestComponentWithIndex):
@@ -154,26 +178,40 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
 
     async def _save_docs(self, documents: list[Document]) -> list[Document]:
         logger.debug("Transforming count=%s documents into nodes", len(documents))
+        nodes = run_transformations(
+            documents,  # type: ignore[arg-type]
+            self.transformations,
+            show_progress=self.show_progress,
+        )
+        # Locking the index to avoid concurrent writes
         with self._index_thread_lock:
-            for document in documents:
-                # Ensure document has a doc_id before insertion
-                if not hasattr(document, 'doc_id') or not document.doc_id:
-                    import uuid
-                    document.doc_id = str(uuid.uuid4())
-                    if not document.metadata:
-                        document.metadata = {}
-                    document.metadata["doc_id"] = document.doc_id
-                    document.metadata["document_id"] = document.doc_id
-                
-                # Ensure ref_doc_id is set for the document
-                if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
-                    document.ref_doc_id = document.doc_id
-                    
-                self._index.insert(document, show_progress=True)
-            logger.debug("Persisting the index and nodes")
-            # persist the index and nodes
-            self._save_index()
-            logger.debug("Persisted the index and nodes")
+            try:
+                logger.info("Inserting count=%s nodes in the index", len(nodes))
+                self._index.insert_nodes(nodes, show_progress=True)
+                for document in documents:
+                    # Ensure document has a doc_id before setting hash
+                    if not hasattr(document, 'doc_id') or not document.doc_id:
+                        # Generate a new doc_id if one doesn't exist
+                        import uuid
+                        document.doc_id = str(uuid.uuid4())
+                        if not document.metadata:
+                            document.metadata = {}
+                        document.metadata["doc_id"] = document.doc_id
+                        document.metadata["document_id"] = document.doc_id
+                        
+                    # Note: We don't set ref_doc_id on Document objects as that's a property of TextNode objects
+                    # The ref_doc_id will be set by the node parser when creating nodes from documents
+                        
+                    self._index.docstore.set_document_hash(
+                        document.get_doc_id(), document.hash
+                    )
+                logger.debug("Persisting the index and nodes")
+                # persist the index and nodes
+                self._save_index()
+                logger.debug("Persisted the index and nodes")
+            except Exception as e:
+                logger.error(f"Failed to save documents: {str(e)}")
+                raise
         return documents
 
 
@@ -465,12 +503,17 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
             # Ensure all nodes have proper ref_doc_id before insertion
             for node in nodes:
                 if isinstance(node, TextNode) and not node.ref_doc_id:
+                    # Find the source document for this node to get the correct ref_doc_id
                     if node.metadata and "doc_id" in node.metadata:
                         node.ref_doc_id = node.metadata["doc_id"]
                     elif hasattr(node, 'source_doc_id') and node.source_doc_id:
                         node.ref_doc_id = node.source_doc_id
+                    else:
+                        # Generate a new ref_doc_id if none exists
+                        import uuid
+                        node.ref_doc_id = str(uuid.uuid4())
                         
-            self._index.insert_nodes(nodes)
+            # Ensure all documents have proper doc_id before insertion
             for document in documents:
                 # Ensure document has a doc_id before setting hash
                 if not hasattr(document, 'doc_id') or not document.doc_id:
@@ -482,17 +525,19 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
                     document.metadata["doc_id"] = document.doc_id
                     document.metadata["document_id"] = document.doc_id
                     
-                # Ensure ref_doc_id is set for the document
-                if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
-                    document.ref_doc_id = document.doc_id
+                # Note: We don't set ref_doc_id on Document objects as that's a property of TextNode objects
+                # The ref_doc_id will be set by the node parser when creating nodes from documents
                     
+            self._index.insert_nodes(nodes)
+            for document in documents:
                 self._index.docstore.set_document_hash(
                     document.get_doc_id(), document.hash
                 )
             self._save_index()
-        except Exception:
+        except Exception as e:
             # Tell the user so they can investigate these files
-            logger.exception(f"Processing files {files}")
+            logger.exception(f"Processing files {files}: {str(e)}")
+            raise
         finally:
             # Clearing work, even on exception, maintains a clean state.
             nodes.clear()

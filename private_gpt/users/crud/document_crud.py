@@ -13,6 +13,8 @@ from private_gpt.constants import ALL_DEPARTMENT
 from sqlalchemy import and_
 
 def get_versioned_filename_pattern(file_name: str) -> str:
+    """Generate versioned filename pattern - deprecated as we now use directory-based versioning."""
+    # Deprecated: We now use directory-based versioning that preserves original filenames
     name, ext = os.path.splitext(file_name)
     return f"{name}_v%{ext}" 
 
@@ -141,8 +143,10 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
         return query.all()
     
     def get_by_base_filename(self, db: Session, file_name: str):
-        pattern = get_versioned_filename_pattern(file_name)
-        return db.query(Document).filter(Document.filename.like(pattern)).first()
+        """Get document by filename - now uses exact match since we preserve original filenames."""
+        # Since we're now preserving original filenames, we can use exact matching
+        # This function could be deprecated in favor of get_by_filename
+        return self.get_by_filename(db, file_name=file_name)
 
 class CRUDDocumentVersion(CRUDBase[DocumentVersion, DocumentVersionCreate, DocumentVersionUpdate]):
     def get_by_id(self, db: Session, *, id: int) -> Optional[DocumentVersion]:

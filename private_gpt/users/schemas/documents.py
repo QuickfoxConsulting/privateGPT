@@ -245,14 +245,13 @@ class DocumentUpload:
         self.strategy = strategy
 
         # Handle optional metadata
-        if doc_metadata and doc_metadata.strip():  # Check if metadata exists and is not empty
+        if doc_metadata and doc_metadata.strip():  
             try:
                 parsed = json.loads(doc_metadata)
                 self.doc_metadata = MetadataSchema(**parsed)
             except Exception as e:
                 raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
         else:
-            # Provide default empty metadata if none provided
             self.doc_metadata = MetadataSchema()
         
 

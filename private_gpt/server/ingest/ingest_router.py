@@ -151,25 +151,31 @@ async def ingest_file(
     try:
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
-        with open(upload_path, "rb") as f:
-            metadata_dict = None if metadata is None else json.loads(metadata)
-            ingested_documents = await service.ingest_bin_data(
-                file.filename, 
-                f, 
-                metadata_dict,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                window_size=window_size,
-                strategy=strategy
-            )
+        
+        # Use ingest_file directly since we have the file path
+        metadata_dict = None if metadata is None else json.loads(metadata)
+        ingested_documents = await service.ingest_file(
+            file.filename, 
+            upload_path,
+            metadata_dict,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            window_size=window_size,
+            strategy=strategy
+        )
     except Exception as e:
-        return {"message": f"There was an error uploading the file(s)\n {e}"}
+        logger.error(f"Error ingesting file {file.filename}: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     finally:
+        # Clean up the temporary file
+        if upload_path.exists():
+            upload_path.unlink()
         file.file.close()
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 @ingest_router.post("/ingest/text", tags=["Ingestion"])
-def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
+async def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
     """Ingests and processes a text with dynamic chunking parameters.
 
     The context obtained from files is later used in
@@ -184,7 +190,7 @@ def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
     service = request.state.injector.get(IngestService)
     if len(body.file_name) == 0:
         raise HTTPException(400, "No file name provided")
-    ingested_documents = service.ingest_text(
+    ingested_documents = await service.ingest_text(
         body.file_name, 
         body.text, 
         body.metadata,
@@ -208,19 +214,19 @@ def list_ingested(request: Request) -> IngestResponse:
 
 
 @ingest_router.delete("/ingest/{doc_id}", tags=["Ingestion"])
-def delete_ingested(request: Request, doc_id: str) -> None:
+async def delete_ingested(request: Request, doc_id: str) -> None:
     """Delete the specified ingested Document.
 
     The `doc_id` can be obtained from the `GET /ingest/list` endpoint.
     The document will be effectively deleted from your storage context.
     """
     service = request.state.injector.get(IngestService)
-    service.delete(doc_id)
+    await service.delete(doc_id)
 
 from pathlib import Path
 
 @ingest_router.post("/ingest/file/delete", tags=["Ingestion"])
-def delete_file(
+async def delete_file(
         request: Request,
         delete_input: DeleteFilename,
         log_audit: models.Audit = Depends(deps.get_audit_logger),
@@ -244,8 +250,9 @@ def delete_file(
                 logger.info(f"Deleting doc_ids: {doc_ids}")
                 if doc_ids:
                     for doc_id in doc_ids:
-                        service.delete(doc_id)
+                        await service.delete(doc_id)
                 try:
+                    upload_path = Path(upload_path)
                     if upload_path.exists():
                         os.remove(upload_path)
                 except Exception as e:
@@ -294,7 +301,7 @@ async def create_documents(
     `Document Department Association` table with the department IDs for the documents.
     Using the new metadata JSONB field for storing tags, departments, and categories.
     """
-    file_ingested = crud.documents.get_by_base_filename(db, file_name=file_name)
+    file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
     if file_ingested:
         raise HTTPException(
             status_code=409,
@@ -499,6 +506,8 @@ async def ingest_url(
         return {"message": f"There was an error uploading the file(s)\n {e}"}
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
+
+# Actual Ingestion Method
 async def ingest(
     request: Request, 
     file_path: str, 
@@ -511,28 +520,24 @@ async def ingest(
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
     try:
-        with open(file_path, 'rb') as file:
-            file_name = Path(file_path).name
-            upload_path = Path(f"{UPLOAD_DIR}/{file_name}")
-
-            with upload_path.open('wb') as f:
-                f.write(file.read())
-
-            with upload_path.open('rb') as f:
-                ingested_documents = await service.ingest_bin_data(
-                    file_name, 
-                    f, 
-                    tags,
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    window_size=window_size,
-                    strategy=strategy
-                )
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+            
+        file_name = file_path_obj.name
+        ingested_documents = await service.ingest_file(
+            file_name, 
+            file_path_obj,
+            tags,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            window_size=window_size,
+            strategy=strategy
+        )
     except Exception as e:
-        return {"message": f"There was an error uploading the file(s)\n {e}"}
-
-    finally:
-        upload_path.unlink(missing_ok=True)
+        logger.error(f"Error ingesting file {file_path}: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 

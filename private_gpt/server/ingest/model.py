@@ -47,9 +47,8 @@ class IngestedDoc(BaseModel):
         document.metadata["doc_id"] = doc_id
         document.metadata["document_id"] = doc_id
         
-        # Ensure ref_doc_id is set for the document
-        if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
-            document.ref_doc_id = doc_id
+        # Note: Document objects don't have ref_doc_id field - that's for TextNode objects
+        # The ref_doc_id is handled by the node parser when creating nodes from documents
         
         return IngestedDoc(
             object="ingest.document",

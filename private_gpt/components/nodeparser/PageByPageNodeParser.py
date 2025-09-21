@@ -10,7 +10,7 @@ from llama_index.core.schema import BaseNode, Document
 from llama_index.core.utils import get_tqdm_iterable
 
 
-class PassthroughNodeParser(NodeParser):
+class PageByPageNodeParser(NodeParser):
     """A node parser that assumes documents are already pre-chunked.
 
     It wraps each document's text into a single node, preserving existing metadata.
@@ -18,7 +18,7 @@ class PassthroughNodeParser(NodeParser):
 
     @classmethod
     def class_name(cls) -> str:
-        return "PassthroughNodeParser"
+        return "PageByPageNodeParser"
 
     @classmethod
     def from_defaults(
@@ -27,7 +27,7 @@ class PassthroughNodeParser(NodeParser):
         include_prev_next_rel: bool = True,
         callback_manager: Optional[CallbackManager] = None,
         id_func: Optional[Callable[[int, Document], str]] = None,
-    ) -> "PassthroughNodeParser":
+    ) -> "PageByPageNodeParser":
         callback_manager = callback_manager or CallbackManager([])
         id_func = id_func or default_id_func
 

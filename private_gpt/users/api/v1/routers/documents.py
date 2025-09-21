@@ -361,14 +361,13 @@ async def verify_document_background(
             crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
             
             checker = schemas.DocumentCheckerUpdate(
-                filename=versioned_filename,
+                filename=document.filename,  # Keep original filename
                 is_enabled=True,
                 verified_at=datetime.now(),
                 verified_by=current_user_id,
                 verified=True,
             )
             crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            document.filename = versioned_filename
             db.add(document)
             db.commit()
             db.refresh(document)

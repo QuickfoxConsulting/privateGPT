@@ -16,8 +16,8 @@ from private_gpt.components.ingest.ingest_component import get_ingestion_compone
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
-from private_gpt.components.nodeparser.PassThroughNodeParser import PassthroughNodeParser
-from private_gpt.components.nodeparser.ChonkieContextWindowNodeParser import ChonkieContextWindowNodeParser
+from private_gpt.components.nodeparser.PageByPageNodeParser import PageByPageNodeParser
+from private_gpt.components.nodeparser.LateChunkNodeParser import LateChunkNodeParser
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -37,8 +37,8 @@ DEFAULT_WINDOW_SIZE = 3
 class ChunkingStrategy(str, Enum):
     LATE_CHUNKING = "late_chunking"
     SENTENCE_WINDOW = "sentence_window"
-    SENTENCE_CHUNK = "sentence_chunk"
-    PASS_THROUGH = "pass_through"
+    SEMANTIC = "semantic"
+    PAGE_BY_PAGE = "page_by_page"
 
 @singleton
 class IngestService:
@@ -51,32 +51,15 @@ class IngestService:
         node_store_component: NodeStoreComponent,
     ) -> None:
         self.llm_service = llm_component
+        self.embedding_component = embedding_component
         self.storage_context = StorageContext.from_defaults(
             vector_store=vector_store_component.vector_store,
             docstore=node_store_component.doc_store,
             index_store=node_store_component.index_store,
         )      
-        # node_parser = ChonkieContextWindowNodeParser.from_defaults(
-        #     chunk_size=DEFAULT_CHUNK_SIZE,
-        #     context_window=DEFAULT_WINDOW_SIZE
-        # )
-        node_parser = SentenceWindowNodeParser.from_defaults(
-                window_size=10,  # Approximate window size
-                window_metadata_key="window",
-                original_text_metadata_key="original_text",
-                include_metadata=True,
-                include_prev_next_rel=True
-            )
-        self.ingest_component = get_ingestion_component(
-            self.storage_context,
-            embed_model=embedding_component.embedding_model,
-            transformations=[
-                node_parser,
-                embedding_component.embedding_model,
-            ],
-            settings=settings(),
-        )
-
+        self.embedding_model = embedding_component.embedding_model
+        self.settings = settings()
+        
     def _get_node_parser(
         self, 
         chunk_size: int = DEFAULT_CHUNK_SIZE, 
@@ -86,104 +69,47 @@ class IngestService:
     ):
         """Create node parser based on dynamic parameters."""
         if strategy == ChunkingStrategy.LATE_CHUNKING:
-            return ChonkieContextWindowNodeParser.from_defaults(
+            return LateChunkNodeParser.from_defaults(
                 chunk_size=chunk_size,
-                context_window=window_size,
+                window_size=window_size,
             )
         elif strategy == ChunkingStrategy.SENTENCE_WINDOW:
-            parser = SentenceWindowNodeParser.from_defaults(
-                window_size=chunk_size // 50,  # Approximate window size
-                window_metadata_key="window",
-                original_text_metadata_key="original_text",
-                include_metadata=True,
-                include_prev_next_rel=True
-            )
-            return parser
-        elif strategy == ChunkingStrategy.SENTENCE_CHUNK:
             return SentenceChunkWindowNodeParser.from_defaults(
-                chunk_size=chunk_size // 50,  # Approximate sentences per chunk
-                window_size=window_size,
-                window_metadata_key="window",
-                original_text_metadata_key="original_text",
-            )
-        else:
-            # Default to sentence window node parser
-            parser = SentenceWindowNodeParser.from_defaults(
-                window_size=chunk_size // 50,  # Approximate window size
+                chunk_size=chunk_size,
+                window_size=window_size,  
                 window_metadata_key="window",
                 original_text_metadata_key="original_text",
                 include_metadata=True,
                 include_prev_next_rel=True
             )
-            return parser
-
-    def _get_ingest_component_with_parser(self, node_parser, embedding_component):
-        """Create ingestion component with specific node parser."""
-        # Get the settings from the existing ingest component
-        existing_settings = None
-        if hasattr(self.ingest_component, 'settings'):
-            existing_settings = self.ingest_component.settings
+        elif strategy == ChunkingStrategy.SEMANTIC:
+            return SemanticSplitterNodeParser.from_defaults(
+                buffer_size=2, # Contextual buffer (number of sentences) around split points
+                breakpoint_percentile_threshold=75, # Sensitivity to semantic shifts
+                embed_model=self.embedding_model 
+            )
+        elif strategy == ChunkingStrategy.PAGE_BY_PAGE:
+            return PageByPageNodeParser.from_defaults()
         else:
-            # Fallback to getting settings from global settings
-            existing_settings = settings()
-            
+            return SentenceWindowNodeParser.from_defaults(
+                window_size=10, 
+                window_metadata_key="window",
+                original_text_metadata_key="original_text",
+                include_metadata=True,
+                include_prev_next_rel=True
+            )
+
+    def _get_ingest_component_with_parser(self, node_parser):
+        """Create ingestion component with specific node parser."""
         return get_ingestion_component(
             self.storage_context,
-            embed_model=embedding_component,
+            embed_model=self.embedding_model,
             transformations=[
                 node_parser,
-                embedding_component,
+                self.embedding_model,
             ],
-            settings=existing_settings,
+            settings=self.settings,
         )
-
-    async def _ingest_data(
-        self,
-        file_name: str,
-        file_data: AnyStr,
-        file_metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
-        strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
-    ) -> list[IngestedDoc]:
-        logger.debug("Got file data of size=%s to ingest", len(file_data))
-        # Create node parser with dynamic parameters
-        node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
-        ingest_component = self._get_ingest_component_with_parser(node_parser, self.ingest_component.transformations[1])  # embedding component
-        
-        # llama-index mainly supports reading from files, so
-        # we have to create a tmp file to read for it to work
-        # delete=False to avoid a Windows 11 permission error.
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            try:
-                path_to_tmp = Path(tmp.name)
-                if isinstance(file_data, bytes):
-                    path_to_tmp.write_bytes(file_data)
-                else:
-                    path_to_tmp.write_text(str(file_data))
-                return await self.ingest_file(file_name, path_to_tmp, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
-            finally:
-                tmp.close()
-                path_to_tmp.unlink()
-
-    async def ingest_file(
-        self,
-        file_name: str,
-        file_data: Path,
-        file_metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
-        strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
-    ) -> list[IngestedDoc]:
-        logger.info("Ingesting file_name=%s", file_name)
-        # Create node parser with dynamic parameters
-        node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
-        ingest_component = self._get_ingest_component_with_parser(node_parser, self.ingest_component.transformations[1])  # embedding component
-        documents = await ingest_component.ingest(file_name, file_data, file_metadata)
-        logger.info("Finished ingestion file_name=%s", file_name)
-        return [IngestedDoc.from_document(document) for document in documents]
 
     async def ingest_text(
         self, 
@@ -196,7 +122,11 @@ class IngestService:
         window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting text data with file_name=%s", file_name)
-        return await self._ingest_data(file_name, text, metadata, chunk_size, chunk_overlap, strategy, window_size)
+        try:
+            return await self._ingest_data(file_name, text, metadata, chunk_size, chunk_overlap, strategy, window_size)
+        except Exception as e:
+            logger.error(f"Error during text ingestion for {file_name}: {str(e)}")
+            raise
 
     async def ingest_bin_data(
         self,
@@ -209,9 +139,67 @@ class IngestService:
         window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting binary data with file_name=%s", file_name)
-        file_data = raw_file_data.read()
-        return await self._ingest_data(file_name, file_data, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
+        try:
+            file_data = raw_file_data.read()
+            return await self._ingest_data(file_name, file_data, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
+        except Exception as e:
+            logger.error(f"Error during binary data ingestion for {file_name}: {str(e)}")
+            raise
     
+    async def _ingest_data(
+        self,
+        file_name: str,
+        file_data: AnyStr,
+        file_metadata: dict[str, str] | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
+        strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
+        window_size: int = DEFAULT_WINDOW_SIZE,
+    ) -> list[IngestedDoc]:
+        logger.debug("Got file data of size=%s to ingest", len(file_data))
+        try:
+            # llama-index mainly supports reading from files, so
+            # we have to create a tmp file to read for it to work
+            # delete=False to avoid a Windows 11 permission error.
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                try:
+                    path_to_tmp = Path(tmp.name)
+                    if isinstance(file_data, bytes):
+                        path_to_tmp.write_bytes(file_data)
+                    else:
+                        path_to_tmp.write_text(str(file_data))
+                    return await self.ingest_file(file_name, path_to_tmp, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
+                finally:
+                    tmp.close()
+                    path_to_tmp.unlink()
+        except Exception as e:
+            logger.error(f"Error during data ingestion for {file_name}: {str(e)}")
+            raise
+
+    async def ingest_file(
+        self,
+        file_name: str,
+        file_data: Path,
+        file_metadata: dict[str, str] | None = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
+        strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
+        window_size: int = DEFAULT_WINDOW_SIZE,
+    ) -> list[IngestedDoc]:
+        logger.info("Ingesting file_name=%s with strategy=%s, chunk_size=%d, window_size=%d", 
+                   file_name, strategy.value, chunk_size, window_size)
+        try:
+            node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
+            ingest_component = self._get_ingest_component_with_parser(node_parser)
+            
+            documents = await ingest_component.ingest(file_name, file_data, file_metadata)
+            logger.info("Finished ingestion file_name=%s", file_name)
+            return [IngestedDoc.from_document(document) for document in documents]
+        except Exception as e:
+            logger.error(f"Error during file ingestion for {file_name}: {str(e)}")
+            logger.error(f"Error details: chunk_size={chunk_size}, chunk_overlap={chunk_overlap}, strategy={strategy.value}, window_size={window_size}")
+            raise
+
     async def ingest_url(
         self, 
         url: str, 
@@ -221,11 +209,13 @@ class IngestService:
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
         window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
-        logger.debug("Ingesting url=%s", url)
+        logger.debug("Ingesting url=%s with strategy=%s", url, strategy.value)
+        
         # Create node parser with dynamic parameters
         node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
-        ingest_component = self._get_ingest_component_with_parser(node_parser, self.ingest_component.transformations[1])  # embedding component
-        documents = await ingest_component.ingest(url, documents)
+        ingest_component = self._get_ingest_component_with_parser(node_parser)
+        
+        documents = await ingest_component.ingest_url(url, documents)
         return [IngestedDoc.from_document(document) for document in documents]
 
     async def bulk_ingest(
@@ -236,10 +226,12 @@ class IngestService:
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
         window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
-        logger.info("Ingesting file_names=%s", [f[0] for f in files])
+        logger.info("Ingesting file_names=%s with strategy=%s", [f[0] for f in files], strategy.value)
+        
         # Create node parser with dynamic parameters
         node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
-        ingest_component = self._get_ingest_component_with_parser(node_parser, self.ingest_component.transformations[1])  # embedding component
+        ingest_component = self._get_ingest_component_with_parser(node_parser)
+        
         documents = await ingest_component.bulk_ingest(files)
         logger.info("Finished ingestion file_name=%s", [f[0] for f in files])
         return [IngestedDoc.from_document(document) for document in documents]
@@ -278,7 +270,11 @@ class IngestService:
         logger.info(
             "Deleting the ingested document=%s in the doc and index store", doc_id
         )
-        await self.ingest_component.delete(doc_id)
+        # We need to create a temporary ingest component for deletion
+        # Since deletion doesn't depend on node parser, we can use any strategy
+        node_parser = self._get_node_parser()
+        ingest_component = self._get_ingest_component_with_parser(node_parser)
+        ingest_component.delete(doc_id) 
 
     def get_doc_ids_by_filename(self, filename: str) -> list[str]:
         doc_ids: set[str] = set()
@@ -294,7 +290,7 @@ class IngestService:
 
         logger.debug("Found count=%s doc_ids for filename '%s'",
                      len(doc_ids), filename)
-        return doc_ids
+        return list(doc_ids)
 
     def get_doc_ids_by_filename_pattern(self, pattern: str) -> list[str]:
         """

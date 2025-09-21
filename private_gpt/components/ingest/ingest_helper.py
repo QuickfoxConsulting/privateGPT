@@ -106,10 +106,6 @@ class IngestionHelper:
             if "document_id" not in document.excluded_llm_metadata_keys:
                 document.excluded_llm_metadata_keys.append("document_id")
                 
-            # Ensure ref_doc_id is set for the document
-            if not hasattr(document, 'ref_doc_id') or not document.ref_doc_id:
-                document.ref_doc_id = document.doc_id
-                
         IngestionHelper._exclude_metadata(documents)
         return documents
 
