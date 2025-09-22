@@ -38,7 +38,7 @@ class ChunkingStrategy(str, Enum):
     LATE_CHUNKING = "late_chunking"
     SENTENCE_WINDOW = "sentence_window"
     SEMANTIC = "semantic"
-    PAGE_BY_PAGE = "page_by_page"
+    # PAGE_BY_PAGE = "page_by_page"
 
 @singleton
 class IngestService:
@@ -88,8 +88,8 @@ class IngestService:
                 breakpoint_percentile_threshold=75, # Sensitivity to semantic shifts
                 embed_model=self.embedding_model 
             )
-        elif strategy == ChunkingStrategy.PAGE_BY_PAGE:
-            return PageByPageNodeParser.from_defaults()
+        # elif strategy == ChunkingStrategy.PAGE_BY_PAGE:
+        #     return PageByPageNodeParser.from_defaults()
         else:
             return SentenceWindowNodeParser.from_defaults(
                 window_size=10, 
@@ -275,6 +275,18 @@ class IngestService:
         node_parser = self._get_node_parser()
         ingest_component = self._get_ingest_component_with_parser(node_parser)
         ingest_component.delete(doc_id) 
+
+    async def delete_docs(self, doc_ids: [str], filename: str) -> None:
+        logger.info(
+            "Deleting the ingested document(s) in the doc and index store with filename=%s", filename
+        )
+        # We need to create a temporary ingest component for deletion
+        # Since deletion doesn't depend on node parser, we can use any strategy
+        
+        node_parser = self._get_node_parser()
+        ingest_component = self._get_ingest_component_with_parser(node_parser)
+        ingest_component.delete_doc_ids(doc_ids) 
+        logger.info("Deleted count=%s documents", len(doc_ids))
 
     def get_doc_ids_by_filename(self, filename: str) -> list[str]:
         doc_ids: set[str] = set()

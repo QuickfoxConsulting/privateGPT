@@ -78,14 +78,6 @@ class PageByPageNodeParser(NodeParser):
                 elif doc.metadata and "doc_id" in doc.metadata:
                     node.metadata["document_id"] = doc.metadata["doc_id"]
                     node.metadata["doc_id"] = doc.metadata["doc_id"]
-                
-                node.excluded_embed_metadata_keys.extend(
-                    [self.window_metadata_key, self.original_text_metadata_key]
-                )
-                node.excluded_llm_metadata_keys.extend(
-                    [self.window_metadata_key, self.original_text_metadata_key]
-                )
-
             all_nodes.extend(nodes)
 
         return all_nodes

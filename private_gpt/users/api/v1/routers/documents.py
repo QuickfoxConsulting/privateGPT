@@ -386,6 +386,10 @@ async def verify_document_background(
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
                 "document_path": str(final_path),
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "window_size": window_size,
+                "strategy": strategy.value
             }
             await ingest(
                 request, 

@@ -120,7 +120,7 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
                 logger.error(f"Failed to get storage context details: {str(inner_e)}")
             raise
 
-    def delete(self, doc_id: str) -> None:
+    async def delete(self, doc_id: str) -> None:
         with self._index_thread_lock:
             try:
                 # Delete the document from the index
@@ -134,6 +134,18 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
                 logger.error(f"Failed to delete document with doc_id={doc_id}: {str(e)}")
                 raise
 
+    async def delete_doc_ids(self, doc_ids: list[str]) -> None:
+        with self._index_thread_lock:
+            try:
+                for docs in doc_ids:
+                    self._index.delete_ref_doc(docs, delete_from_docstore=True)
+                logger.debug(f"Successfully deleted documents with doc_ids={doc_ids}")
+
+                # Save the index
+                self._save_index()
+            except Exception as e:
+                logger.error(f"Failed to delete documents with doc_ids={doc_ids}: {str(e)}")
+                # raise
 
 class SimpleIngestComponent(BaseIngestComponentWithIndex):
     def __init__(

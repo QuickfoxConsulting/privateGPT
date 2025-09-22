@@ -313,8 +313,10 @@ async def delete_file(
                 doc_ids = service.get_doc_ids_by_filename(filename)
                 logger.info(f"Deleting doc_ids: {doc_ids}")
                 if doc_ids:
-                    for doc_id in doc_ids:
-                        await service.delete(doc_id)
+                    # for doc_id in doc_ids:
+                        # await service.delete(doc_id)
+                    # delete everything at once
+                    await service.delete_docs(doc_ids)
                 try:
                     upload_path = Path(upload_path)
                     if upload_path.exists():
