@@ -16,10 +16,8 @@ from private_gpt.open_ai.openai_models import (
 )
 from private_gpt.server.chat.chat_service import ChatService
 from private_gpt.server.cache.faq_service import FAQService
+
 from private_gpt.server.utils.auth import authenticated
-from private_gpt.users import models
-from private_gpt.users.api import deps
-from sqlalchemy.orm import Session
 
 chat_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
@@ -73,12 +71,7 @@ class ChatBody(BaseModel):
     },
 )
 async def chat_completion(
-    request: Request, 
-    body: ChatBody, 
-    file_list: List[str],
-    db: Session = Depends(deps.get_db),
-    log_audit: models.Audit = Depends(deps.get_audit_logger),
-    current_user: models.User = Depends(deps.get_current_user)
+    request: Request, body: ChatBody, file_list: List[str]
 ) -> OpenAICompletion | StreamingResponse:
     """Given a list of messages comprising a conversation, return a response.
 
@@ -108,25 +101,6 @@ async def chat_completion(
     all_messages = [
         ChatMessage(content=m.content, role=MessageRole(m.role)) for m in body.messages
     ]
-    
-    # Log the chat completion attempt
-    user_message = next((m.content for m in body.messages if m.role == "user"), "No user message")
-    log_audit(
-        model="Chat",
-        action="direct_chat_attempt",
-        details={
-            "query": user_message,
-            "user": current_user.username,
-            "use_context": body.use_context,
-            "stream": body.stream,
-            "include_sources": body.include_sources,
-            "message_count": len(body.messages)
-        },
-        user_id=current_user.id,
-        username=current_user.username,
-        severity="INFO"
-    )
-    
     if body.stream:
         completion_gen = await service.stream_chat(
             messages=all_messages,
@@ -135,20 +109,6 @@ async def chat_completion(
             file_list=file_list,
             cache_service=cache_service,
         )
-        
-        # Log streaming response start
-        log_audit(
-            model="Chat",
-            action="direct_chat_stream_start",
-            details={
-                "query": user_message,
-                "user": current_user.username,
-            },
-            user_id=current_user.id,
-            username=current_user.username,
-            severity="INFO"
-        )
-        
         return StreamingResponse(
             to_openai_sse_stream(
                 completion_gen.response,
@@ -164,26 +124,7 @@ async def chat_completion(
             file_list=file_list,
             cache_service=cache_service,
         )
-        
-        # Log successful completion
-        response_content = ""
-        if hasattr(completion, 'response') and hasattr(completion.response, 'message') and hasattr(completion.response.message, 'content'):
-            response_content = completion.response.message.content
-        
-        log_audit(
-            model="Chat",
-            action="direct_chat_success",
-            details={
-                "query": user_message,
-                "user": current_user.username,
-                "response_length": len(response_content),
-                "include_sources": body.include_sources
-            },
-            user_id=current_user.id,
-            username=current_user.username,
-            severity="INFO"
-        )
-        
         return to_openai_response(
             completion.response, completion.sources if body.include_sources else None, completion.cache_id
         )
+    

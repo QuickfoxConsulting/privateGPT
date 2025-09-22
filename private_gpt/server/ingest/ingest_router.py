@@ -306,17 +306,18 @@ async def delete_file(
         document = crud.documents.get_by_filename(db, file_name=filename)
         if document:
             document_versions = crud.document_versions.get_by_document_id(db, document_id=document.id)
+            chunking_strategy = document.doc_metadata['strategy'] 
             for version in document_versions:
                 upload_path = version.file_path
                 logger.info(f"Deleting file at: {upload_path}")
                 filename = os.path.basename(upload_path)
                 doc_ids = service.get_doc_ids_by_filename(filename)
-                logger.info(f"Deleting doc_ids: {doc_ids}")
+                logger.info(f"Deleting doc_ids: {doc_ids} for with: {chunking_strategy}")
                 if doc_ids:
                     # for doc_id in doc_ids:
                         # await service.delete(doc_id)
                     # delete everything at once
-                    await service.delete_docs(doc_ids)
+                    await service.delete_docs(doc_ids, chunking_strategy)
                 try:
                     upload_path = Path(upload_path)
                     if upload_path.exists():
@@ -578,9 +579,6 @@ async def ingest(
     request: Request, 
     file_path: str, 
     tags: Optional[dict[str, Any]] = None,
-    chunk_size: int = 512,
-    chunk_overlap: int = 100,
-    window_size: int = 3,
     strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
@@ -595,9 +593,6 @@ async def ingest(
             file_name, 
             file_path_obj,
             tags,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            window_size=window_size,
             strategy=strategy
         )
     except Exception as e:

@@ -302,9 +302,6 @@ async def upload_documents(
                 doc_manager=doc_manager,
                 log_audit=log_audit,
                 request=request,
-                chunk_size=documents.chunk_size,
-                chunk_overlap=documents.chunk_overlap,
-                window_size=documents.window_size,
                 strategy=documents.strategy
             )
             return {"status": "upload_complete", "message": "Document uploaded and auto-approval started"}
@@ -327,9 +324,6 @@ async def verify_document_background(
     doc_manager: DocumentManager,
     log_audit: models.Audit,
     request: Request,
-    chunk_size: int = 512,
-    chunk_overlap: int = 100,
-    window_size: int = 3,
     strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ):
     """Background task to handle document verification."""
@@ -359,9 +353,16 @@ async def verify_document_background(
                 file_path=str(final_path),
             )
             crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-            
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+                "document_path": str(final_path),
+                "strategy": strategy.value
+            }
             checker = schemas.DocumentCheckerUpdate(
-                filename=document.filename,  # Keep original filename
+                filename=document.filename, 
+                doc_metadata=metadata_dict,
                 is_enabled=True,
                 verified_at=datetime.now(),
                 verified_by=current_user_id,
@@ -381,23 +382,10 @@ async def verify_document_background(
                 },
                 user_id=current_user_id
             )
-            metadata_dict = {
-                "tags": document.doc_metadata.get("tags", []),
-                "departments": document.doc_metadata.get("departments", []),
-                "category": document.doc_metadata.get("category", None),
-                "document_path": str(final_path),
-                "chunk_size": chunk_size,
-                "chunk_overlap": chunk_overlap,
-                "window_size": window_size,
-                "strategy": strategy.value
-            }
             await ingest(
                 request, 
                 final_path, 
                 metadata_dict,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                window_size=window_size,
                 strategy=strategy
             )
             status_update = schemas.StatusUpdate(
@@ -415,9 +403,16 @@ async def verify_document_background(
                 reviewed_at=datetime.now(),
             )
             crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+                "document_path": str(temp_path),
+                "strategy": strategy.value
+            }
             checker = schemas.DocumentCheckerUpdate(
                 filename=document.filename,
+                doc_metadata=metadata_dict,
                 is_enabled=False,
                 verified_at=datetime.now(),
                 verified_by=current_user_id,
@@ -435,7 +430,6 @@ async def verify_document_background(
                 },
                 user_id=current_user_id
             )
-
     except Exception as e:
         logger.error(f"Error in background verification: {str(e)}\n{traceback.format_exc()}")
 
@@ -497,9 +491,6 @@ async def verify_documents(
             doc_manager=doc_manager,
             log_audit=log_audit,
             request=request,
-            chunk_size=512,  # Default values since these aren't provided in this endpoint
-            chunk_overlap=100,
-            window_size=3,
             strategy=ChunkingStrategy.LATE_CHUNKING
         )
 

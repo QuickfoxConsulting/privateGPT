@@ -65,6 +65,7 @@ class UrlMakerChecker(BaseModel):
 
 class DocumentCheckerUpdate(BaseModel):
     filename: Optional[str] = None
+    doc_metadata: Optional[Dict[str, Any]] = None
     is_enabled: bool
     verified_at: datetime
     verified_by: int
@@ -232,16 +233,10 @@ class DocumentUpload:
         self,
         doc_metadata: str = Form(None),  # Made this optional by changing from Form(...) to Form(None)
         file: UploadFile = File(...),
-        chunk_size: int = Form(512),
-        chunk_overlap: int = Form(100),
-        window_size: int = Form(3),
         strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
     ):
         self.file = file
         self.metadata_raw = doc_metadata
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.window_size = window_size
         self.strategy = strategy
 
         # Handle optional metadata

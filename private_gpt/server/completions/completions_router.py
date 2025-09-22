@@ -332,16 +332,10 @@ async def prompt_completion(
             username=current_user.username,
             severity="INFO"
         )        
-        
-        # Use the chat service directly instead of calling the endpoint function
-        chat_service = request.state.injector.get(ChatService)
         chat_response = await chat_completion(
             request=request,
             body=chat_body,
-            file_list=file_list,
-            db=db,
-            log_audit=log_audit,
-            current_user=current_user
+            file_list=file_list
         )
         if isinstance(chat_response, StreamingResponse):
             # Log streaming response

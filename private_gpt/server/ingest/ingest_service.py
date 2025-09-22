@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHUNK_SIZE = 512
 SENTENCE_CHUNK_OVERLAP = 100
 DEFAULT_WINDOW_SIZE = 3
+DEFAULT_CHUNK_WINDOW = 10
 
 class ChunkingStrategy(str, Enum):
     LATE_CHUNKING = "late_chunking"
@@ -62,21 +63,18 @@ class IngestService:
         
     def _get_node_parser(
         self, 
-        chunk_size: int = DEFAULT_CHUNK_SIZE, 
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
-        window_size: int = DEFAULT_WINDOW_SIZE,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
     ):
         """Create node parser based on dynamic parameters."""
         if strategy == ChunkingStrategy.LATE_CHUNKING:
             return LateChunkNodeParser.from_defaults(
-                chunk_size=chunk_size,
-                window_size=window_size,
+                chunk_size=DEFAULT_CHUNK_SIZE,
+                window_size=DEFAULT_WINDOW_SIZE,
             )
         elif strategy == ChunkingStrategy.SENTENCE_WINDOW:
             return SentenceChunkWindowNodeParser.from_defaults(
-                chunk_size=chunk_size,
-                window_size=window_size,  
+                chunk_size=DEFAULT_CHUNK_WINDOW,
+                window_size=DEFAULT_WINDOW_SIZE,  
                 window_metadata_key="window",
                 original_text_metadata_key="original_text",
                 include_metadata=True,
@@ -116,14 +114,11 @@ class IngestService:
         file_name: str, 
         text: str, 
         metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting text data with file_name=%s", file_name)
         try:
-            return await self._ingest_data(file_name, text, metadata, chunk_size, chunk_overlap, strategy, window_size)
+            return await self._ingest_data(file_name, text, metadata, strategy)
         except Exception as e:
             logger.error(f"Error during text ingestion for {file_name}: {str(e)}")
             raise
@@ -133,15 +128,12 @@ class IngestService:
         file_name: str,
         raw_file_data: BinaryIO,
         file_metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting binary data with file_name=%s", file_name)
         try:
             file_data = raw_file_data.read()
-            return await self._ingest_data(file_name, file_data, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
+            return await self._ingest_data(file_name, file_data, file_metadata, strategy)
         except Exception as e:
             logger.error(f"Error during binary data ingestion for {file_name}: {str(e)}")
             raise
@@ -151,10 +143,7 @@ class IngestService:
         file_name: str,
         file_data: AnyStr,
         file_metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Got file data of size=%s to ingest", len(file_data))
         try:
@@ -168,7 +157,7 @@ class IngestService:
                         path_to_tmp.write_bytes(file_data)
                     else:
                         path_to_tmp.write_text(str(file_data))
-                    return await self.ingest_file(file_name, path_to_tmp, file_metadata, chunk_size, chunk_overlap, strategy, window_size)
+                    return await self.ingest_file(file_name, path_to_tmp, file_metadata, strategy)
                 finally:
                     tmp.close()
                     path_to_tmp.unlink()
@@ -181,15 +170,12 @@ class IngestService:
         file_name: str,
         file_data: Path,
         file_metadata: dict[str, str] | None = None,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
-        logger.info("Ingesting file_name=%s with strategy=%s, chunk_size=%d, window_size=%d", 
-                   file_name, strategy.value, chunk_size, window_size)
+        logger.info("Ingesting file_name=%s with strategy=%s", 
+                   file_name, strategy.value)
         try:
-            node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
+            node_parser = self._get_node_parser(strategy)
             ingest_component = self._get_ingest_component_with_parser(node_parser)
             
             documents = await ingest_component.ingest(file_name, file_data, file_metadata)
@@ -197,22 +183,18 @@ class IngestService:
             return [IngestedDoc.from_document(document) for document in documents]
         except Exception as e:
             logger.error(f"Error during file ingestion for {file_name}: {str(e)}")
-            logger.error(f"Error details: chunk_size={chunk_size}, chunk_overlap={chunk_overlap}, strategy={strategy.value}, window_size={window_size}")
             raise
 
     async def ingest_url(
         self, 
         url: str, 
         documents,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.debug("Ingesting url=%s with strategy=%s", url, strategy.value)
         
         # Create node parser with dynamic parameters
-        node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
+        node_parser = self._get_node_parser(strategy)
         ingest_component = self._get_ingest_component_with_parser(node_parser)
         
         documents = await ingest_component.ingest_url(url, documents)
@@ -221,15 +203,12 @@ class IngestService:
     async def bulk_ingest(
         self, 
         files: list[tuple[str, Path]],
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        chunk_overlap: int = SENTENCE_CHUNK_OVERLAP,
         strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
-        window_size: int = DEFAULT_WINDOW_SIZE,
     ) -> list[IngestedDoc]:
         logger.info("Ingesting file_names=%s with strategy=%s", [f[0] for f in files], strategy.value)
         
         # Create node parser with dynamic parameters
-        node_parser = self._get_node_parser(chunk_size, chunk_overlap, window_size, strategy)
+        node_parser = self._get_node_parser(strategy)
         ingest_component = self._get_ingest_component_with_parser(node_parser)
         
         documents = await ingest_component.bulk_ingest(files)
@@ -262,7 +241,7 @@ class IngestService:
         logger.debug("Found count=%s ingested documents", len(ingested_docs))
         return ingested_docs
 
-    async def delete(self, doc_id: str) -> None:
+    async def delete(self, doc_id: str, strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING ) -> None:
         """Delete an ingested document.
 
         :raises ValueError: if the document does not exist
@@ -270,22 +249,21 @@ class IngestService:
         logger.info(
             "Deleting the ingested document=%s in the doc and index store", doc_id
         )
-        # We need to create a temporary ingest component for deletion
-        # Since deletion doesn't depend on node parser, we can use any strategy
-        node_parser = self._get_node_parser()
+        node_parser = self._get_node_parser(strategy)
         ingest_component = self._get_ingest_component_with_parser(node_parser)
         ingest_component.delete(doc_id) 
 
-    async def delete_docs(self, doc_ids: [str], filename: str) -> None:
+    async def delete_docs(
+        self, 
+        doc_ids: [str], 
+        strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING,
+    ) -> None:
         logger.info(
-            "Deleting the ingested document(s) in the doc and index store with filename=%s", filename
+            "Deleting the ingested document(s) in the doc and index store with doc_ids=%s", doc_ids
         )
-        # We need to create a temporary ingest component for deletion
-        # Since deletion doesn't depend on node parser, we can use any strategy
-        
-        node_parser = self._get_node_parser()
+        node_parser = self._get_node_parser(strategy)
         ingest_component = self._get_ingest_component_with_parser(node_parser)
-        ingest_component.delete_doc_ids(doc_ids) 
+        await ingest_component.delete_doc_ids(doc_ids) 
         logger.info("Deleted count=%s documents", len(doc_ids))
 
     def get_doc_ids_by_filename(self, filename: str) -> list[str]:
