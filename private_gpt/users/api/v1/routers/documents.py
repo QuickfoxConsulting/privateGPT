@@ -385,6 +385,7 @@ async def verify_document_background(
                 "tags": document.doc_metadata.get("tags", []),
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
+                "document_path": str(final_path),
             }
             await ingest(
                 request, 
