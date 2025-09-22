@@ -133,17 +133,6 @@ class SentenceChunkWindowNodeParser(NodeParser):
 
             # Add window to each node
             for i, node in enumerate(nodes):
-                # Ensure document IDs are preserved using consistent key "doc_id"
-                if hasattr(doc, 'doc_id') and doc.doc_id:
-                    node.metadata["doc_id"] = doc.doc_id
-                    node.metadata["document_id"] = doc.doc_id
-                elif doc.metadata and "doc_id" in doc.metadata:
-                    node.metadata["doc_id"] = doc.metadata["doc_id"]
-                    node.metadata["document_id"] = doc.metadata["doc_id"]
-                elif doc.metadata and "document_id" in doc.metadata:
-                    node.metadata["doc_id"] = doc.metadata["document_id"]
-                    node.metadata["document_id"] = doc.metadata["document_id"]
-                
                 window_start = max(0, i - self.window_size)
                 window_end = min(i + self.window_size + 1, len(nodes))
                 window_nodes = nodes[window_start:window_end]
@@ -152,12 +141,6 @@ class SentenceChunkWindowNodeParser(NodeParser):
                     [n.text for n in window_nodes]
                 )
                 node.metadata[self.original_text_metadata_key] = node.text
-
-                # Ensure the node has the correct ref_doc_id set
-                if "doc_id" in node.metadata:
-                    node.ref_doc_id = node.metadata["doc_id"]
-                elif hasattr(doc, 'doc_id') and doc.doc_id:
-                    node.ref_doc_id = doc.doc_id
 
                 # Exclude window metadata from embed and llm
                 node.excluded_embed_metadata_keys.extend(

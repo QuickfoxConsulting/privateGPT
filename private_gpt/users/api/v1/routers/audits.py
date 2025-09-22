@@ -18,11 +18,16 @@ def convert_audit_logs(db: Session, logs: List[Any], username: str = None) -> Li
         schemas.Audit(
             id=dep.id,
             model=dep.model,
-            username=get_fullname(db, dep.user_id),
+            username=dep.username or (get_fullname(db, dep.user_id) if dep.user_id else None),
             details=dep.details,
             action=dep.action,
             timestamp=dep.timestamp,
             ip_address=dep.ip_address,
+            user_agent=dep.user_agent,
+            session_id=dep.session_id,
+            request_id=dep.request_id,
+            severity=dep.severity,
+            resource_id=dep.resource_id,
         )
         for dep in logs
     ]

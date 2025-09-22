@@ -127,7 +127,13 @@ async def ingest_file(
     chunk_size: int = Form(512),
     chunk_overlap: int = Form(100),
     window_size: int = Form(3),
-    strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
+    strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING),
+    db: Session = Depends(deps.get_db),
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+    )
 ) -> IngestResponse:
     """Ingests and processes a file with dynamic chunking parameters.
 
@@ -152,6 +158,24 @@ async def ingest_file(
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
         
+        # Log the ingestion attempt
+        log_audit(
+            model='Document',
+            action='ingest_attempt',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value,
+                'file_size': upload_path.stat().st_size if upload_path.exists() else 0
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
+        )
+        
         # Use ingest_file directly since we have the file path
         metadata_dict = None if metadata is None else json.loads(metadata)
         ingested_documents = await service.ingest_file(
@@ -163,9 +187,49 @@ async def ingest_file(
             window_size=window_size,
             strategy=strategy
         )
+        
+        # Log successful ingestion
+        log_audit(
+            model='Document',
+            action='ingest_success',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value,
+                'document_count': len(ingested_documents),
+                'doc_ids': [doc.doc_id for doc in ingested_documents]
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            resource_id=file.filename,
+            severity="INFO"
+        )
     except Exception as e:
         logger.error(f"Error ingesting file {file.filename}: {str(e)}")
         logger.error(traceback.format_exc())
+        
+        # Log the ingestion failure
+        log_audit(
+            model='Document',
+            action='ingest_failure',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'error': str(e),
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            resource_id=file.filename,
+            severity="ERROR"
+        )
+        
         raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     finally:
         # Clean up the temporary file

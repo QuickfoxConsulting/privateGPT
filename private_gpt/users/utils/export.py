@@ -29,7 +29,20 @@ def generate_audit_log_report(audit_logs: List[schemas.Audit], username: Optiona
             [" "], 
         ])
 
-    audit_df = pd.DataFrame([log.dict() for log in audit_logs])
+    # Convert audit logs to dictionary format with all fields
+    audit_data = []
+    for log in audit_logs:
+        log_dict = log.dict()
+        # Flatten the details dictionary for better Excel representation
+        if log_dict.get('details'):
+            details = log_dict.pop('details')
+            if isinstance(details, dict):
+                # Add each detail as a separate column
+                for key, value in details.items():
+                    log_dict[f"detail_{key}"] = value
+        audit_data.append(log_dict)
+    
+    audit_df = pd.DataFrame(audit_data)
     excel_buffer = io.BytesIO()
 
     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
@@ -53,5 +66,5 @@ def get_total_login_counts(audit_logs: List[schemas.Audit], username: str) -> in
     Returns:
         int: Total number of login events for the given username.
     """
-    login_events = [log for log in audit_logs if log.model == "login" and log.user == username]
+    login_events = [log for log in audit_logs if log.action and "login" in log.action and log.username == username]
     return len(login_events)

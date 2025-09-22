@@ -135,7 +135,14 @@ def get_active_subscription(
 
 def get_audit_logger(request: Request, db: Session = Depends(get_db)):
     try:
-        return lambda model, action, details, user_id=None, ip_address=request.client.host: log_audit_entry(db, model, action, details, user_id, ip_address)
+        # Extract additional information from the request
+        user_agent = request.headers.get("user-agent", None)
+        session_id = request.cookies.get("session_id", None) or request.headers.get("x-session-id", None)
+        request_id = request.headers.get("x-request-id", None)
+        
+        return lambda model, action, details, user_id=None, username=None, ip_address=request.client.host, user_agent=user_agent, session_id=session_id, request_id=request_id, severity="INFO", resource_id=None: log_audit_entry(
+            db, model, action, details, user_id, username, ip_address, user_agent, session_id, request_id, severity, resource_id
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in get_audit_logger: {str(e)}")
 

@@ -183,10 +183,34 @@ def login_access_token(
                     raise
         return None
     
+    # Log login attempt
+    log_audit(
+        model='User', 
+        action='login_attempt',
+        details={
+            "email": form_data.username,
+            "ip_address": "captured_in_logger"
+        },
+        severity="INFO"
+    )
+    
     existing_user = crud.user.get_by_email(db, email=form_data.username)
     if existing_user and check_account_locked(existing_user):
         lockout_until = existing_user.last_failed_login + timedelta(minutes=LOCKOUT_DURATION)
         remaining_time = (lockout_until - datetime.now()).total_seconds() / 60
+        
+        # Log account lockout
+        log_audit(
+            model='User', 
+            action='login_locked',
+            details={
+                "email": form_data.username,
+                "remaining_time_minutes": int(remaining_time),
+                "failed_attempts": existing_user.failed_login_attempts
+            },
+            severity="WARNING"
+        )
+        
         raise HTTPException(
             status_code=status.HTTP_423_LOCKED,
             detail=f"Account is locked due to too many failed attempts. Please try again in {int(remaining_time)} minutes."
@@ -195,6 +219,15 @@ def login_access_token(
     if LDAP_ENABLE:
         user = ad_auth(LDAP_ENABLE)
         if not user:
+            # Log failed LDAP authentication
+            log_audit(
+                model='User', 
+                action='login_failed_ldap',
+                details={
+                    "email": form_data.username,
+                },
+                severity="WARNING"
+            )
             raise HTTPException(
                 status_code=403,
                 detail="Invalid Credentials!!!",
@@ -207,11 +240,34 @@ def login_access_token(
             if existing_user:
                 increment_failed_attempts(db, existing_user)
                 remaining_attempts = MAX_FAILED_ATTEMPTS - (existing_user.failed_login_attempts or 0)
+                
+                # Log failed login with existing user
+                log_audit(
+                    model='User', 
+                    action='login_failed',
+                    details={
+                        "email": form_data.username,
+                        "remaining_attempts": remaining_attempts,
+                        "failed_attempts": existing_user.failed_login_attempts
+                    },
+                    severity="WARNING"
+                )
+                
                 raise HTTPException(
                     status_code=400, 
                     detail=f"Incorrect email or password. {remaining_attempts} attempts remaining."
                 )
             else:
+                # Log failed login with non-existing user
+                log_audit(
+                    model='User', 
+                    action='login_failed_unknown_user',
+                    details={
+                        "email": form_data.username,
+                    },
+                    severity="WARNING"
+                )
+                
                 raise HTTPException(
                     status_code=400,
                     detail="Invalid email or password."
@@ -255,12 +311,22 @@ def login_access_token(
         "user": token_payload,
         "token_type": "bearer",
     }
+    
+    # Log successful login
     log_audit(
         model='User', 
-        action='login',
-        details=token_payload, 
-        user_id=user.id
+        action='login_success',
+        details={
+            "user_id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": role
+        }, 
+        user_id=user.id,
+        username=user.username,
+        severity="INFO"
     )
+    
     return JSONResponse(content=response_dict)
 
 
@@ -310,14 +376,41 @@ def register(
     """
     Register new user with optional company assignment and role selection.
     """
+    
+    # Log registration attempt
+    log_audit(
+        model='User', 
+        action='registration_attempt',
+        details={
+            "requester_id": current_user.id,
+            "requester_username": current_user.username,
+            "new_user_email": email,
+            "new_user_fullname": fullname,
+            "department_id": department_id,
+            "role_name": role_name
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        severity="INFO"
+    )
 
     existing_user = crud.user.get_by_email(db, email=email)
     if existing_user:
+        # Log duplicate user attempt
         log_audit(
             model='User', 
-            action='creation',
-            details={"status": '409', 'detail': "The user with this email already exists!", },
-            user_id=current_user.id
+            action='registration_duplicate',
+            details={
+                "status": '409', 
+                'detail': "The user with this email already exists!",
+                "requester_id": current_user.id,
+                "requester_username": current_user.username,
+                "existing_user_id": existing_user.id,
+                "existing_user_email": email
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="WARNING"
         )
         raise HTTPException(
             status_code=409,
@@ -330,6 +423,19 @@ def register(
         if company_id:
             company = crud.company.get(db, company_id)
             if not company:
+                # Log company not found
+                log_audit(
+                    model='User', 
+                    action='registration_company_not_found',
+                    details={
+                        "requester_id": current_user.id,
+                        "requester_username": current_user.username,
+                        "company_id": company_id
+                    },
+                    user_id=current_user.id,
+                    username=current_user.username,
+                    severity="ERROR"
+                )
                 raise HTTPException(
                     status_code=404,
                     detail="Company not found.",
@@ -338,6 +444,19 @@ def register(
                 department = crud.department.get_by_id(
                     db=db, id=department_id)
                 if not department:
+                    # Log department not found
+                    log_audit(
+                        model='User', 
+                        action='registration_department_not_found',
+                        details={
+                            "requester_id": current_user.id,
+                            "requester_username": current_user.username,
+                            "department_id": department_id
+                        },
+                        user_id=current_user.id,
+                        username=current_user.username,
+                        severity="ERROR"
+                    )
                     raise HTTPException(
                         status_code=404,
                         detail="Department not found.",

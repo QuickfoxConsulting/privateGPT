@@ -88,6 +88,7 @@ echo "Applying database migrations"\n\
 alembic upgrade 0c3bba0d99f7\n\
 alembic upgrade d06186f6137d\n\
 alembic upgrade b3579174f52d\n\
+alembic upgrade 4aae9ee1ebd1\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\

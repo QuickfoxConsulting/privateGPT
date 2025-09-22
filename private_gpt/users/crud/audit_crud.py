@@ -4,7 +4,7 @@ from private_gpt.users import crud
 from private_gpt.users.crud.base import CRUDBase
 from private_gpt.users.models.audit import Audit
 from private_gpt.users.schemas.audit import AuditCreate, AuditUpdate, AuditFilter
-from sqlalchemy import desc
+from sqlalchemy import desc, and_
 from sqlalchemy.orm import Session
 
 
@@ -23,13 +23,19 @@ class CRUDAudit(CRUDBase[Audit, AuditCreate, AuditUpdate]):
             if user:
                 return user.id
             return None
+        
         query = db.query(Audit)
+        
         if obj_in.model:
             query = query.filter(Audit.model == obj_in.model)
         if obj_in.username:
-            query = query.filter(Audit.user_id == get_id(obj_in.username))
+            query = query.filter(Audit.username == obj_in.username)
         if obj_in.action:
             query = query.filter(Audit.action == obj_in.action)
+        if obj_in.severity:
+            query = query.filter(Audit.severity == obj_in.severity)
+        if obj_in.resource_id:
+            query = query.filter(Audit.resource_id == obj_in.resource_id)
         if obj_in.start_date:
             query = query.filter(Audit.timestamp >= obj_in.start_date)
         if obj_in.end_date:
@@ -47,13 +53,19 @@ class CRUDAudit(CRUDBase[Audit, AuditCreate, AuditUpdate]):
             if user:
                 return user.id
             return None
+        
         query = db.query(Audit)
+        
         if obj_in.model:
             query = query.filter(Audit.model == obj_in.model)
         if obj_in.username:
-            query = query.filter(Audit.user_id == get_id(obj_in.username))
+            query = query.filter(Audit.username == obj_in.username)
         if obj_in.action:
             query = query.filter(Audit.action == obj_in.action)
+        if obj_in.severity:
+            query = query.filter(Audit.severity == obj_in.severity)
+        if obj_in.resource_id:
+            query = query.filter(Audit.resource_id == obj_in.resource_id)
         if obj_in.start_date:
             query = query.filter(Audit.timestamp >= obj_in.start_date)
         if obj_in.end_date:
