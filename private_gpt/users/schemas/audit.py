@@ -7,9 +7,15 @@ class AuditBase(BaseModel):
     id: int
     model: Optional[str] = None
     user_id: Optional[int] = None
+    username: Optional[str] = None
     action: Optional[str] = None
     details: Optional[dict] = None
     ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    severity: Optional[str] = "INFO"
+    resource_id: Optional[str] = None
     timestamp: Optional[datetime]
 
 
@@ -35,6 +41,11 @@ class Audit(BaseModel):
     details: Optional[dict] = None
     timestamp: Optional[datetime]= None
     ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    severity: Optional[str] = "INFO"
+    resource_id: Optional[str] = None
 
 
 class GetAudit(BaseModel):
@@ -47,6 +58,8 @@ class AuditFilter(BaseModel):
     model: Optional[str] = None
     username: Optional[str] = None
     action: Optional[str] = None
+    severity: Optional[str] = None
+    resource_id: Optional[str] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
 
@@ -54,5 +67,7 @@ class ExcelFilter(BaseModel):
     model: Optional[str] = None
     username: Optional[str] = None
     action: Optional[str] = None
+    severity: Optional[str] = None
+    resource_id: Optional[str] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None

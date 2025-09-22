@@ -1,268 +1,3 @@
-# import os
-# from pathlib import Path
-# from private_gpt.server.chat.chat_service import ChatService
-# from private_gpt.users import crud, models, schemas
-# import itertools
-# from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
-# from fastapi import APIRouter, Depends, Request, Security, HTTPException, status
-# from private_gpt.server.ingest.ingest_service import IngestService
-# from private_gpt.users.models.document import Document
-# from private_gpt.users.models.enums import MakerCheckerStatus
-# from pydantic import BaseModel
-# from typing import List, Dict, Any, Optional, Union
-# from sqlalchemy.orm import Session
-# import traceback
-# import logging
-
-# logger = logging.getLogger(__name__)
-
-# from starlette.responses import StreamingResponse
-
-# from private_gpt.open_ai.extensions.context_filter import ContextFilter
-# from private_gpt.open_ai.openai_models import (
-#     OpenAICompletion,
-#     OpenAIMessage,
-# )
-# from private_gpt.server.chat.chat_router import ChatBody, chat_completion
-# from private_gpt.server.utils.auth import authenticated
-# from private_gpt.users.api import deps
-# from private_gpt.users import crud, models, schemas
-# import uuid
-# completions_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
-
-
-# class CompletionsBody(BaseModel):
-#     conversation_id: uuid.UUID
-#     history: Optional[list[OpenAIMessage]]
-#     prompt: str
-#     system_prompt: str | None = None
-#     use_context: bool = False
-#     context_filter: ContextFilter | None = None
-#     include_sources: bool = True
-#     stream: bool = False
-#     category_id: Optional[int] = None
-
-#     model_config = {
-#         "json_schema_extra": {
-#             "examples": [
-#                 {
-#                     "conversation_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-#                     "history": [
-#                         {
-#                             "role": "user",
-#                             "content": "Hello!"
-#                         },
-#                         {
-#                             "role": "assistant",
-#                             "content": "Hello, how can I help you?"
-#                         }
-#                     ],
-#                     "prompt": "How do you fry an egg?",
-#                     "system_prompt": "You are a rapper. Always answer with a rap.",
-#                     "stream": False,
-#                     "use_context": False,
-#                     "include_sources": False,
-#                     "category_id": 1,
-#                 }
-#             ]
-#         }
-#     }
-
-# class ChatContentCreate(BaseModel):
-#     content: Dict[str, Any]
-
-
-# class ChatResponse(BaseModel):
-#     id: uuid.UUID
-#     response: Union[OpenAICompletion, str]
-
-
-# async def get_latest_version_ids(
-#     service: IngestService,
-#     documents: List[Document]
-# ) -> List[str]:
-#     """Get document IDs for the latest version of each filename.
-    
-#     This function:
-#     1. Iterates through all documents
-#     2. For each document, finds all approved versions
-#     3. For each approved version, gets the Qdrant document IDs by filename
-#     """
-#     latest_doc_ids = []
-    
-#     for doc in documents:
-#         approved_versions = [v for v in doc.versions if v.status == MakerCheckerStatus.APPROVED]
-        
-#         if not approved_versions:
-#             continue
-#         latest_version = max(approved_versions, key=lambda v: v.uploaded_at)
-#         versioned_filename = os.path.basename(latest_version.file_path)
-#         logger.info(f"Extracting docs ids for file: {versioned_filename}")      
-#         exact_docs = service.get_doc_ids_by_filename(versioned_filename)
-#         latest_doc_ids.extend(exact_docs)
-    
-#     return latest_doc_ids
-
-# def create_chat_item(db, sender, content, conversation_id):
-#     chat_item_create = schemas.ChatItemCreate(
-#             sender=sender,
-#             content=content,
-#             conversation_id=conversation_id
-#         )
-#     chat_history = crud.chat.get_conversation(db, conversation_id=conversation_id)
-#     if not chat_history.title or chat_history.title == "New Chat":
-#         chat_history.generate_title()
-#     return crud.chat_item.create(db, obj_in=chat_item_create)
-
-# @completions_router.post(
-#     "/chat",
-#     response_model=None,
-#     summary="Completion",
-#     responses={200: {"model": OpenAICompletion}},
-#     tags=["Contextual Completions"],
-#     openapi_extra={
-#         "x-fern-streaming": {
-#             "stream-condition": "stream",
-#             "response": {"$ref": "#/components/schemas/OpenAICompletion"},
-#             "response-stream": {"$ref": "#/components/schemas/OpenAICompletion"},
-#         }
-#     },
-# )
-
-# async def prompt_completion(
-#     request: Request,
-#     body: CompletionsBody,
-#     db: Session = Depends(deps.get_db),
-#     log_audit: models.Audit = Depends(deps.get_audit_logger),
-#     current_user: models.User = Security(deps.get_current_user),
-# ) -> ChatResponse | StreamingResponse:
-#     """Handle chat completion with intelligent context handling and fallbacks."""
-#     service = request.state.injector.get(IngestService)
-    
-#     try:
-#         original_prompt = body.prompt
-#         original_use_context = body.use_context
-        
-#         department = crud.department.get_by_id(db, id=current_user.department_id)
-#         if not department:
-#             raise HTTPException(
-#                 status_code=status.HTTP_404_NOT_FOUND,
-#                 detail="No department assigned to you"
-#             )
-
-#         documents = crud.documents.get_enabled_documents_by_departments(
-#             db,
-#             department_id=department.id,
-#             category_ids=body.category_id
-#         )
-        
-#         document_status = "available"
-#         if not documents:
-#             document_status = "no_documents"
-#             body.use_context = False
-#             body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
-#             body.context_filter = None
-#             logger.warning(f"No documents found for department {department.id}")
-#         else:
-#             latest_doc_ids = await get_latest_version_ids(service, documents)
-            
-#             if not latest_doc_ids:
-#                 document_status = "no_valid_versions"
-#                 body.use_context = False
-#                 body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No valid document versions are available. "
-#                 body.context_filter = None
-#                 logger.warning(f"No valid document versions found for documents: {[doc.id for doc in documents]}")
-#             else:
-#                 body.context_filter = {"docs_ids": latest_doc_ids}
-#                 logger.info(f"Found {len(latest_doc_ids)} valid document versions")
-
-#         chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
-#         if (chat_history is None) or (chat_history.user_id != current_user.id):
-#             raise HTTPException(
-#                 status_code=status.HTTP_404_NOT_FOUND,
-#                 detail="Chat not found"
-#             )
-
-#         def build_history() -> List[OpenAIMessage]:
-#             history_messages: List[OpenAIMessage] = []
-#             for interaction in (body.history or []):
-#                 role = "user" if interaction.role == "user" else "assistant"
-#                 history_messages.append(
-#                     OpenAIMessage(
-#                         content=interaction.content,
-#                         role=role
-#                     )
-#                 )
-#             return history_messages
-
-#         user_message = OpenAIMessage(content=original_prompt, role="user")
-#         user_message_json = {"text": original_prompt}
-        
-#         user_chat = create_chat_item(
-#             db,
-#             "user",
-#             user_message_json,
-#             body.conversation_id
-#         )
-        
-#         messages = [user_message]
-#         if body.system_prompt:
-#             messages.insert(0, OpenAIMessage(content=body.system_prompt, role="system"))
-
-#         chat_body = ChatBody(
-#             messages=[*build_history(), user_message],
-#             use_context=body.use_context,
-#             stream=body.stream,
-#             include_sources=body.include_sources if body.use_context else False,
-#             context_filter=body.context_filter,
-#         )
-        
-#         audit_details = {
-#             "query": original_prompt,
-#             "user": current_user.username,
-#             "context_requested": original_use_context,
-#             "context_used": body.use_context,
-#             "document_status": document_status,
-#             "department_id": department.id
-#         }
-        
-#         if body.context_filter and "docs_ids" in body.context_filter:
-#             audit_details["document_versions"] = body.context_filter["docs_ids"]
-        
-#         log_audit(
-#             model="Chat",
-#             action="Chat",
-#             details=audit_details,
-#             user_id=current_user.id
-#         )
-        
-#         chat_response = await chat_completion(request, chat_body)
-        
-#         if isinstance(chat_response, StreamingResponse):
-#             return chat_response 
-        
-#         ai_response = chat_response.model_dump(mode="json")
-        
-#         chat = create_chat_item(
-#             db,
-#             "assistant",
-#             ai_response,
-#             body.conversation_id
-#         )
-        
-#         response = ChatResponse(id=chat.id, response=chat_response)
-#         return response
-
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         logger.error(f"Error in prompt completion: {str(e)}\n{traceback.format_exc()}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="Failed to process chat completion"
-#         )
-
-
 import json
 import os
 from pathlib import Path
@@ -300,7 +35,6 @@ from private_gpt.users.api import deps
 from private_gpt.users import crud, models, schemas
 import uuid
 completions_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
-
 
 
 class CompletionsBody(BaseModel):
@@ -420,8 +154,39 @@ async def prompt_completion(
         department = None
         latest_doc_ids = []
         
+        # Log the chat completion attempt
+        log_audit(
+            model="Chat",
+            action="completion_attempt",
+            details={
+                "query": original_prompt,
+                "user": current_user.username,
+                "use_context": original_use_context,
+                "stream": body.stream,
+                "conversation_id": body.conversation_id,
+                "category_id": body.category_id
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
+        )
+        
         chat_history = crud.chat.get_by_id(db, id=body.conversation_id)
         if (chat_history is None) or (chat_history.user_id != current_user.id):
+            # Log unauthorized access attempt
+            log_audit(
+                model="Chat",
+                action="unauthorized_access",
+                details={
+                    "query": original_prompt,
+                    "user": current_user.username,
+                    "attempted_conversation_id": body.conversation_id,
+                    "reason": "Chat not found or unauthorized access"
+                },
+                user_id=current_user.id,
+                username=current_user.username,
+                severity="WARNING"
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Chat not found"
@@ -434,6 +199,20 @@ async def prompt_completion(
             
             department = crud.department.get_by_id(db, id=current_user.department_id)
             if not department:
+                # Log missing department
+                log_audit(
+                    model="Chat",
+                    action="missing_department",
+                    details={
+                        "query": original_prompt,
+                        "user": current_user.username,
+                        "user_id": current_user.id,
+                        "reason": "No department assigned to user"
+                    },
+                    user_id=current_user.id,
+                    username=current_user.username,
+                    severity="WARNING"
+                )
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No department assigned to you"
@@ -452,6 +231,21 @@ async def prompt_completion(
                 body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
                 body.context_filter = None
                 logger.warning(f"No documents found for department {department.id}")
+                
+                # Log no documents available
+                log_audit(
+                    model="Chat",
+                    action="no_documents_available",
+                    details={
+                        "query": original_prompt,
+                        "user": current_user.username,
+                        "department_id": department.id,
+                        "category_id": body.category_id
+                    },
+                    user_id=current_user.id,
+                    username=current_user.username,
+                    severity="INFO"
+                )
             else:
                 latest_doc_ids = await get_latest_version_ids(service, documents)
                 
@@ -462,6 +256,21 @@ async def prompt_completion(
                     body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No valid document versions are available. "
                     body.context_filter = None
                     logger.warning(f"No valid document versions found for documents: {[doc.id for doc in documents]}")
+                    
+                    # Log no valid versions
+                    log_audit(
+                        model="Chat",
+                        action="no_valid_versions",
+                        details={
+                            "query": original_prompt,
+                            "user": current_user.username,
+                            "document_ids": [doc.id for doc in documents],
+                            "department_id": department.id
+                        },
+                        user_id=current_user.id,
+                        username=current_user.username,
+                        severity="WARNING"
+                    )
                 else:
                     document_status = "available"
                     body.context_filter = {"docs_ids": latest_doc_ids}
@@ -512,23 +321,39 @@ async def prompt_completion(
         if department:
             audit_details["department_id"] = department.id
         
-        if body.context_filter and "docs_ids" in body.context_filter:
-            audit_details["document_versions"] = body.context_filter["docs_ids"]
+        # if body.context_filter and "docs_ids" in body.context_filter:
+        #     audit_details["document_versions"] = body.context_filter["docs_ids"]
         
         log_audit(
             model="Chat",
             action="Chat",
             details=audit_details,
-            user_id=current_user.id
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
         )        
-        
-        chat_response = await chat_completion(request, chat_body, file_list)
+        chat_response = await chat_completion(
+            request=request,
+            body=chat_body,
+            file_list=file_list
+        )
         if isinstance(chat_response, StreamingResponse):
+            # Log streaming response
+            log_audit(
+                model="Chat",
+                action="streaming_response",
+                details={
+                    "query": original_prompt,
+                    "user": current_user.username,
+                    "document_status": document_status,
+                },
+                user_id=current_user.id,
+                username=current_user.username,
+                severity="INFO"
+            )
             return chat_response         
         
-        ## ADD IN DB
         ai_response = chat_response.model_dump(mode="json")
-        
         chat = create_chat_item(
             db,
             "assistant",
@@ -569,12 +394,43 @@ async def prompt_completion(
             logger.error(f"Error handling FAQ cache operations: {e}", exc_info=True)
     
         response = ChatResponse(id=chat.id, response=chat_response)
+        
+        # Log successful completion
+        log_audit(
+            model="Chat",
+            action="completion_success",
+            details={
+                "query": original_prompt,
+                "user": current_user.username,
+                "response_length": len(ai_response["choices"][0]["message"]["content"]) if ai_response["choices"] and ai_response["choices"][0]["message"] and ai_response["choices"][0]["message"]["content"] else 0,
+                "document_status": document_status,
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
+        )
+        
         return response
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in prompt completion: {str(e)}\n{traceback.format_exc()}")
+        
+        # Log completion failure
+        log_audit(
+            model="Chat",
+            action="completion_failure",
+            details={
+                "query": body.prompt if 'body' in locals() and hasattr(body, 'prompt') else "Unknown",
+                "user": current_user.username if 'current_user' in locals() else "Unknown",
+                "error": str(e)
+            },
+            user_id=current_user.id if 'current_user' in locals() else None,
+            username=current_user.username if 'current_user' in locals() else None,
+            severity="ERROR"
+        )
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process chat completion"

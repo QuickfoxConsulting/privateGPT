@@ -18,7 +18,7 @@ from private_gpt.users import crud, models, schemas
 from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 
-from private_gpt.server.ingest.ingest_service import IngestService
+from private_gpt.server.ingest.ingest_service import IngestService, ChunkingStrategy
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.server.utils.auth import authenticated
 from private_gpt.constants import UPLOAD_DIR
@@ -26,6 +26,7 @@ from private_gpt.constants import UPLOAD_DIR
 ingest_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
 logger = logging.getLogger(__name__)
+
 class IngestTextBody(BaseModel):
     file_name: str = Field(examples=["Avatar: The Last Airbender"])
     text: str = Field(
@@ -48,6 +49,65 @@ class IngestTextBody(BaseModel):
             }
         ],
     )
+    chunk_size: int = Field(
+        512,
+        description="The maximum size of each chunk in tokens",
+        ge=100,
+        le=2048
+    )
+    chunk_overlap: int = Field(
+        100,
+        description="The overlap size between consecutive chunks",
+        ge=0,
+        le=512
+    )
+    window_size: int = Field(
+        3,
+        description="The context window size for chunking strategies that support it",
+        ge=0,
+        le=10
+    )
+    strategy: ChunkingStrategy = Field(
+        ChunkingStrategy.LATE_CHUNKING,
+        description="The chunking strategy to use"
+    )
+
+
+class IngestFileBody(BaseModel):
+    metadata: Optional[dict[str, Any]] = Field(
+        None,
+        examples=[
+            {
+                "title": "Avatar: The Last Airbender",
+                "author": "Michael Dante DiMartino, Bryan Konietzko",
+                "year": "2005",
+                "tags": "#scifi,#avatar",
+                "description": "Movie about ....",
+            }
+        ],
+    )
+    chunk_size: int = Field(
+        512,
+        description="The maximum size of each chunk in tokens",
+        ge=100,
+        le=2048
+    )
+    chunk_overlap: Optional[int] = Field(
+        100,
+        description="The overlap size between consecutive chunks",
+        ge=0,
+        le=512
+    )
+    window_size: Optional[int] = Field(
+        3,
+        description="The context window size for chunking strategies that support it",
+        ge=0,
+        le=10
+    )
+    strategy: ChunkingStrategy = Field(
+        ChunkingStrategy.LATE_CHUNKING,
+        description="The chunking strategy to use"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -59,20 +119,23 @@ class DeleteFilename(BaseModel):
     filename: str
     version_id: Optional[str] = None
 
-# @ingest_router.post("/ingest", tags=["Ingestion"], deprecated=True)
-# def ingest(request: Request, file: UploadFile) -> IngestResponse:
-#     """Ingests and processes a file.
-
-#     Deprecated. Use ingest/file instead.
-#     """
-#     return ingest_file(request, file)
-
-
-@ingest_router.post("/ingest/file1", tags=["Ingestion"])
-def ingest_file(
-    request: Request, file: UploadFile = File(...), metadata: str = Form(None)
-    ) -> IngestResponse:
-    """Ingests and processes a file, storing its chunks to be used as context.
+@ingest_router.post("/ingest/file", tags=["Ingestion"])
+async def ingest_file(
+    request: Request, 
+    file: UploadFile = File(...), 
+    metadata: str = Form(None),
+    chunk_size: int = Form(512),
+    chunk_overlap: int = Form(100),
+    window_size: int = Form(3),
+    strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING),
+    db: Session = Depends(deps.get_db),
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+    )
+) -> IngestResponse:
+    """Ingests and processes a file with dynamic chunking parameters.
 
     The context obtained from files is later used in
     `/chat/completions`, `/completions`, and `/chunks` APIs.
@@ -94,19 +157,90 @@ def ingest_file(
     try:
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
-        with open(upload_path, "rb") as f:
-            metadata_dict = None if metadata is None else json.loads(metadata)
-            ingested_documents = service.ingest_bin_data(file.filename, f, metadata_dict)
+        
+        # Log the ingestion attempt
+        log_audit(
+            model='Document',
+            action='ingest_attempt',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value,
+                'file_size': upload_path.stat().st_size if upload_path.exists() else 0
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
+        )
+        
+        # Use ingest_file directly since we have the file path
+        metadata_dict = None if metadata is None else json.loads(metadata)
+        ingested_documents = await service.ingest_file(
+            file.filename, 
+            upload_path,
+            metadata_dict,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            window_size=window_size,
+            strategy=strategy
+        )
+        
+        # Log successful ingestion
+        log_audit(
+            model='Document',
+            action='ingest_success',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value,
+                'document_count': len(ingested_documents),
+                'doc_ids': [doc.doc_id for doc in ingested_documents]
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            resource_id=file.filename,
+            severity="INFO"
+        )
     except Exception as e:
-        return {"message": f"There was an error uploading the file(s)\n {e}"}
+        logger.error(f"Error ingesting file {file.filename}: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Log the ingestion failure
+        log_audit(
+            model='Document',
+            action='ingest_failure',
+            details={
+                'filename': file.filename,
+                'user': current_user.username,
+                'error': str(e),
+                'chunk_size': chunk_size,
+                'chunk_overlap': chunk_overlap,
+                'window_size': window_size,
+                'strategy': strategy.value
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            resource_id=file.filename,
+            severity="ERROR"
+        )
+        
+        raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     finally:
+        # Clean up the temporary file
+        if upload_path.exists():
+            upload_path.unlink()
         file.file.close()
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
-    
 
 @ingest_router.post("/ingest/text", tags=["Ingestion"])
-def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
-    """Ingests and processes a text, storing its chunks to be used as context.
+async def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
+    """Ingests and processes a text with dynamic chunking parameters.
 
     The context obtained from files is later used in
     `/chat/completions`, `/completions`, and `/chunks` APIs.
@@ -120,7 +254,15 @@ def ingest_text(request: Request, body: IngestTextBody) -> IngestResponse:
     service = request.state.injector.get(IngestService)
     if len(body.file_name) == 0:
         raise HTTPException(400, "No file name provided")
-    ingested_documents = service.ingest_text(body.file_name, body.text, body.metadata)
+    ingested_documents = await service.ingest_text(
+        body.file_name, 
+        body.text, 
+        body.metadata,
+        chunk_size=body.chunk_size,
+        chunk_overlap=body.chunk_overlap,
+        window_size=body.window_size,
+        strategy=body.strategy
+    )
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 @ingest_router.get("/ingest/list", tags=["Ingestion"])
@@ -136,14 +278,14 @@ def list_ingested(request: Request) -> IngestResponse:
 
 
 @ingest_router.delete("/ingest/{doc_id}", tags=["Ingestion"])
-def delete_ingested(request: Request, doc_id: str) -> None:
+async def delete_ingested(request: Request, doc_id: str) -> None:
     """Delete the specified ingested Document.
 
     The `doc_id` can be obtained from the `GET /ingest/list` endpoint.
     The document will be effectively deleted from your storage context.
     """
     service = request.state.injector.get(IngestService)
-    service.delete(doc_id)
+    await service.delete(doc_id)
 
 from pathlib import Path
 
@@ -164,15 +306,18 @@ async def delete_file(
         document = crud.documents.get_by_filename(db, file_name=filename)
         if document:
             document_versions = crud.document_versions.get_by_document_id(db, document_id=document.id)
+            chunking_strategy = document.doc_metadata['strategy'] 
             for version in document_versions:
                 upload_path = version.file_path
                 logger.info(f"Deleting file at: {upload_path}")
                 filename = os.path.basename(upload_path)
                 doc_ids = service.get_doc_ids_by_filename(filename)
-                logger.info(f"Deleting doc ids: {doc_ids}")
+                logger.info(f"Deleting doc_ids: {doc_ids} for with: {chunking_strategy}")
                 if doc_ids:
-                    for doc_id in doc_ids:
-                        await service.delete(doc_id)
+                    # for doc_id in doc_ids:
+                        # await service.delete(doc_id)
+                    # delete everything at once
+                    await service.delete_docs(doc_ids, chunking_strategy)
                 try:
                     upload_path = Path(upload_path)
                     if upload_path.exists():
@@ -223,7 +368,7 @@ async def create_documents(
     `Document Department Association` table with the department IDs for the documents.
     Using the new metadata JSONB field for storing tags, departments, and categories.
     """
-    file_ingested = crud.documents.get_by_base_filename(db, file_name=file_name)
+    file_ingested = crud.documents.get_by_filename(db, file_name=file_name)
     if file_ingested:
         raise HTTPException(
             status_code=409,
@@ -232,14 +377,23 @@ async def create_documents(
     
     logger.info(f"{file_name} uploaded by {current_user.id} action {MakerCheckerActionType.INSERT.value} and status {MakerCheckerStatus.PENDING.value}")
     
-    metadata_dict = {
-        "tags": getattr(documents.doc_metadata, "tags", []),
-        "departments": getattr(documents.doc_metadata, "departments", []),
-        "category": getattr(documents.doc_metadata, "category", None)
-    }
-    
-    if hasattr(documents.doc_metadata, "custom_fields") and documents.doc_metadata.custom_fields:
-        metadata_dict.update(documents.doc_metadata.custom_fields)
+    # Handle optional metadata - provide defaults when doc_metadata is None
+    if documents.doc_metadata is not None:
+        metadata_dict = {
+            "tags": getattr(documents.doc_metadata, "tags", []),
+            "departments": getattr(documents.doc_metadata, "departments", []),
+            "category": getattr(documents.doc_metadata, "category", None)
+        }
+        
+        if hasattr(documents.doc_metadata, "custom_fields") and documents.doc_metadata.custom_fields:
+            metadata_dict.update(documents.doc_metadata.custom_fields)
+    else:
+        # Default empty metadata when none provided
+        metadata_dict = {
+            "tags": [],
+            "departments": [],
+            "category": None
+        }
     
     # Create document with doc_metadata
     docs_in = schemas.DocumentMakerCreate(
@@ -387,7 +541,14 @@ async def create_url_documents(
 
 from langchain_community.document_loaders import WebBaseLoader
 from llama_index.core.schema import Document
-async def ingest_url(request: Request, url: str) -> IngestResponse:
+async def ingest_url(
+    request: Request, 
+    url: str,
+    chunk_size: int = 512,
+    chunk_overlap: int = 100,
+    window_size: int = 3,
+    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
+) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
     try:
@@ -399,30 +560,45 @@ async def ingest_url(request: Request, url: str) -> IngestResponse:
         llamaindex_docs: List[Document] = [
             Document.from_langchain_format(doc) for doc in langchain_docs
         ]        
-        ingested_documents = await service.ingest_url(url, llamaindex_docs)
+        ingested_documents = await service.ingest_url(
+            url, 
+            llamaindex_docs,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            window_size=window_size,
+            strategy=strategy
+        )
     except Exception as e:
         print(traceback.print_exc())
         return {"message": f"There was an error uploading the file(s)\n {e}"}
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
-async def ingest(request: Request, file_path: str, tags: Optional[dict[str, Any]] = None) -> IngestResponse:
+
+# Actual Ingestion Method
+async def ingest(
+    request: Request, 
+    file_path: str, 
+    tags: Optional[dict[str, Any]] = None,
+    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
+) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
     try:
-        with open(file_path, 'rb') as file:
-            file_name = Path(file_path).name
-            upload_path = Path(f"{UPLOAD_DIR}/{file_name}")
-
-            with upload_path.open('wb') as f:
-                f.write(file.read())
-
-            with upload_path.open('rb') as f:
-                ingested_documents = await service.ingest_bin_data(file_name, f, tags)
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+            
+        file_name = file_path_obj.name
+        ingested_documents = await service.ingest_file(
+            file_name, 
+            file_path_obj,
+            tags,
+            strategy=strategy
+        )
     except Exception as e:
-        return {"message": f"There was an error uploading the file(s)\n {e}"}
-
-    finally:
-        upload_path.unlink(missing_ok=True)
+        logger.error(f"Error ingesting file {file_path}: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 

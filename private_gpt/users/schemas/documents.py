@@ -6,6 +6,7 @@ from fastapi import Form, UploadFile, File
 
 from .category import CategoryList
 from private_gpt.users.models.enums import *
+from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 
 class DocumentsBase(BaseModel):
     filename: str
@@ -64,6 +65,7 @@ class UrlMakerChecker(BaseModel):
 
 class DocumentCheckerUpdate(BaseModel):
     filename: Optional[str] = None
+    doc_metadata: Optional[Dict[str, Any]] = None
     is_enabled: bool
     verified_at: datetime
     verified_by: int
@@ -229,17 +231,23 @@ class DocumentFilePath(BaseModel):
 class DocumentUpload:
     def __init__(
         self,
-        doc_metadata: str = Form(...),
-        file: UploadFile = File(...)
+        doc_metadata: str = Form(None),  # Made this optional by changing from Form(...) to Form(None)
+        file: UploadFile = File(...),
+        strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
     ):
         self.file = file
         self.metadata_raw = doc_metadata
+        self.strategy = strategy
 
-        try:
-            parsed = json.loads(doc_metadata)
-            self.doc_metadata = MetadataSchema(**parsed)
-        except Exception as e:
-            raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
+        # Handle optional metadata
+        if doc_metadata and doc_metadata.strip():  
+            try:
+                parsed = json.loads(doc_metadata)
+                self.doc_metadata = MetadataSchema(**parsed)
+            except Exception as e:
+                raise ValueError(f"Invalid doc_metadata JSON: {str(e)}")
+        else:
+            self.doc_metadata = MetadataSchema()
         
 
 class DocumentSelection(BaseModel):

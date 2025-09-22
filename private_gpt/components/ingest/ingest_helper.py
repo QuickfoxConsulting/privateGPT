@@ -79,9 +79,33 @@ class IngestionHelper:
     ) -> list[Document]:
         documents = await IngestionHelper._load_file_to_documents(file_name, file_data)
         for document in documents:
+            # Ensure document has a valid doc_id
+            if not hasattr(document, 'doc_id') or document.doc_id is None:
+                # Generate a new doc_id if one doesn't exist
+                import uuid
+                document.doc_id = str(uuid.uuid4())
+            
+            # Make sure the doc_id is in the document's metadata
+            document.metadata["doc_id"] = document.doc_id
+            document.metadata["document_id"] = document.doc_id
+            
+            # Update with provided metadata
             document.metadata.update(file_metadata or {})
             document.metadata["file_name"] = file_name
             document.metadata["ingestion_time"] = datetime.now(timezone.utc).isoformat()
+            
+            # Ensure excluded metadata keys are set properly
+            if not hasattr(document, 'excluded_embed_metadata_keys'):
+                document.excluded_embed_metadata_keys = []
+            if not hasattr(document, 'excluded_llm_metadata_keys'):
+                document.excluded_llm_metadata_keys = []
+                
+            # Add doc_id to excluded metadata to prevent duplication
+            if "doc_id" not in document.excluded_embed_metadata_keys:
+                document.excluded_embed_metadata_keys.append("doc_id")
+            if "document_id" not in document.excluded_llm_metadata_keys:
+                document.excluded_llm_metadata_keys.append("document_id")
+                
         IngestionHelper._exclude_metadata(documents)
         return documents
 
@@ -108,8 +132,17 @@ class IngestionHelper:
     def _exclude_metadata(documents: list[Document]) -> None:
         logger.debug("Excluding metadata from count=%s documents", len(documents))
         for document in documents:
-            document.metadata["doc_id"] = document.doc_id
+            # Ensure doc_id is always available in metadata for tracking
+            if hasattr(document, 'doc_id') and document.doc_id:
+                document.metadata["doc_id"] = document.doc_id
+                document.metadata["document_id"] = document.doc_id
             # We don't want the Embeddings search to receive this metadata
-            document.excluded_embed_metadata_keys = ["doc_id"]
+            excluded_embed_keys = ["doc_id", "document_id"]
+            for key in excluded_embed_keys:
+                if key not in document.excluded_embed_metadata_keys:
+                    document.excluded_embed_metadata_keys.append(key)
             # We don't want the LLM to receive these metadata in the context
-            document.excluded_llm_metadata_keys = ["doc_id", "file_path", "filename"]
+            excluded_llm_keys = ["doc_id", "document_id", "file_path", "filename", "chunk_info"]
+            for key in excluded_llm_keys:
+                if key not in document.excluded_llm_metadata_keys:
+                    document.excluded_llm_metadata_keys.append(key)

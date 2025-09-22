@@ -24,6 +24,7 @@ from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.constants import UNCHECKED_DIR, UPLOAD_DIR
 from private_gpt.manager.document_manager import DocumentManager
 from private_gpt.server.ingest.ingest_router import create_documents, ingest
+from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 
 logger = logging.getLogger(__name__)
@@ -300,7 +301,8 @@ async def upload_documents(
                 db=db,
                 doc_manager=doc_manager,
                 log_audit=log_audit,
-                request=request
+                request=request,
+                strategy=documents.strategy
             )
             return {"status": "upload_complete", "message": "Document uploaded and auto-approval started"}
         return document
@@ -321,7 +323,8 @@ async def verify_document_background(
     db: Session,
     doc_manager: DocumentManager,
     log_audit: models.Audit,
-    request: Request
+    request: Request,
+    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ):
     """Background task to handle document verification."""
     try:
@@ -350,16 +353,22 @@ async def verify_document_background(
                 file_path=str(final_path),
             )
             crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-            
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+                "document_path": str(final_path),
+                "strategy": strategy.value
+            }
             checker = schemas.DocumentCheckerUpdate(
-                filename=versioned_filename,
+                filename=document.filename, 
+                doc_metadata=metadata_dict,
                 is_enabled=True,
                 verified_at=datetime.now(),
                 verified_by=current_user_id,
                 verified=True,
             )
             crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            document.filename = versioned_filename
             db.add(document)
             db.commit()
             db.refresh(document)
@@ -373,12 +382,12 @@ async def verify_document_background(
                 },
                 user_id=current_user_id
             )
-            metadata_dict = {
-                "tags": document.doc_metadata.get("tags", []),
-                "departments": document.doc_metadata.get("departments", []),
-                "category": document.doc_metadata.get("category", None),
-            }
-            await ingest(request, final_path, metadata_dict)
+            await ingest(
+                request, 
+                final_path, 
+                metadata_dict,
+                strategy=strategy
+            )
             status_update = schemas.StatusUpdate(
                doc_status=DocumentStatus.READY.value
             )
@@ -394,9 +403,16 @@ async def verify_document_background(
                 reviewed_at=datetime.now(),
             )
             crud.document_versions.update(db, db_obj=document.current_version, obj_in=version_update)
-
+            metadata_dict = {
+                "tags": document.doc_metadata.get("tags", []),
+                "departments": document.doc_metadata.get("departments", []),
+                "category": document.doc_metadata.get("category", None),
+                "document_path": str(temp_path),
+                "strategy": strategy.value
+            }
             checker = schemas.DocumentCheckerUpdate(
                 filename=document.filename,
+                doc_metadata=metadata_dict,
                 is_enabled=False,
                 verified_at=datetime.now(),
                 verified_by=current_user_id,
@@ -414,7 +430,6 @@ async def verify_document_background(
                 },
                 user_id=current_user_id
             )
-
     except Exception as e:
         logger.error(f"Error in background verification: {str(e)}\n{traceback.format_exc()}")
 
@@ -475,7 +490,8 @@ async def verify_documents(
             db=db,
             doc_manager=doc_manager,
             log_audit=log_audit,
-            request=request
+            request=request,
+            strategy=ChunkingStrategy.LATE_CHUNKING
         )
 
         return {"status": "verification_started", "message": "Document verification has been started"}

@@ -124,7 +124,6 @@ async def chat_completion(
             file_list=file_list,
             cache_service=cache_service,
         )
-        print(f"Completion: {completion}")
         return to_openai_response(
             completion.response, completion.sources if body.include_sources else None, completion.cache_id
         )

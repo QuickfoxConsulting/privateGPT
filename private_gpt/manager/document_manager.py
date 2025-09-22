@@ -49,12 +49,11 @@ class DocumentManager:
         """Replace spaces with underscores in filenames."""
         return filename.replace(" ", "_")
 
-    def _generate_version_filename(self, original_filename: str, version: int) -> str:
-        """Generate versioned filename while preserving original name."""
-        sanitized_name = self._sanitize_filename(original_filename)
-        stem = Path(sanitized_name).stem
-        suffix = Path(sanitized_name).suffix
-        return f"{stem}_v{version}{suffix}"
+    def _generate_version_path(self, document_id: int, version: int, original_filename: str) -> Path:
+        """Generate path using directory structure instead of filename suffixes."""
+        doc_dir = self.final_dir / str(document_id) / f"v{version}"
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        return doc_dir / original_filename
 
     async def _save_file(self, file: UploadFile, destination: Path) -> bool:
         """Save uploaded file with chunked reading."""
@@ -97,16 +96,16 @@ class DocumentManager:
         version: int,
         original_filename: str  # Pass original filename explicitly
     ) -> Path:
-        """Move approved document to final location with versioning."""
+        """Move approved document to final location with directory-based versioning."""
         try:
-            # doc_dir = self.final_dir / str(document_id)
-            doc_dir = self.final_dir
-            doc_dir.mkdir(parents=True, exist_ok=True)
-            versioned_filename = self._generate_version_filename(original_filename, version)
-            final_path = doc_dir / versioned_filename
-
+            # Create directory structure: documents/document_id/v{version}/filename
+            final_path = self._generate_version_path(document_id, version, original_filename)
+            
+            # Move file to final location
             shutil.move(str(temp_path), str(final_path))
-            return final_path, versioned_filename
+            
+            # Return final path and original filename (no version suffix)
+            return final_path, original_filename
 
         except Exception as e:
             logger.error(f"Error approving document: {str(e)}")
