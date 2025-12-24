@@ -61,6 +61,7 @@ rag:
   #This value controls how many "top" documents the RAG returns to use in the context.
   similarity_value: 0.65
   #This value is disabled by default.  If you enable this settings, the RAG will only use articles that meet a certain percentage score.
+  multi_query_retrieval: true
   rerank:
     enabled: true
     model: cross-encoder/ms-marco-MiniLM-L-2-v2
@@ -101,7 +102,7 @@ vectorstore:
   database: qdrant
 
 nodestore:
-  database: postgres
+  database: simple
 
 milvus:
   uri: local_data/private_gpt/milvus/milvus_local.db

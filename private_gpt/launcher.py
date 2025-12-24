@@ -18,16 +18,22 @@ from private_gpt.server.recipes.summarize.summarize_router import summarize_rout
 from private_gpt.server.cache.cache_router import router as cache_router
 from private_gpt.users.api.v1.routers.websocket_router import websocket_router
 
+# from private_gpt.users.core.config import setting as ServerSettings
+
+cache_enable = False
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 def create_app(root_injector: Injector) -> FastAPI:
     """Create the FastAPI application with dependency injection."""
     
     # Initialize cache management
-    try:
-        _initialize_cache_management(root_injector)
-    except Exception as e:
-        logger.error(f"Failed to initialize cache management: {str(e)}")
+    if cache_enable:
+        try:
+            _initialize_cache_management(root_injector)
+        except Exception as e:
+            logger.error(f"Failed to initialize cache management: {str(e)}")
     
     app = FastAPI()
     

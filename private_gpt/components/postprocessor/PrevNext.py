@@ -34,12 +34,12 @@ class PrevNextPagePostprocessor(BaseNodePostprocessor):
         
         for _ in range(num_pages):
             # Check if there's a next page
-            if (not hasattr(current_node.node, 'metadata') or 
-                'next_chunk_id' not in current_node.node.metadata or 
-                current_node.node.metadata['next_chunk_id'] is None):
+            next_id = (
+                current_node.node.metadata.get('next_chunk_id') or 
+                current_node.node.metadata.get('next_page')
+            )
+            if next_id is None:
                 break
-                
-            next_id = current_node.node.metadata['next_chunk_id']
             
             # Try to get the next node from the document store
             try:
@@ -61,12 +61,12 @@ class PrevNextPagePostprocessor(BaseNodePostprocessor):
         
         for _ in range(num_pages):
             # Check if there's a previous page
-            if (not hasattr(current_node.node, 'metadata') or 
-                'prev_chunk_id' not in current_node.node.metadata or 
-                current_node.node.metadata['prev_chunk_id'] is None):
+            prev_id = (
+                current_node.node.metadata.get('prev_chunk_id') or 
+                current_node.node.metadata.get('prev_page')
+            )
+            if prev_id is None:
                 break
-                
-            prev_id = current_node.node.metadata['prev_chunk_id']
             
             # Try to get the previous node from the document store
             try:
@@ -136,12 +136,12 @@ class DocumentAwarePrevNextPostprocessor(PrevNextPagePostprocessor):
         
         for _ in range(num_pages):
             # Check if there's a next page
-            if (not hasattr(current_node.node, 'metadata') or 
-                'next_chunk_id' not in current_node.node.metadata or 
-                current_node.node.metadata['next_chunk_id'] is None):
+            next_id = (
+                current_node.node.metadata.get('next_chunk_id') or 
+                current_node.node.metadata.get('next_page')
+            )
+            if next_id is None:
                 break
-                
-            next_id = current_node.node.metadata['next_chunk_id']
             
             # Try to get the next node
             try:
@@ -177,12 +177,12 @@ class DocumentAwarePrevNextPostprocessor(PrevNextPagePostprocessor):
         
         for _ in range(num_pages):
             # Check if there's a previous page
-            if (not hasattr(current_node.node, 'metadata') or 
-                'prev_chunk_id' not in current_node.node.metadata or 
-                current_node.node.metadata['prev_chunk_id'] is None):
+            prev_id = (
+                current_node.node.metadata.get('prev_chunk_id') or 
+                current_node.node.metadata.get('prev_page')
+            )
+            if prev_id is None:
                 break
-                
-            prev_id = current_node.node.metadata['prev_chunk_id']
             
             # Try to get the previous node
             try:

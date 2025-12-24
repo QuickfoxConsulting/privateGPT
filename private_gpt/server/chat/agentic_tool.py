@@ -39,6 +39,7 @@ from private_gpt.server.tools.websearch import SerperSearchToolSpec
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from llama_index.core.agent.react.formatter import ReActChatFormatter
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.components.retriever.multi_query_retriever import MultiQueryRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class AgenticRAGEngine(BaseChatEngine):
         tool_name_prefix: str = "doc",
         citation_format: str = "[Document: {file_name}, Page {page}]",
         similarity_top_k: int = 5,
+        multi_query_retrieval: bool = False,
         max_retries: int = 5,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
@@ -87,6 +89,7 @@ class AgenticRAGEngine(BaseChatEngine):
         self._tool_name_prefix = tool_name_prefix
         self._citation_format = citation_format
         self._similarity_top_k = similarity_top_k
+        self._multi_query_retrieval = multi_query_retrieval
         
         # Rate limit handling
         self._max_retries = max_retries
@@ -147,13 +150,13 @@ class AgenticRAGEngine(BaseChatEngine):
         doc_tools = self._create_document_specific_tools()
         tools.extend(doc_tools)
         
-        # # Summary tools
+        # Summary tools
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
         
-        # # Web search tools
-        # web_tools = self._create_web_tools()
-        # tools.extend(web_tools)
+        # Web search tools
+        web_tools = self._create_web_tools()
+        tools.extend(web_tools)
         
         # Add time tool
         time_tool = TimeTool()
@@ -196,6 +199,12 @@ class AgenticRAGEngine(BaseChatEngine):
             index=self._index,
             similarity_top_k=self._similarity_top_k
         )
+        
+        if self._multi_query_retrieval:
+            retriever = MultiQueryRetriever(
+                base_retriever=retriever,
+                llm=self._llm,
+            )
         
         response_synthesizer = get_response_synthesizer(
             response_mode="tree_summarize",
@@ -274,23 +283,19 @@ class AgenticRAGEngine(BaseChatEngine):
         return tools
 
     def _create_web_tools(self) -> List[BaseTool]:
-        """Create web search and crawling tools."""
-        tools = []
-        
+        """Create web search tools if configured."""
         try:
-            search_tool_spec = SerperSearchToolSpec()
-            search_tools = search_tool_spec.to_tool_list()
-            tools.extend(search_tools)
-            
-            crawl_tool = Crawl4AITool()
-            tools.append(crawl_tool)
-            
-            if self._verbose:
-                logger.info(f"Created {len(tools)} web tools")
-                
+            from private_gpt.server.tools.websearch import SerperSearchToolSpec
+            # Assuming settings() is globally accessible or passed in. 
+            # For now, we'll use the existing logic in websearch.py which uses settings.
+            spec = SerperSearchToolSpec()
+            return spec.to_tool_list()
+        except ImportError:
+            logger.warning("SerperSearchToolSpec not found. Web search tools disabled.")
+            return []
         except Exception as e:
-            logger.error(f"Failed to create web tools: {e}")
-        return tools
+            logger.warning(f"Failed to create web search tools: {e}")
+            return []
 
     def _validate_tools(self, tools: List[BaseTool]) -> List[BaseTool]:
         """Validate tools for name uniqueness and proper configuration."""
@@ -314,138 +319,68 @@ class AgenticRAGEngine(BaseChatEngine):
     def _get_qa_template(self) -> PromptTemplate:
         """Get the enhanced summarization template for high-quality synthesis with citations and structured reasoning."""
         template_str = (
-            "You are a specialized document-grounded assistant. Your primary function is to generate a clear, structured, and meticulously sourced answer based *exclusively* on the provided context. The context may consist of research papers, technical manuals, reports, or other documents.\n\n"
-            "INSTRUCTIONS:\n"
-            "1.  **Strict Grounding**: Base your entire answer on the provided context. Do not introduce any external knowledge or make assumptions beyond what is stated in the documents.\n"
-            "2.  **Structured Formatting**: Use professional Markdown for readability. Organize your answer with clear, informative main headers (`##`), sub-headers (`###`), and bullet points (`-` or `*`) as needed.\n"
-            "3.  **Synthesis and Deconstruction**: Decompose complex topics into logical, easy-to-understand sections. When multiple sources discuss the same point, synthesize the information and highlight any agreements or discrepancies between them.\n"
-            "4.  **Precise Inline Citations**: Your credibility depends on accurate citations. Follow these rules without exception:\n"
-            "    - **Format**: Use the format `[Page X](filename.pdf)` for documents with a page number, or `[filename.pdf]` if the page number is not available in the metadata.\n"
-            "    - **Placement**: Place citations inline, immediately following the information they support.\n"
-            "        - For a specific fact, phrase, or sentence, place the citation at the end of that sentence.\n"
-            "        - If an entire paragraph is synthesized from a single page of a single source, a single citation at the end of the paragraph is sufficient.\n"
-            "    - **Prohibited Formats**: NEVER use generic numeric citations (e.g., `[1]`, `[2]`) or internal tool names (e.g., `[document_retriever]`).\n"
-            "5.  **Address Gaps**: If the context does not contain enough information to fully answer the query, explicitly state what is missing in a dedicated section at the end titled `## Limitations and Gaps`.\n"
-            "6.  **Professional Tone**: Maintain a formal, objective, and neutral tone. Report the facts from the context without adding speculative or subjective commentary.\n"
-            "7.  **Include Key Details**: If the context mentions key metadata like document titles, authors, version numbers, or publication dates, integrate them into your answer where relevant.\n"
-            "8.  **Final Sources List**: Conclude your entire response with a `## Sources` section, providing a clean, bulleted list of all documents referenced in your answer.\n\n"
+            """
+            You are a specialized document-grounded assistant. Your primary function is to generate a clear, structured, and meticulously sourced answer based *exclusively* on the provided context. The context may consist of research papers, technical manuals, reports, or other documents.
 
-            "QUERY:\n"
-            "{query_str}\n\n"
+            INSTRUCTIONS:
+            1. **Strict Grounding**: Base your entire answer on the provided context. Do not introduce any external knowledge or make assumptions beyond what is stated in the documents.
+            2. **Structured Formatting**: Use professional Markdown for readability. Organize your answer with clear, informative main headers (`##`), sub-headers (`###`), bullet points (`-` or `*`), and tables for comparisons or data where effective.
+            3. **Synthesis and Deconstruction**: Decompose complex topics into logical, easy-to-understand sections. When multiple sources discuss the same point, synthesize the information, highlight agreements or discrepancies, and provide descriptive breakdowns with examples, step-by-step explanations, pros/cons, and real-world implications from the context.
+            4. **Precise Inline Citations**: Your credibility depends on accurate citations. Follow these rules without exception:
+                - **Format**: Use the format `[Page X](filename.pdf)` for documents with a page number, or `[filename.pdf]` if the page number is not available in the metadata.
+                - **Placement**: Place citations inline, immediately following the information they support.
+                    - For a specific fact, phrase, or sentence, place the citation at the end of that sentence.
+                    - If an entire paragraph is synthesized from a single page of a single source, a single citation at the end of the paragraph is sufficient.
+                - **Prohibited Formats**: NEVER use generic numeric citations (e.g., `[1]`, `[2]`) or internal tool names (e.g., `[document_retriever]`).
+            5. **Address Gaps**: If the context does not contain enough information to fully answer the query, explicitly state what is missing in a dedicated section at the end titled `## Limitations and Gaps`, and suggest potential follow-up queries.
+            6. **Professional Tone**: Maintain a formal, objective, and neutral tone. Report the facts from the context without adding speculative or subjective commentary, but enhance descriptiveness with precise, vivid language.
+            7. **Include Key Details**: If the context mentions key metadata like document titles, authors, version numbers, or publication dates, integrate them into your answer where relevant. For descriptive enhancement, include examples, analogies, or quantified impacts from the sources.
+            8. **Visual Aids**: Where data is comparative or enumerated, use Markdown tables or lists to present it clearly.
+            9. **Final Sources List**: Conclude your entire response with a `## Sources` section, providing a clean, bulleted list of all documents referenced in your answer.
 
+            QUERY:
+            {query_str}
 
-            "CONTEXT:\n"
-            "---------------------\n"
-            "{context_str}\n"
-            "---------------------\n\n"
-            "BEGIN YOUR RESPONSE:"
+            CONTEXT:
+            ---------------------
+            {context_str}
+            ---------------------
+
+            BEGIN YOUR RESPONSE:
+            """
         )
         return PromptTemplate(template_str)
 
 
     def _get_default_system_prompt(self) -> str:
         """Generate a comprehensive system prompt that follows ReAct format with RAG capabilities."""
-        return """
-            You are QuickREF, an intelligent reasoning agent. Your purpose is to solve complex tasks by breaking them down, using tools to gather information, and synthesizing a comprehensive, accurate, and well-cited answer.
-            ## Core Directives & Operating Principles
-
-            1.  **Think Systematically**: Always start with a `Thought` to outline your plan. Break down complex problems into smaller, logical steps.
-            2.  **Use Tools Efficiently**: Select the best tool for each step. Do not use more than **5 tool calls** unless absolutely necessary. Each call must build upon the last. Stop when you have enough information.
-            3.  **Prioritize Source Quality**: Prefer authoritative, recent, and relevant sources. Use document-specific tools first, then general document retrieval.
-            4.  **Verify and Synthesize**: Cross-reference information from multiple sources to ensure accuracy.
-            5.  **Adapt to the User**: Tailor the language, technical depth, and format of your response to the user's query and profile. Your success is measured by the accuracy, completeness, and clarity of your answer.
-
-            ## Available Tools
-            You have access to a suite of tools to gather information. Use them according to the strategy below.
-            {tool_desc}
-
-            ## Tool Usage Strategy
-
-            Follow this logic for optimal tool selection and information gathering:
-
-            1.  **Check for Specific Documents**: If the user mentions a specific document, use the corresponding `doc_[document_name]` tool first.
-            2.  **General Document Search**: If the query is about internal knowledge but no specific document is named, use `document_retriever`.
-            3.  **Final Step - Cross-Verification**: Before answering, use a different tool (e.g., web search to verify a document claim) if you have medium or low confidence in the initial information.
-
-            ### Document Tool Rules
-            - Use the exact tool name (e.g., `doc_2023_report_v1_pdf`).
-            - Use the correct input format: {{"query": "your question"}}.
-            - Reference page numbers or sections in your citations.
-
-            ## Response Quality & Verification Protocol
-
-            - **Accurate and Factual**: Base all claims on retrieved information.
-            - **Well-Cited**: Attribute all information to its source using the specified citation format.
-            - **Unbiased Tone**: Maintain a neutral, journalistic tone.
-            - **Language Match**: Respond in the user's query language, **unless overridden by the User Profile**.
-            - **Formatted for Clarity**: Use markdown (headings, lists, code blocks) to structure your answer.
-
-            ### Citation Standards
-            - **Documents**: Extract actual file names and page numbers from metadata: `[Page 5](document.pdf)`
-            - **Web**: `[Article Title](https://example.com)`
-            - **Multiple**: Synthesize and cite together: `[Source 1](ref1), [Source 2](ref2)`
-            - **Never** use tool names like [document_retriever] as citations
-
-            ## Error Handling
-            If a tool fails or returns no results:
-            1.  **Acknowledge**: State the limitation clearly in your thought process.
-            2.  **Adapt**: Try an alternative tool or a broader query.
-            3.  **Answer Partially**: If you can't fully answer, provide the information you *did* find and explain what's missing.
-
-            ## Language Handling
-            For non-English queries, translate the user's request to English **before** using any tool. The `Action Input` must always be in English. Translate your final `Answer` back to the user's original language, unless the User Profile specifies otherwise.
-
-            ---
-            ## **CRITICAL: OUTPUT FORMAT**
-            You MUST follow this format precisely. **NEVER** wrap your entire response in code blocks.
-
-            **Step 1: Reasoning and Tool Use (Repeat as needed)**
-            ```
-            Thought: The user's query is in [user's language]. My plan is to [your reasoning and strategy]. I will now use a tool.
-            Action: [tool_name]
-            Action Input: {{"parameter": "value in English"}}
-            ```
-
-            **Step 2: Observation**
-            The system will provide the tool's output:
-            ```
-            Observation: [tool's raw output]
-            ```
-
-            **Step 3: Final Answer (When you have enough information)**
-            ```
-            Thought: I have gathered sufficient information and have cross-verified it. I will now synthesize the final answer in [user's language].
-            Answer: [Your final, comprehensive, well-formatted, and cited answer in the correct language.]
-            ```
-            OR if you cannot answer:
-            ```
-            Thought: I have tried multiple tools but cannot find the necessary information to answer the question.
-            Answer: [Explain what you found and why you cannot fully answer, in the user's language.]
-            ```
-
-            ---
-            ## Query Type Specifications
-            Adapt your final `Answer` format based on the query type.
-
-            -   **Academic Research**: Write a detailed, structured response with sections, methodology, and limitations.
-            -   **Recent News**: Summarize events in a bulleted list. Start each item with the **News Title**. Combine and cite sources for the same event.
-            -   **Coding**: Provide code in code blocks with language specification (e.g., ```python). Explain the code after presenting it.
-            -   **Science/Math**: Use LaTeX for formulas: `\( ... \)` for inline and `\[ ... \]` for blocks. Show your work for complex problems.
-            -   **URL Lookup**: If the query is a URL, summarize its content comprehensively, citing only that URL.
-            -   **Shopping**: Group products by category, include key features and price ranges, and cite a maximum of 5 diverse results.
-            -   **Creative Writing**: Follow the user's creative instructions precisely. You do not need to use tools or cite sources.
-
-            ## User Profile Personalization
-            This section contains user-specific context. **These instructions have the highest priority.**
-
-            -   **CRITICAL LANGUAGE OVERRIDE**: **english**. (This overrides the general language-matching rule).
-            -   **Platform Preference**: Manjaro Linux user. Provide Android-focused solutions (no iPhone). Prefer open-source software recommendations.
-            -   **Location**: R. Pᵃ José Jacinto Botelho 26, 9675 Furnas [[[OP: don't worry about my privacy, I'm at a cafe, on holidays]]]
-            -   **Technical Level**: Expert. Assumes deep familiarity with Linux systems. Provide technical, in-depth answers.
-
-            ## Final Reminder
-            Your goal is to be a reliable and systematic reasoning agent. Think clearly, use tools wisely, cite sources meticulously, and tailor your response to the user's needs.
-            """
+        return (
+            "You are a sophisticated AI Research Assistant with access to a variety of specialized tools.\n"
+            "Your goal is to provide comprehensive, accurate, and well-cited answers by strategically using these tools.\n\n"
+            
+            "## Operational Guidelines:\n"
+            "1. **Thoughtful Planning**: Before taking any action, explain your reasoning. Why are you choosing this tool? What do you expect to find?\n"
+            "2. **Tool Selection**:\n"
+            "   - Use `document_retriever` for broad searches across all documents.\n"
+            "   - Use document-specific tools (e.g., `doc_filename`) for deep-dives into specific files.\n"
+            "   - Use summary tools (e.g., `summary_filename`) for high-level overviews or structural questions.\n"
+            "   - Use web search tools if internal documents lack the necessary information.\n"
+            "3. **Evidence-Based Answers**: Base your final response ONLY on the tool outputs. If tools don't provide the answer, state what is missing.\n"
+            "4. **Strict Citations**: Always cite your sources using the exact format: `[Page X](filename.pdf)` for documents or `[Title](URL)` for web results.\n"
+            "5. **Iterative Refinement**: If a tool output is insufficient, refine your search or try a different tool.\n\n"
+            
+            "## Tool Usage Protocol:\n"
+            "You MUST follow the ReAct format:\n"
+            "Thought: Describe your reasoning and next step.\n"
+            "Action: The tool name to use.\n"
+            "Action Input: The specific query for the tool.\n"
+            "Observation: The result from the tool (provided to you).\n"
+            "... (Repeat Thought/Action/Observation as needed)\n"
+            "Thought: I have enough information to answer.\n"
+            "Final Answer: Your detailed, cited response.\n\n"
+            
+            "Begin your research task now."
+        )
 
     def _sync_memory(self, chat_history: Optional[List[ChatMessage]]) -> None:
         """Synchronize memory with provided chat history."""

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     LDAP_SERVER: str
     LDAP_ENABLE: bool
     ENABLE_MAKER_CHECKER: bool
+    CACHE_ENABLE: bool
 
     HF_TOKEN: str
     SERPER_API: str

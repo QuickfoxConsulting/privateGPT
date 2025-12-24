@@ -28,7 +28,7 @@ embedding:
   mode: gemini
 
 gemini:
-  api_key: AIzaSyBHpnkkAv02r731CVmCM3b8Fl9wt9RaH9I
+  api_key: AIzaSyDv1BImhjW9Lhy0pgvR6UXC1SQiyTjYLfs
   model: models/gemini-2.0-flash
   embedding_model: models/text-embedding-004
 

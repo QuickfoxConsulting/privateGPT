@@ -28,9 +28,10 @@ class ChatItem(ChatItemBase):
 class ChatHistoryBase(BaseModel):
     user_id: int
     title: Optional[str]
-    
+    summary: Optional[str] = None
 
-class ChatHistoryCreate(ChatHistoryBase):
+
+class ChatHistoryCreate(ChatHistoryBase):   
     chat_items: Optional[List[ChatItemCreate]]
 
 class ChatHistoryUpdate(ChatHistoryBase):
@@ -40,6 +41,7 @@ class ChatHistoryUpdate(ChatHistoryBase):
 class Chat(BaseModel):
     conversation_id: uuid.UUID
     title: Optional[str]
+    summary: Optional[str] = None
     created_at: datetime
 
 class ChatHistory(ChatHistoryBase):

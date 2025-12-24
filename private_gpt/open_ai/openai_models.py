@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Iterator
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict
 
 from llama_index.core.llms import ChatResponse, CompletionResponse
 from pydantic import BaseModel, Field
@@ -40,6 +40,7 @@ class OpenAIChoice(BaseModel):
     message: OpenAIMessage | None = None
     sources: list[Chunk] | None = None
     cache_id: Optional[str] = None
+    total_tokens: Optional[Dict[str, int]] = None
 
 
 class OpenAICompletion(BaseModel):
@@ -61,6 +62,7 @@ class OpenAICompletion(BaseModel):
         finish_reason: str | None = None,
         sources: list[Chunk] | None = None,
         cache_id: Optional[str] | None = None,
+        total_tokens: Optional[Dict[str, int]] = None
     ) -> "OpenAICompletion":
         return OpenAICompletion(
             id=str(uuid.uuid4()),
@@ -73,6 +75,7 @@ class OpenAICompletion(BaseModel):
                     finish_reason=finish_reason,
                     sources=sources,
                     cache_id=cache_id,
+                    total_tokens=total_tokens,
                 )
             ],
         )
@@ -103,13 +106,13 @@ class OpenAICompletion(BaseModel):
 
 
 def to_openai_response(
-    response: str | ChatResponse, sources: list[Chunk] | None = None, cache_id: Optional[str] | None = None
+    response: str | ChatResponse, sources: list[Chunk] | None = None, cache_id: Optional[str] | None = None, total_tokens: Optional[Dict[str, int]] = None
 ) -> OpenAICompletion:
     if isinstance(response, ChatResponse):
-        return OpenAICompletion.from_text(response.delta, finish_reason="stop", cache_id=cache_id)
+        return OpenAICompletion.from_text(response.delta, finish_reason="stop", cache_id=cache_id, total_tokens=total_tokens)
     else:
         return OpenAICompletion.from_text(
-            response, finish_reason="stop", sources=sources, cache_id=cache_id
+            response, finish_reason="stop", sources=sources, cache_id=cache_id, total_tokens=total_tokens
         )
 
 

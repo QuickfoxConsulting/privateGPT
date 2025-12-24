@@ -59,12 +59,8 @@ class MetadataFilterRetriever(BaseRetriever):
             # Check if node matches file name filter
             matches_file = (
                 not filters.file_names or
-                any(f.lower() in metadata.get('file_name', '').lower() 
-                    for f in filters.file_names)
-            )
-            matches_file = (
-                not filters.file_names or
-                any(f.lower() in metadata.get('filename', '').lower() 
+                any(f.lower() in metadata.get('file_name', '').lower() or 
+                    f.lower() in metadata.get('filename', '').lower()
                     for f in filters.file_names)
             )
             

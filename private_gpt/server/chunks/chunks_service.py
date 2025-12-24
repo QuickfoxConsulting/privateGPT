@@ -105,11 +105,19 @@ class ChunksService:
         
         # Find nodes with the same doc_id
         same_doc_nodes = []
-        for node_id, node_data in self.storage_context.docstore.docs.items():
-            if (node_data.metadata.get('doc_id') == current_doc_id and 
-                node_id != current_node.node_id):
-                same_doc_node = self.storage_context.docstore.get_node(node_id)
-                same_doc_nodes.append(same_doc_node.get_content())
+        try:
+            for node_id, node_data in self.storage_context.docstore.docs.items():
+                if (node_data.metadata.get('doc_id') == current_doc_id and 
+                    node_id != current_node.node_id):
+                    try:
+                        same_doc_node = self.storage_context.docstore.get_node(node_id)
+                        same_doc_nodes.append(same_doc_node.get_content())
+                    except Exception as e:
+                        # Log warning but continue processing other nodes
+                        continue
+        except Exception as e:
+            # Log error but return what we have
+            pass
         
         return same_doc_nodes
     
@@ -120,29 +128,47 @@ class ChunksService:
         limit: int = 10,
         prev_next_chunks: int = 0,
     ) -> list[Chunk]:
-        index = VectorStoreIndex.from_vector_store(
-            self.vector_store_component.vector_store,
-            storage_context=self.storage_context,
-            llm=self.llm_component.llm,
-            embed_model=self.embedding_component.embedding_model,
-            show_progress=True,
-        )
+        try:
+            index = VectorStoreIndex.from_vector_store(
+                self.vector_store_component.vector_store,
+                storage_context=self.storage_context,
+                llm=self.llm_component.llm,
+                embed_model=self.embedding_component.embedding_model,
+                show_progress=True,
+            )
+        except Exception as e:
+            # Fallback to creating a new index if loading fails
+            index = VectorStoreIndex.from_documents(
+                [],
+                storage_context=self.storage_context,
+                llm=self.llm_component.llm,
+                embed_model=self.embedding_component.embedding_model,
+                show_progress=True,
+            )
+        
         vector_index_retriever = self.vector_store_component.get_retriever(
             index=index, context_filter=context_filter, similarity_top_k=limit
         )
-        nodes = vector_index_retriever.retrieve(text)
-        nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
+        
+        try:
+            nodes = vector_index_retriever.retrieve(text)
+            nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
+        except Exception as e:
+            return []
 
         retrieved_nodes = []
-        for node in nodes:
-            chunk = Chunk.from_node(node)
-            chunk.previous_texts = self._get_sibling_nodes_text(
-                node, prev_next_chunks, False
-            )
-            chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
-            same_docs_nodes = self._get_nodes_from_same_document(node)
-            retrieved_nodes.append(chunk)
-            retrieved_nodes.append(same_docs_nodes)
+        for node in nodes[:limit]:  # Limit to requested number of nodes
+            try:
+                chunk = Chunk.from_node(node)
+                if prev_next_chunks > 0:
+                    chunk.previous_texts = self._get_sibling_nodes_text(
+                        node, prev_next_chunks, False
+                    )
+                    chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
+                retrieved_nodes.append(chunk)
+            except Exception as e:
+                # Skip problematic nodes but continue processing
+                continue
         
 
         return retrieved_nodes

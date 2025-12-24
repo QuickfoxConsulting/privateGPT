@@ -24,7 +24,6 @@ from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.constants import UNCHECKED_DIR, UPLOAD_DIR
 from private_gpt.manager.document_manager import DocumentManager
 from private_gpt.server.ingest.ingest_router import create_documents, ingest
-from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 from private_gpt.users.models.document import MakerCheckerActionType, MakerCheckerStatus
 
 logger = logging.getLogger(__name__)
@@ -302,7 +301,6 @@ async def upload_documents(
                 doc_manager=doc_manager,
                 log_audit=log_audit,
                 request=request,
-                strategy=documents.strategy
             )
             return {"status": "upload_complete", "message": "Document uploaded and auto-approval started"}
         return document
@@ -324,7 +322,6 @@ async def verify_document_background(
     doc_manager: DocumentManager,
     log_audit: models.Audit,
     request: Request,
-    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ):
     """Background task to handle document verification."""
     try:
@@ -358,7 +355,6 @@ async def verify_document_background(
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
                 "document_path": str(final_path),
-                "strategy": strategy.value
             }
             checker = schemas.DocumentCheckerUpdate(
                 filename=document.filename, 
@@ -382,16 +378,31 @@ async def verify_document_background(
                 },
                 user_id=current_user_id
             )
-            await ingest(
-                request, 
-                final_path, 
-                metadata_dict,
-                strategy=strategy
-            )
-            status_update = schemas.StatusUpdate(
-               doc_status=DocumentStatus.READY.value
-            )
-            crud.documents.update(db=db, db_obj=document, obj_in=status_update)
+            
+            try:
+                await ingest(
+                    request, 
+                    final_path, 
+                    metadata_dict,
+                )
+                logger.info("Document ingestion completed")
+                logger.info("Updating document status to READY")
+                # Update status to READY after successful ingestion
+                # status_update = schemas.StatusUpdate(
+                #     doc_status=DocumentStatus.READY.value
+                # )
+                # crud.documents.update(db=db, db_obj=document, obj_in=status_update)
+                document.doc_status = DocumentStatus.READY.value
+                db.add(document)
+                db.commit() 
+                db.refresh(document)
+            except Exception as e:
+                logger.error(f"Error during document ingestion: {str(e)}")
+                # Update status to ERROR if ingestion fails
+                document.doc_status = DocumentStatus.EMBEDDING.value
+                db.add(document)
+                db.commit() 
+                raise
             
         elif status == MakerCheckerStatus.REJECTED:
             await doc_manager.reject_document(temp_path)
@@ -408,7 +419,6 @@ async def verify_document_background(
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
                 "document_path": str(temp_path),
-                "strategy": strategy.value
             }
             checker = schemas.DocumentCheckerUpdate(
                 filename=document.filename,
@@ -491,7 +501,6 @@ async def verify_documents(
             doc_manager=doc_manager,
             log_audit=log_audit,
             request=request,
-            strategy=ChunkingStrategy.LATE_CHUNKING
         )
 
         return {"status": "verification_started", "message": "Document verification has been started"}

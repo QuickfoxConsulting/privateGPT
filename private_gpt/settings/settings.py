@@ -206,7 +206,7 @@ class EmbeddingSettings(BaseModel):
         "gemini",
         "mistralai",
     ]
-    ingest_mode: Literal["simple", "batch", "parallel", "pipeline"] = Field(
+    ingest_mode: Literal["simple", "batch", "parallel", "pipeline", "hierarchical"] = Field(
         "simple",
         description=(
             "The ingest mode to use for the embedding engine:\n"
@@ -403,6 +403,10 @@ class RagSettings(BaseModel):
     similarity_value: float = Field(
         None,
         description="If set, any documents retrieved from the RAG must meet a certain match score. Acceptable values are between 0 and 1.",
+    )
+    multi_query_retrieval: bool = Field(
+        False,
+        description="If set to True, the RAG will generate multiple queries to increase recall.",
     )
     rerank: RerankSettings
 

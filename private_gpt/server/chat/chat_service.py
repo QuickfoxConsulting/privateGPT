@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from injector import inject, singleton
 from llama_index.core.chat_engine import SimpleChatEngine, CondensePlusContextChatEngine, ContextChatEngine
@@ -28,6 +28,8 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.llm.llm_component import LLMComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
+from private_gpt.components.retriever.multi_query_retriever import MultiQueryRetriever
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -44,13 +46,22 @@ from private_gpt.server.chat.search_tool import SearchRAGEngine
 from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
 from private_gpt.server.cache.cache_service import CacheService
+import tiktoken
+from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
+from llama_index.core.settings import Settings as LlamaIndexSettings
+
+# from private_gpt.users.core.config import setting as ServerSettings
+
+cache_enable = False
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class Completion(BaseModel):
     cache_id: Optional[str] = None
     response: str
     sources: list[Chunk] | None = None
+    total_tokens: Optional[Dict[str, int]] = None
 
 class CompletionGen(BaseModel):
     response: TokenGen
@@ -58,6 +69,10 @@ class CompletionGen(BaseModel):
 
 class TitleGeneration(BaseModel):
     title: str
+
+
+class SummaryGeneration(BaseModel):
+    summary: str
 
 reranker_path = models_path / 'reranker'
 current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -295,6 +310,7 @@ class ChatService:
 
     async def _chat_engine(
         self,
+        callback_manager: CallbackManager,
         use_context: ChatMode.CHAT.value,
         system_prompt: str | None = None,
         context_filter: ContextFilter | None = None,
@@ -302,6 +318,8 @@ class ChatService:
         chat_history: list[ChatMessage] | None = None,
     ) -> BaseChatEngine:
         settings = self.settings
+
+        self.llm_component.llm.callback_manager = callback_manager
         if use_context == ChatMode.AGENTIC.value:
             # vector_index_retriever = self.vector_store_component.get_retriever(
             #     index=self.index,
@@ -340,8 +358,10 @@ class ChatService:
                 node_store_component=self.node_store,
                 vector_store_component=self.vector_store_component,
                 node_postprocessors=node_postprocessors,
+                multi_query_retrieval=settings.rag.multi_query_retrieval,
                 max_iterations=20,
                 verbose=True,
+                callback_manager=callback_manager
             )
         
         elif use_context == ChatMode.SEARCH.value:
@@ -350,6 +370,11 @@ class ChatService:
                 context_filter=context_filter,
                 similarity_top_k=self.settings.rag.similarity_top_k,
             )
+            if self.settings.rag.multi_query_retrieval:
+                vector_index_retriever = MultiQueryRetriever(
+                    base_retriever=vector_index_retriever,
+                    llm=self.llm_component.llm,
+                )
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -385,16 +410,17 @@ class ChatService:
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
                 response_synthesizer=response_synthesizer,
-                verbose=True  # For debugging and understanding the process
+                verbose=True 
             )
-            return ContextChatEngine.from_defaults(
+            return CondensePlusContextChatEngine.from_defaults(
                 system_prompt=system_prompt,
                 retriever=custom_query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
+                llm=self.llm_component.llm, 
                 node_postprocessors=node_postprocessors,
                 # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
                 # context_prompt=CONTEXT_PROMPT_TEMPLATE,
                 verbose=True,
+                callback_manager=callback_manager
             )
             # return AgenticCondenseChatEngine.from_defaults(
             #     retriever=vector_index_retriever,
@@ -403,7 +429,7 @@ class ChatService:
             #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
             #     context_prompt=CONTEXT_PROMPT_TEMPLATE,
             #     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-            #     skip_condense=True,
+            #     # callback_manager= callback_manager,
             #     verbose=True,
             # )
             # return SearchRAGEngine(
@@ -416,7 +442,6 @@ class ChatService:
             #     max_iterations=5,
             #     verbose=True,
             # )
-        
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
@@ -426,11 +451,15 @@ class ChatService:
     async def stream_chat(
         self,
         messages: list[ChatMessage],
-        use_context: ChatMode.CHAT.value,
+        use_context: Any = ChatMode.CHAT.value,
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
         cache_service: CacheService | None = None,
     ) -> CompletionGen:
+        # Normalize use_context
+        if isinstance(use_context, bool):
+            use_context = ChatMode.SEARCH.value if use_context else ChatMode.CHAT.value
+
         # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
@@ -438,7 +467,7 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-    
+        
         system_prompt = (
             chat_engine_input.system_message.content
             if chat_engine_input.system_message
@@ -447,30 +476,62 @@ class ChatService:
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
+
+        try:
+            tokenizer = tiktoken.get_encoding("cl100k_base")
+        except:
+            tokenizer = tiktoken.get_encoding("gpt2")
+        token_counter = TokenCountingHandler(tokenizer=tokenizer.encode, verbose=True)
+        callback_manager = CallbackManager([token_counter])
+        token_counter.reset_counts()
+
+        # Set global Settings for broader coverage
+        from llama_index.core import Settings
+        Settings.callback_manager = callback_manager
+        self.llm_component.llm.callback_manager = callback_manager  # Also set on LLM
+
         chat_engine = await self._chat_engine(
             system_prompt=system_prompt,
             use_context=use_context,
             file_list=file_list,
             context_filter=context_filter,
+            callback_manager=callback_manager,  # Pass explicitly
         )
         streaming_response = chat_engine.stream_chat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
         sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+
+        # Wrapper to count tokens during streaming
+        def counted_response_gen() -> TokenGen:
+            for token in streaming_response.response_gen:
+                yield token
+            # Log final counts after stream ends
+            total_tokens = token_counter.total_llm_token_count
+            logger.info(
+                f"Streaming token usage: Prompt={token_counter.prompt_llm_token_count}, "
+                f"Completion={token_counter.completion_llm_token_count}, Total={total_tokens}"
+            )
+
         completion_gen = CompletionGen(
-            response=streaming_response.response_gen, sources=sources
+            response=counted_response_gen(),
+            sources=sources
         )
+        # Optional: Reset global Settings if needed
         return completion_gen
 
     async def chat(
         self,
         messages: list[ChatMessage],
-        use_context: ChatMode.CHAT.value,
+        use_context: Any = ChatMode.CHAT.value,
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
         cache_service: CacheService | None = None,
     ) -> Completion:
+        # Normalize use_context
+        if isinstance(use_context, bool):
+            use_context = ChatMode.SEARCH.value if use_context else ChatMode.CHAT.value
         # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
@@ -479,38 +540,76 @@ class ChatService:
             else None
         )
 
-        ## Check whether the query answer is in the cache
-        cache_answer = None
-        if cache_service and last_message and (use_context == ChatMode.SEARCH.value):
-            cache_answer = self._check_faq_cache(cache_service, last_message)
+        if cache_enable:
+            ## Check whether the query answer is in the cache
+            cache_answer = None
+            if cache_service and last_message and (use_context == ChatMode.SEARCH.value):
+                cache_answer = self._check_faq_cache(cache_service, last_message)
 
-            if cache_answer:
-                completion = Completion(
-                    cache_id=cache_answer["id"],
-                    response=cache_answer["content"],
-                    sources=cache_answer["sources"]
-                )
-                return completion
+                if cache_answer:
+                    try:
+                        tokenizer = tiktoken.get_encoding("cl100k_base")
+                    except:
+                        tokenizer = tiktoken.get_encoding("gpt2")
+                    total_tokens = len(tokenizer.encode(cache_answer["content"]))  # Estimate tokens for cached response
+                    completion = Completion(
+                        cache_id=cache_answer["id"],
+                        response=cache_answer["content"],
+                        sources=cache_answer["sources"],
+                        total_tokens={
+                            'total_tokens': total_tokens,
+                            'prompt_tokens': 0,
+                            'completion_tokens': total_tokens
+                        }
+                    )
+                    return completion
 
         ## If not:
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
 
+        try:
+            tokenizer = tiktoken.get_encoding("cl100k_base")
+        except:
+            tokenizer = tiktoken.get_encoding("gpt2")
+        token_counter = TokenCountingHandler(tokenizer=tokenizer.encode, verbose=True)
+        callback_manager = CallbackManager([token_counter])
+
+        # Set global Settings for broader coverage
+        from llama_index.core import Settings
+        Settings.callback_manager = callback_manager
+        self.llm_component.llm.callback_manager = callback_manager  # Also set on LLM
+        token_counter.reset_counts()
+
         chat_engine = await self._chat_engine(
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
             context_filter=context_filter,
             file_list=file_list,
-            chat_history=chat_history
+            chat_history=chat_history,
+            callback_manager=callback_manager,  # Still pass explicitly
         )
         wrapped_response = chat_engine.chat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        
+        total_tokens = token_counter.total_llm_token_count
+        logger.info(
+            f"Request token usage: Prompt={token_counter.prompt_llm_token_count}, "
+            f"Completion={token_counter.completion_llm_token_count}, Total={total_tokens}"
+        )
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
-        completion = Completion(response=wrapped_response.response, sources=sources, cache_id=None)
+        completion = Completion(
+            response=wrapped_response.response,
+            sources=sources,
+            cache_id=None,
+            total_tokens={
+                'total_tokens': total_tokens,
+                'prompt_tokens': token_counter.prompt_llm_token_count,
+                'completion_tokens': token_counter.completion_llm_token_count
+            }
+        )
         return completion
 
     async def generate_title(
@@ -571,3 +670,69 @@ class ChatService:
                 return TitleGeneration(title="Invalid title format")
         except Exception as e:
             return TitleGeneration(title=f"Error generating title: {str(e)}")
+
+    async def generate_summary(
+        self,
+        chat_history,
+    ) -> SummaryGeneration:
+        """Generates a concise summary of the chat history."""
+        DEFAULT_SUMMARY_GENERATION_PROMPT_TEMPLATE = """### Task: You are a conversation summarizer.
+            Generate a concise, informative summary of the chat history.
+            
+            ### Guidelines:
+            - The summary should capture the main topics and key points discussed.
+            - Keep it to 1-2 sentences maximum.
+            - Write in the chat's primary language; default to English if multilingual.
+            - Focus on the most important information exchanged.
+            
+            ### Output:
+            Strict follow JSON format: { "summary": "your concise summary here" }
+            
+            ### Examples:
+            - { "summary": "User asked about stock market trends and received analysis on tech stocks." },
+            - { "summary": "Discussion about recipe modifications for dietary restrictions." },
+            - { "summary": "Exploration of music streaming platform features and user experience." },
+            
+            ### Chat History:
+            <chat_history>
+            {{CHAT_HISTORY}}
+            </chat_history>"""
+
+        # Extract chat items and format them
+        chat_items = []
+        for item in chat_history.chat_items:
+            if isinstance(item.content, dict) and "text" in item.content:
+                content = item.content["text"]
+            else:
+                content = str(item.content)
+            chat_items.append(f"{item.sender}: {content}")
+        
+        if not chat_items:
+            return SummaryGeneration(summary="Empty conversation")
+
+        formatted_chat_history = "\n".join(chat_items)
+        prompt = DEFAULT_SUMMARY_GENERATION_PROMPT_TEMPLATE.replace(
+            "{{CHAT_HISTORY}}", formatted_chat_history
+        )
+
+        chat_engine = SimpleChatEngine.from_defaults(
+            system_prompt=prompt,
+            llm=self.llm_component.llm,
+        )
+        try:
+            response = await chat_engine.achat(formatted_chat_history)
+            import json
+            try:
+                import re
+                match = re.search(r'{\s*"summary"\s*:\s*".+?"\s*}', response.response)
+                if match:
+                    summary_data = json.loads(match.group(0))
+                    return SummaryGeneration(summary=summary_data["summary"])
+                else:
+                    # Fallback: try naive string stripping
+                    stripped = response.response.strip('{}').replace('"summary":', '').strip().strip('"')
+                    return SummaryGeneration(summary=stripped)
+            except json.JSONDecodeError:
+                return SummaryGeneration(summary="Invalid summary format")
+        except Exception as e:
+            return SummaryGeneration(summary=f"Error generating summary: {str(e)}")

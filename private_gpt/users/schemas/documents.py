@@ -6,7 +6,6 @@ from fastapi import Form, UploadFile, File
 
 from .category import CategoryList
 from private_gpt.users.models.enums import *
-from private_gpt.server.ingest.ingest_service import ChunkingStrategy
 
 class DocumentsBase(BaseModel):
     filename: str
@@ -233,11 +232,9 @@ class DocumentUpload:
         self,
         doc_metadata: str = Form(None),  # Made this optional by changing from Form(...) to Form(None)
         file: UploadFile = File(...),
-        strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
     ):
         self.file = file
         self.metadata_raw = doc_metadata
-        self.strategy = strategy
 
         # Handle optional metadata
         if doc_metadata and doc_metadata.strip():  

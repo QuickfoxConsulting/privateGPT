@@ -125,6 +125,6 @@ async def chat_completion(
             cache_service=cache_service,
         )
         return to_openai_response(
-            completion.response, completion.sources if body.include_sources else None, completion.cache_id
+            completion.response, completion.sources if body.include_sources else None, completion.cache_id, completion.total_tokens
         )
     

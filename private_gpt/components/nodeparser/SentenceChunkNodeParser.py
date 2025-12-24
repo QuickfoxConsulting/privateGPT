@@ -1,5 +1,3 @@
-"""Improved sentence chunking parser."""
-
 from typing import Any, Callable, List, Optional, Sequence
 
 from llama_index.core.bridge.pydantic import Field
@@ -10,10 +8,10 @@ from llama_index.core.node_parser.node_utils import (
     default_id_func,
 )
 from llama_index.core.node_parser.text.utils import split_by_sentence_tokenizer
-from llama_index.core.schema import BaseNode, Document
+from llama_index.core.schema import BaseNode, Document, NodeRelationship, RelatedNodeInfo, TextNode
 from llama_index.core.utils import get_tqdm_iterable
 
-DEFAULT_CHUNK_SIZE = 10  # Number of sentences per chunk
+DEFAULT_CHUNK_SIZE = 5  # Number of sentences per chunk
 DEFAULT_WINDOW_SIZE = 3  # Number of chunks to include in window
 DEFAULT_WINDOW_METADATA_KEY = "window"
 DEFAULT_OG_TEXT_METADATA_KEY = "original_text"
@@ -103,8 +101,13 @@ class SentenceChunkWindowNodeParser(NodeParser):
         nodes_with_progress = get_tqdm_iterable(nodes, show_progress, "Parsing nodes")
 
         for node in nodes_with_progress:
-            nodes = self.build_window_nodes_from_documents([node])
-            all_nodes.extend(nodes)
+            doc = Document(
+                text=node.get_content(),
+                metadata=node.metadata.copy(),
+                id_=node.ref_doc_id or str(node.id_) if hasattr(node, 'id_') else str(hash(node.get_content())),
+            )
+            nodes_from_doc = self.build_window_nodes_from_documents([doc])
+            all_nodes.extend(nodes_from_doc)
 
         return all_nodes
 
@@ -131,24 +134,44 @@ class SentenceChunkWindowNodeParser(NodeParser):
                 id_func=self.id_func,
             )
 
-            # Add window to each node
-            for i, node in enumerate(nodes):
-                window_start = max(0, i - self.window_size)
-                window_end = min(i + self.window_size + 1, len(nodes))
-                window_nodes = nodes[window_start:window_end]
+            if not self.include_metadata:
+                for node in nodes:
+                    node.metadata = {}
 
-                node.metadata[self.window_metadata_key] = " ".join(
-                    [n.text for n in window_nodes]
-                )
-                node.metadata[self.original_text_metadata_key] = node.text
+            if self.include_prev_next_rel:
+                for i, node in enumerate(nodes):
+                    if i > 0:
+                        node.relationships[NodeRelationship.PREVIOUS] = RelatedNodeInfo(
+                            node_id=nodes[i-1].node_id
+                        )
+                    if i < len(nodes) - 1:
+                        node.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(
+                            node_id=nodes[i+1].node_id
+                        )
 
-                # Exclude window metadata from embed and llm
-                node.excluded_embed_metadata_keys.extend(
-                    [self.window_metadata_key, self.original_text_metadata_key]
-                )
-                node.excluded_llm_metadata_keys.extend(
-                    [self.window_metadata_key, self.original_text_metadata_key]
-                )
+            # Add window to each node if include_metadata
+            if self.include_metadata:
+                for i, node in enumerate(nodes):
+                    window_start = max(0, i - self.window_size)
+                    window_end = min(i + self.window_size + 1, len(nodes))
+                    window_nodes = nodes[window_start:window_end]
+
+                    window_text = " ".join([n.text for n in window_nodes])
+                    original_text = node.text
+
+                    node.metadata[self.window_metadata_key] = window_text
+                    node.metadata[self.original_text_metadata_key] = original_text
+
+                    # Exclude window metadata from embed and llm
+                    if self.window_metadata_key not in node.excluded_embed_metadata_keys:
+                        node.excluded_embed_metadata_keys.append(self.window_metadata_key)
+                    if self.original_text_metadata_key not in node.excluded_embed_metadata_keys:
+                        node.excluded_embed_metadata_keys.append(self.original_text_metadata_key)
+                    
+                    if self.window_metadata_key not in node.excluded_llm_metadata_keys:
+                        node.excluded_llm_metadata_keys.append(self.window_metadata_key)
+                    if self.original_text_metadata_key not in node.excluded_llm_metadata_keys:
+                        node.excluded_llm_metadata_keys.append(self.original_text_metadata_key)
 
             all_nodes.extend(nodes)
 

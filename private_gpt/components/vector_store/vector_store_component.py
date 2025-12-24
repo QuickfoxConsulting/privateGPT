@@ -24,9 +24,7 @@ def _doc_id_metadata_filter(
 
     if context_filter is not None and context_filter.docs_ids is not None:
         for doc_id in context_filter.docs_ids:
-            # Use both doc_id and document_id for backward compatibility
             filters.filters.append(MetadataFilter(key="doc_id", value=doc_id))
-            filters.filters.append(MetadataFilter(key="document_id", value=doc_id))
 
     return filters
 
@@ -113,27 +111,28 @@ class VectorStoreComponent:
                         "Qdrant dependencies not found, install with `poetry install --extras vector-stores-qdrant`"
                     ) from e
 
-                # if settings.qdrant is None:
-                #     logger.info(
-                #         "Qdrant config not found. Using default settings."
-                #         "Trying to connect to Qdrant at localhost:6333."
-                #     )
-                client = QdrantClient(url="http://qdrant:6333")
-                # aclient = AsyncQdrantClient(url="http://qdrant:6333")
+                if settings.qdrant is None:
+                    logger.info(
+                        "Qdrant config not found. Using default settings."
+                        "Trying to connect to Qdrant at localhost:6333."
+                    )
+                    client = QdrantClient(url="http://localhost:6333")
+                elif settings.qdrant.path.startswith("http"):
+                    client = QdrantClient(url=settings.qdrant.path)
+                else:
+                    client = QdrantClient(path=settings.qdrant.path)
+
                 self.vector_store = typing.cast(
                     VectorStore,
                     QdrantVectorStore(
                         client=client,
-                        # aclient=aclient,
-                        collection_name="make_this_parameterizable_per_api_call",
-                        enable_hybrid=True, 
+                        # aclient=aclient, 
+                        collection_name="rag_hybrid_collection", 
+                        enable_hybrid=True,
                         fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
-                        # batch_size=20,
-                        # sparse_doc_fn=sparse_doc_vectors,
-                        # sparse_query_fn=sparse_query_vectors,
+                        batch_size=50,  
                         use_async=True,
-                        # hybrid_fusion_fn=relative_score_fusion,
-                    ),  # TODO
+                    ),
                 )
             case "milvus":
                     try:
@@ -216,21 +215,17 @@ class VectorStoreComponent:
             index=index,
             similarity_top_k=similarity_top_k,
             doc_ids=context_filter.docs_ids if context_filter else None,
-            filters=(
-                _doc_id_metadata_filter(context_filter)
-                if self.settings.vectorstore.database != "qdrant"
-                else None
-            ),
-            sparse_top_k=12, 
+            filters=_doc_id_metadata_filter(context_filter),
+            sparse_top_k=20,  # Increased for better recall
             vector_store_query_mode="hybrid",
-            alpha=0.5,
+            alpha=0.7,  # Favor dense embeddings slightly more
         )
     
     def file_vector_retriever(
         self, 
         index: VectorStoreIndex, 
         file_name: str,
-        similarity_top_k: int = 2,
+        similarity_top_k: int = 10,  # Increased to retrieve more chunks per file
     )-> VectorIndexRetriever:
         filters = MetadataFilters(
             filters=[
@@ -239,15 +234,11 @@ class VectorStoreComponent:
         )
         return VectorIndexRetriever(
             index=index,
-            filters=(
-                filters
-                if self.settings.vectorstore.database != "qdrant"
-                else None
-            ),
+            filters=filters,
             similarity_top_k=similarity_top_k,
-            sparse_top_k=12,
+            sparse_top_k=20,  # Increased for better recall
             vector_store_query_mode="hybrid",
-            alpha=0.5,
+            alpha=0.7,  # Favor dense embeddings slightly more
         )
 
     def close(self) -> None:

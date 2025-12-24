@@ -1,11 +1,3 @@
-"""
-Focused Context Window node parser using Chonkie for single-document processing.
-
-This parser is optimized for the use case where it receives a sequence of 
-page-wise Document objects all belonging to the same source file. It combines 
-text across page boundaries to create semantically meaningful chunks with 
-Chonkie, and then maps each chunk back to its original source page metadata.
-"""
 import uuid
 import logging
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -15,15 +7,14 @@ from llama_index.core.bridge.pydantic import Field
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.node_parser.interface import NodeParser
 from llama_index.core.node_parser.node_utils import (
-    build_nodes_from_splits,
     default_id_func,
 )
-from llama_index.core.schema import BaseNode, Document, TextNode
+from llama_index.core.schema import BaseNode, Document, NodeRelationship, RelatedNodeInfo, TextNode
 from llama_index.core.utils import get_tqdm_iterable
 
 DEFAULT_WINDOW_METADATA_KEY = "window"
 DEFAULT_OG_TEXT_METADATA_KEY = "original_text"
-DEFAULT_CHUNK_SIZE = 256
+DEFAULT_CHUNK_SIZE = 512
 DEFAULT_CONTEXT_WINDOW = 3
 
 logger = logging.getLogger(__name__)
@@ -101,7 +92,11 @@ class LateChunkNodeParser(NodeParser):
         """
         if not nodes:
             return []
-
+        
+        doc_ids = {node.ref_doc_id for node in nodes}
+        if len(doc_ids) > 1:
+            raise ValueError("LateChunkNodeParser is designed to process nodes from a single document at a time.")
+        
         # 1. Combine text and track page offsets
         combined_text = ""
         page_offsets: List[Tuple[int, BaseNode]] = []
@@ -110,88 +105,108 @@ class LateChunkNodeParser(NodeParser):
             page_offsets.append((len(combined_text), page_node))
             combined_text += page_text + "\n\n"
 
-        # 2. Perform chunking
+        # 2. Perform chunking using Chonkie
         splits = self.chunker(combined_text)
-        text_splits = [split.text for split in splits]
 
-        # 3. Create a temporary source document for ID and relationship linking
+        # 3. Create nodes with correct metadata from the start
+        chunk_nodes: List[BaseNode] = []
+        
+        # This will be the reference document for all new chunk nodes
         first_node = nodes[0]
-        source_doc_id = first_node.ref_doc_id or str(uuid.uuid4())
-        
-        # We pass a copy of the first node's metadata. This will be corrected later.
+        ref_doc_id = first_node.ref_doc_id or str(uuid.uuid4())
+        base_metadata = first_node.metadata.copy()
+
+        # Create source_doc for ID generation
         source_doc = Document(
+            id_=ref_doc_id,
+            metadata=base_metadata,
             text=combined_text,
-            id_=source_doc_id,
-            metadata=first_node.metadata.copy(),
         )
 
-        # 4. Use LlamaIndex utility to build nodes with correct relationships and ref_doc_id
-        chunk_nodes = build_nodes_from_splits(
-            text_splits,
-            source_doc,
-            id_func=self.id_func,
-        )
+        for i, split in enumerate(get_tqdm_iterable(splits, show_progress, "Creating chunk nodes")):
+            start_char_idx = split.start_index
+            end_char_idx = split.end_index
+            
+            # Use helper to find the corresponding source page nodes
+            start_page_node = self._find_source_node(start_char_idx, page_offsets)
+            end_page_node = self._find_source_node(end_char_idx - 1, page_offsets)
+
+            # Construct metadata for the new chunk node
+            metadata = {}
+            if self.include_metadata:
+                metadata = base_metadata.copy()
+                start_page = start_page_node.metadata.get("page_label", start_page_node.metadata.get("page"))
+                end_page = end_page_node.metadata.get("page_label", end_page_node.metadata.get("page"))
+
+                if start_page is not None:
+                    metadata["page_label"] = start_page # Use page_label as the standard
+                    if end_page is not None and str(end_page) != str(start_page):
+                        metadata["page_range"] = f"{start_page}-{end_page}"
+                    else:
+                        metadata["page_range"] = str(start_page)
+
+            node_id = self.id_func(i, source_doc)
+            node = TextNode(
+                id_=node_id,
+                text=split.text,
+                metadata=metadata,
+                relationships={
+                    NodeRelationship.SOURCE: RelatedNodeInfo(node_id=source_doc.id_)
+                },
+            )
+            chunk_nodes.append(node)
         
-        # 5. Correct the metadata for each chunk node
-        current_offset = 0
-        for node in get_tqdm_iterable(chunk_nodes, show_progress, "Correcting metadata"):
-            node_text = node.get_content()
-            start_offset = combined_text.find(node_text, current_offset)
-            if start_offset == -1:
-                continue # Should not happen in practice
-            end_offset = start_offset + len(node_text)
-            
-            start_page_node = self._find_source_node(start_offset, page_offsets)
-            end_page_node = self._find_source_node(end_offset, page_offsets)
+        # 4. Add chunk-level relationships (prev/next) if enabled
+        if self.include_prev_next_rel:
+            for i, node in enumerate(chunk_nodes):
+                if i > 0:
+                    node.relationships[NodeRelationship.PREVIOUS] = RelatedNodeInfo(
+                        node_id=chunk_nodes[i-1].node_id
+                    )
+                if i < len(chunk_nodes) - 1:
+                    node.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(
+                        node_id=chunk_nodes[i+1].node_id
+                    )
 
-            start_page = start_page_node.metadata.get("page_label") or start_page_node.metadata.get("page")
-            end_page = end_page_node.metadata.get("page_label") or end_page_node.metadata.get("page")
-
-            # --- METADATA CORRECTION ---
-            # Overwrite the inherited metadata with accurate, chunk-specific values.
-            if start_page is not None:
-                node.metadata["page"] = start_page
-                start_page_str = str(start_page)
-                if end_page is not None and str(end_page) != start_page_str:
-                    node.metadata["page_range"] = f"{start_page_str}-{str(end_page)}"
-                else:
-                    node.metadata["page_range"] = start_page_str
-
-            # Correct the page-level relationships
-            node.metadata["prev_page"] = start_page_node.metadata.get("prev_page")
-            node.metadata["next_page"] = end_page_node.metadata.get("next_page")
-            
-            current_offset = end_offset
-
-        # 6. Add context window and configure metadata for embedding/LLM
+        # 5. Add context window and configure metadata for embedding/LLM
         self._add_context_window_to_nodes(chunk_nodes)
 
         return chunk_nodes
 
     def _find_source_node(self, offset: int, page_offsets: List[Tuple[int, BaseNode]]) -> BaseNode:
         """Find the source page node corresponding to a given character offset."""
+        # This logic is correct. No changes needed.
         for start_offset, doc in reversed(page_offsets):
             if offset >= start_offset:
                 return doc
         return page_offsets[0][1]
 
-    def _add_context_window_to_nodes(self, nodes: List[BaseNode]):
+    def _add_context_window_to_nodes(self, nodes: List[TextNode]):
         """
         Iterate through nodes to add a context window and set metadata exclusion keys.
         """
         for i, node in enumerate(nodes):
             original_text = node.get_content()
-            node.metadata[self.original_text_metadata_key] = original_text
-
-            window_nodes = nodes[
-                max(0, i - self.window_size) : 
-                min(len(nodes), i + self.window_size + 1)
-            ]
-            window_text = " ".join([n.get_content() for n in window_nodes])
-            node.metadata[self.window_metadata_key] = window_text
-
-            if self.window_metadata_key not in node.excluded_embed_metadata_keys:
-                node.excluded_embed_metadata_keys.append(self.window_metadata_key)
             
-            if self.original_text_metadata_key not in node.excluded_llm_metadata_keys:
-                node.excluded_llm_metadata_keys.append(self.original_text_metadata_key)
+            window_start = max(0, i - self.window_size)
+            window_end = min(len(nodes), i + self.window_size + 1)
+            
+            window_nodes = nodes[window_start:window_end]
+            # Use a more robust joiner than just a space
+            window_text = "\n\n---\n\n".join(
+                [n.get_content() for n in window_nodes]
+            )
+            
+            node.set_content(original_text)  # Keep original content as primary
+            
+            if self.include_metadata:
+                node.metadata[self.original_text_metadata_key] = original_text
+                node.metadata[self.window_metadata_key] = window_text
+
+                # Exclude window metadata from embedding to avoid diluting the vector representations
+                if self.window_metadata_key not in node.excluded_embed_metadata_keys:
+                    node.excluded_embed_metadata_keys.append(self.window_metadata_key)
+                
+                # Exclude original text from LLM metadata to avoid redundancy
+                if self.original_text_metadata_key not in node.excluded_llm_metadata_keys:
+                    node.excluded_llm_metadata_keys.append(self.original_text_metadata_key)

@@ -291,6 +291,84 @@ async def create_chat_history_title(
         )
 
 
+@router.post("/{conversation_id}/summary")
+async def create_chat_history_summary(
+    request: Request,
+    conversation_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+    ),
+) -> schemas.ChatHistory:
+    """
+    Create a summary for a chat history by ID using AI or auto-generated method
+    """
+    service = request.state.injector.get(ChatService)
+    try:
+        chat_history = crud.chat.get_by_id(db, id=conversation_id)
+        if chat_history is None or chat_history.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Chat history not found"
+            )
+        
+        # Try to generate an AI summary first
+        try:
+            summary = await service.generate_summary(chat_history)
+            chat_history.set_summary(summary.summary)
+        except Exception as e:
+            logger.warning(f"AI summary generation failed: {str(e)}, using auto-generated summary")
+            # Fallback to auto-generated summary
+            auto_summary = chat_history.generate_summary()
+            chat_history.set_summary(auto_summary)
+        
+        db.commit()
+        db.refresh(chat_history)
+        return chat_history
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating chat history summary: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )
+
+
+@router.put("/{conversation_id}/summary")
+def update_chat_history_summary(
+    conversation_id: uuid.UUID,
+    summary: str,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+    ),
+) -> schemas.ChatHistory:
+    """
+    Manually update the summary for a chat history by ID
+    """
+    try:
+        chat_history = crud.chat.get_by_id(db, id=conversation_id)
+        if chat_history is None or chat_history.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Chat history not found"
+            )
+        
+        chat_history.set_summary(summary)
+        db.commit()
+        db.refresh(chat_history)
+        return chat_history
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chat history summary: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )
+
+
 @router.post("/{conversation_id}/messages", response_model=schemas.ChatItem)
 def add_chat_message(
     conversation_id: uuid.UUID,

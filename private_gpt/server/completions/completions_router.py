@@ -120,7 +120,7 @@ def create_chat_item(db: Session, sender: str, content: dict, conversation_id: u
     if not chat_history:
         raise ValueError(f"Chat history with ID {conversation_id} not found.")
     if not chat_history.title_generated:
-        chat_history.generate_title()
+        chat_history.generate_title(db)
     new_chat_item = crud.chat_item.create(db, obj_in=chat_item_create)
     return new_chat_item
 
@@ -402,14 +402,13 @@ async def prompt_completion(
             details={
                 "query": original_prompt,
                 "user": current_user.username,
-                "response_length": len(ai_response["choices"][0]["message"]["content"]) if ai_response["choices"] and ai_response["choices"][0]["message"] and ai_response["choices"][0]["message"]["content"] else 0,
+                "response": ai_response,
                 "document_status": document_status,
             },
             user_id=current_user.id,
             username=current_user.username,
             severity="INFO"
         )
-        
         return response
 
     except HTTPException:

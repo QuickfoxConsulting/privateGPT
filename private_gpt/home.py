@@ -25,6 +25,7 @@ from private_gpt.server.chat.chat_service import ChatService, CompletionGen
 from private_gpt.server.chunks.chunks_service import Chunk, ChunksService
 from private_gpt.server.ingest.ingest_service import IngestService
 from private_gpt.settings.settings import settings
+from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.ui.images import logo_svg
 from private_gpt.ui.common import Source
 from private_gpt.constants import UPLOAD_DIR
@@ -117,13 +118,13 @@ class Home:
             case "Query Docs":
                 query_stream = self._chat_service.stream_chat(
                     messages=all_messages,
-                    use_context=True,
+                    use_context=ChatMode.SEARCH.value,
                 )
                 yield from yield_deltas(query_stream)
             case "LLM Chat":
                 llm_stream = self._chat_service.stream_chat(
                     messages=all_messages,
-                    use_context=False,
+                    use_context=ChatMode.CHAT.value,
                 )
                 yield from yield_deltas(llm_stream)
 
