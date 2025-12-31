@@ -584,6 +584,14 @@ class MilvusSettings(BaseModel):
     overwrite: bool = Field(
         True, description="Overwrite the previous collection schema if it exists."
     )
+    enable_hybrid: bool = Field(
+        False, description="Enable hybrid search in Milvus."
+    )
+    enable_sparse: bool = Field(
+        False, description="Enable sparse embeddings for hybrid search in Milvus."
+    )
+
+
 
 
 class RedisSettings(BaseModel):
@@ -603,6 +611,36 @@ class RedisSettings(BaseModel):
     db: int = Field(
         0,
         description="The Redis database number to use",
+    )
+
+
+class FAQSettings(BaseModel):
+    """FAQ configuration."""
+    enabled: bool = Field(
+        default=True,
+        description="Flag indicating if FAQ features are enabled or not.",
+    )
+
+
+class ChunkingSettings(BaseModel):
+    """Configuration for text chunking strategies."""
+    # Hierarchical splitting (Parent -> Child -> Leaf)
+    hierarchical_chunk_sizes: list[int] = Field(
+        default=[1024, 512, 256],
+        description="Chunk sizes for hierarchical splitting strategy (Parent -> Child -> Leaf).",
+    )
+    hierarchical_chunk_overlap: int = Field(
+        default=50,
+        description="Overlap between chunks in hierarchical splitting.",
+    )
+    # Global/fallback settings
+    chunk_size: int = Field(
+        default=512,
+        description="Default chunk size for non-hierarchical strategies.",
+    )
+    chunk_overlap: int = Field(
+        default=100,
+        description="Default chunk overlap.",
     )
 
 
@@ -631,6 +669,14 @@ class Settings(BaseModel):
     postgres: PostgresSettings | None = None
     clickhouse: ClickHouseSettings | None = None
     milvus: MilvusSettings | None = None
+    faq: FAQSettings = Field(
+        default_factory=lambda: FAQSettings(enabled=True),
+        description="FAQ configuration"
+    )
+    chunking: ChunkingSettings = Field(
+        default_factory=lambda: ChunkingSettings(),
+        description="Chunking configuration"
+    )
 
 
 """

@@ -7,3 +7,4 @@ from private_gpt.users.models.company import Company
 from private_gpt.users.models.department import Department
 from private_gpt.users.models.subscription import Subscription
 
+from private_gpt.users.models.integration import GoogleDriveAuth, GoogleDriveFile, WebsiteCrawlConfig, WebsiteCrawlPage, Integration

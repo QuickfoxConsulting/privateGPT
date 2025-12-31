@@ -92,8 +92,9 @@ def read_chat_history(
                 detail="Chat history not found"
             )
         paginated_chat_items_orm = (
-            chat_history_orm.chat_items 
-            .order_by(models.ChatItem.created_at.asc())  
+            db.query(models.ChatItem)
+            .filter(models.ChatItem.conversation_id == conversation_id)
+            .order_by(models.ChatItem.created_at.asc())
             .offset(skip)
             .limit(limit)
             .all()
@@ -290,6 +291,42 @@ async def create_chat_history_title(
             detail="Internal Server Error",
         )
 
+@router.put("/{conversation_id}/title", response_model=schemas.ChatHistory)
+def update_chat_history_title(
+    conversation_id: uuid.UUID,
+    title_data: schemas.ChatTitleUpdate,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+    ),
+):
+    """
+    Update the title of a chat history
+    """
+    try:
+        chat_history = crud.chat.update_title(
+            db=db,
+            conversation_id=conversation_id,
+            title=title_data.title,
+            user_id=current_user.id
+        )
+        
+        if chat_history is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Chat history not found"
+            )
+            
+        return chat_history
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chat history title: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )
+
 
 @router.post("/{conversation_id}/messages", response_model=schemas.ChatItem)
 def add_chat_message(
@@ -374,4 +411,3 @@ def rate_chat_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error",
         )
-

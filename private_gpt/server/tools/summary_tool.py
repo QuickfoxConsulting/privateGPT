@@ -33,17 +33,18 @@ DEFAULT_SUMMARIZE_PROMPT = (
     "---------------------\n\n"
     
     "### Document Citations\n"
-    "Format: `[page](document_name)`\n"
-    "Example: `[page 42](compliance_manual.pdf)` or `[Section 3.2](technical_spec.docx)`\n\n"
+    "Format: `[Page X](document_name)`\n"
+    "Example: `[Page 42](compliance_manual.pdf)` or `[Section 3.2](technical_spec.docx)`\n\n"
     
     "### Instructions\n"
     "1. Only use the provided context. Do not add external information or assumptions.\n"
     "2. Write in clear, technical, and neutral language. Focus strictly on factual accuracy.\n"
     "3. Use professional Markdown with clear section headers, bullets, and subheadings.\n"
-    "4. Support every claim with inline citations using the format `[page_number](document_name)`.\n"
+    "4. Support every claim with inline citations using the format `[Page X](document_name)`.\n"
     "5. Synthesize related points across the document into coherent themes.\n"
     "6. If context is missing, ambiguous, or contradictory, document it under 'Limitations'.\n"
     "7. Include all available metadata (e.g., version, dates) if referenced in the context.\n\n"
+    "8. If the document is empty or unreadable, state that clearly.\n\n"
     
     "### Response Format\n"
     "# Executive Summary\n"
@@ -56,15 +57,15 @@ DEFAULT_SUMMARIZE_PROMPT = (
     
     "# Key Findings\n"
     "## <Theme 1: Descriptive Title>\n"
-    "- Core finding with citation [page](document)\n"
+    "- Core finding with citation [Page X](document)\n"
     "- Supporting explanation or evidence\n\n"
     "## <Theme 2: Descriptive Title>\n"
     "- Insight or issue described\n"
-    "- Supporting facts or examples with citation [page](document)\n\n"
+    "- Supporting facts or examples with citation [Page X](document)\n\n"
     
     "# Supporting Evidence\n"
     "- Bullet list of key quotes, data points, or references\n"
-    "- Format each: \"Quote or data point\" — [page](document)\n\n"
+    "- Format each: \"Quote or data point\" — [Page X](document)\n\n"
     
     "# Limitations & Considerations\n"
     "- Scope constraints or omitted areas\n"
@@ -88,7 +89,7 @@ class DocumentSummaryTool(BaseTool):
         vector_store_component: VectorStoreComponent,
         callback_manager: Optional[CallbackManager] = None,
         tool_name_prefix: str = "summary",
-        citation_format: str = "[Document: {file_name}, Page {page}]",
+        citation_format: str = "[Page {page}]({file_name})", 
         similarity_top_k: int = 4,
         verbose: bool = False,
         max_retries: int = 3,

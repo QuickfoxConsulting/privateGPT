@@ -11,6 +11,8 @@ services:
       - ./models/:/app/models
       - ./media/:/app/private_gpt/media
       - ./root/.cache:/root/.cache
+      - ./private_gpt/:/app/private_gpt
+      - ./alembic/:/app/alembic
     ports:
       - "8000:8000"
     depends_on:
@@ -132,3 +134,22 @@ configs:
   qdrant_config:
     content: |
       log_level: INFO
+      storage:
+        # Performance optimizations
+        performance:
+          max_search_threads: 4
+          max_optimization_threads: 2
+        # Enable on-disk payload storage for memory efficiency
+        on_disk_payload: true
+      # HNSW index optimization
+      hnsw_index:
+        m: 16                      # Connections per layer (default: 16, higher = better recall but slower)
+        ef_construct: 200          # Build-time accuracy (default: 100, higher = better index quality)
+        full_scan_threshold: 10000 # Use HNSW for collections > 10k vectors
+        on_disk: false             # Keep index in RAM for speed
+      # Quantization for memory efficiency
+      quantization:
+        scalar:
+          type: int8
+          quantile: 0.99
+          always_ram: true         # Keep quantized vectors in RAM

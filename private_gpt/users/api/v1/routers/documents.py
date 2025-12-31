@@ -505,6 +505,77 @@ async def verify_documents(
             detail="Failed to verify document"
         )
 
+@router.post('/verify')
+async def verify_documents(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    checker_in: schemas.DocumentUpdate,
+    doc_manager: DocumentManager = Depends(deps.get_document_manager),
+    log_audit: models.Audit = Depends(deps.get_audit_logger),
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"], Role.ADMIN['name']],
+    )
+):
+    """Verify (approve/reject) a document."""
+    try:
+        logger.info(f"VERIFYING DOCUMENT::: {checker_in.id}")
+        document = crud.documents.get_by_id(db, id=checker_in.id)
+        if not document or not document.current_version:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document or version not found"
+            )
+
+        if ENABLE_MAKER_CHECKER:
+            if document.verified:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Document already verified"
+                )
+            
+            if not current_user.checker:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not authorized as checker"
+                )
+            
+            if document.uploaded_by == current_user.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot verify own upload"
+                )
+
+        temp_path = Path(document.current_version.file_path)
+        if not temp_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Document file not found"
+            )
+
+        background_tasks.add_task(
+            verify_document_background,
+            document_id=checker_in.id,
+            status=checker_in.status,
+            current_user_id=current_user.id,
+            doc_manager=doc_manager,
+            log_audit=log_audit,
+            request=request,
+            strategy=ChunkingStrategy.LATE_CHUNKING
+        )
+
+        return {"status": "verification_started", "message": "Document verification has been started"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying document: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify document"
+        )
+
 
 @router.get('/documents/{filename}', response_model=schemas.DocumentFilePath)
 async def get_document_by_filename(
@@ -586,316 +657,6 @@ async def get_document_by_filename(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get document by filename"
         )
-
-# @router.post('/upload', response_model=schemas.Document)
-# async def upload_documents(
-#     request: Request,
-#     documents: schemas.DocumentUpload = Depends(),
-#     log_audit: models.Audit = Depends(deps.get_audit_logger),
-#     db: Session = Depends(deps.get_db),
-#     current_user: models.User = Security(
-#         deps.get_current_user,
-#         scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
-#     )
-# ):
-#     """Upload the documents."""
-#     try:
-#         file = documents.file
-#         original_filename = file.filename
-        
-#         if not original_filename:
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST,
-#                 detail="No file name provided",
-#             )
-
-#         # Validate file
-#         is_valid, error_message = await validate_file(file)
-#         if not is_valid:
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST,
-#                 detail=error_message,
-#             )
-
-#         # Generate safe filename with original extension
-#         file_extension = Path(original_filename).suffix
-#         temp_filename = f"{uuid.uuid4()}{file_extension}"
-#         upload_path = Path(UNCHECKED_DIR) / temp_filename
-
-#         # Save file
-#         if not await save_upload_file(file, upload_path):
-#             raise HTTPException(
-#                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#                 detail="Failed to save file",
-#             )
-
-#         try:
-#             document = await create_documents(
-#                 db=db,
-#                 file_name=original_filename,
-#                 current_user=current_user,
-#                 departments=documents, 
-#                 log_audit=log_audit,
-#             )
-
-#             # Store the temporary path in the document version
-#             if document.current_version:
-#                 version_update = schemas.DocumentVersionUpdate(
-#                     file_path=str(upload_path),
-#                     reviewed_at=datetime.now(),
-#                     reviewed_by=current_user.id,
-#                 )
-#                 crud.document_versions.update(
-#                     db, 
-#                     db_obj=document.current_version, 
-#                     obj_in=version_update
-#                 )
-
-#             logger.info(
-#                 f"{original_filename} uploaded by {current_user.username} "
-#             )
-
-#             # Auto-approve if maker-checker is disabled
-#             if not ENABLE_MAKER_CHECKER:
-#                 checker_in = schemas.DocumentUpdate(
-#                     id=document.id,
-#                     status=MakerCheckerStatus.APPROVED.value
-#                 )
-#                 await verify_documents(
-#                     request=request,
-#                     checker_in=checker_in,
-#                     db=db,
-#                     log_audit=log_audit,
-#                     current_user=current_user
-#                 )
-#             return document
-
-#         except Exception:
-#             # Cleanup on failure
-#             upload_path.unlink(missing_ok=True)
-#             raise
-
-#     except HTTPException:
-#         raise
-
-#     except Exception as e:
-#         logger.error(f"Error uploading file: {str(e)}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="Internal Server Error: Unable to upload file.",
-#         )
-
-# @router.post('/verify')
-# async def verify_documents(
-#     request: Request,
-#     checker_in: schemas.DocumentUpdate,
-#     log_audit: models.Audit = Depends(deps.get_audit_logger),
-#     db: Session = Depends(deps.get_db),
-#     current_user: models.User = Security(
-#         deps.get_current_user,
-#         scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
-#     )
-# ):
-#     """Verify (approve/reject) a document version."""
-#     try:
-#         logger.info("verifying documents.......")
-#         document = crud.documents.get_by_id(db, id=checker_in.id)
-#         if not document:
-#             raise HTTPException(
-#                 status_code=status.HTTP_404_NOT_FOUND,
-#                 detail="Document not found",
-#             )
-        
-#         current_version = document.current_version
-#         if not current_version:
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST, 
-#                 detail="Document has no versions"
-#             )
-        
-#         source_path = Path(current_version.file_path)
-#         if not source_path.exists():
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST,
-#                 detail="Document file not found",
-#             )
-
-#         if ENABLE_MAKER_CHECKER:
-#             if document.verified:
-#                 raise HTTPException(
-#                     status_code=status.HTTP_400_BAD_REQUEST,
-#                     detail="Document already verified!",
-#                 )
-            
-#             if not current_user.checker:
-#                 raise HTTPException(
-#                     status_code=status.HTTP_400_BAD_REQUEST,
-#                     detail="You are not authorized as a checker",
-#                 )
-        
-#             if document.uploaded_by == current_user.id:
-#                 raise HTTPException(
-#                     status_code=status.HTTP_400_BAD_REQUEST,
-#                     detail="Cannot verify document you uploaded",
-#                 )
-
-#         if checker_in.status == MakerCheckerStatus.APPROVED.value:
-#             # Prepare new path with version number and original extension
-#             upload_dir = Path(UPLOAD_DIR)
-#             # upload_dir = Path(UPLOAD_DIR) / str(document.id)
-#             file_extension = Path(document.filename).suffix
-#             new_path = upload_dir / f"{Path(document.filename).stem}_v{current_version.version_number}{file_extension}"
-
-#             # Move file to final location
-#             if not await move_file_safely(source_path, new_path):
-#                 raise HTTPException(
-#                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#                     detail="Failed to move approved file",
-#                 )
-
-#             # Update version and document
-#             version_update = schemas.DocumentVersionUpdate(
-#                 status=MakerCheckerStatus.APPROVED,
-#                 action_type=MakerCheckerActionType.UPDATE,
-#                 reviewed_by=current_user.id,
-#                 reviewed_at=datetime.now(),
-#                 file_path=str(new_path),
-#             )
-#             crud.document_versions.update(db, db_obj=current_version, obj_in=version_update)
-            
-#             checker = schemas.DocumentCheckerUpdate(
-#                 is_enabled=True,
-#                 verified_at=datetime.now(),
-#                 verified_by=current_user.id,
-#                 verified=True,
-#             )
-#             crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            
-#             log_audit(
-#                 model='Document',
-#                 action='update',
-#                 details={
-#                     'filename': document.filename,
-#                     'approved': str(current_user.id)
-#                 },
-#                 user_id=current_user.id
-#             )
-#             return await ingest(request, new_path, document.tags)
-            
-#         elif checker_in.status == MakerCheckerStatus.REJECTED.value:
-#             # Delete rejected file
-#             source_path.unlink(missing_ok=True)
-            
-#             # Update version and document
-#             version_update = schemas.DocumentVersionUpdate(
-#                 action_type=MakerCheckerActionType.DELETE,
-#                 status=MakerCheckerStatus.REJECTED,
-#                 reviewed_by=current_user.id,
-#                 reviewed_at=datetime.now(),
-#             )
-#             crud.document_versions.update(db, db_obj=current_version, obj_in=version_update)
-
-#             checker = schemas.DocumentCheckerUpdate(
-#                 is_enabled=False,
-#                 verified_at=datetime.now(),
-#                 verified_by=current_user.id,
-#                 verified=False,
-#             )
-#             crud.documents.update(db=db, db_obj=document, obj_in=checker)
-#             crud.documents.remove(db, id=document.id)
-            
-#             log_audit(
-#                 model='Document',
-#                 action='update',
-#                 details={
-#                     'filename': document.filename,
-#                     'rejected': str(current_user.id)
-#                 },
-#                 user_id=current_user.id
-#             )
-#             return {"status": "rejected"}
-#         else:
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST,
-#                 detail="Invalid status. Cannot change status to PENDING",
-#             )
-
-#     except HTTPException:
-#         raise
-
-#     except Exception as e:
-#         logger.error(f"Error verifying document: {str(e)}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="Internal Server Error: Unable to verify document",
-#         )
-    
-
-
-# @router.post('/upload-url', response_model=schemas.Document)
-# async def upload_documents(
-#     request: Request,
-#     url: schemas.UrlUpload,
-#     log_audit: models.Audit = Depends(deps.get_audit_logger),
-#     db: Session = Depends(deps.get_db),
-#     current_user: models.User = Security(
-#         deps.get_current_user,
-#         scopes=[Role.ADMIN["name"],
-#                 Role.SUPER_ADMIN["name"], 
-#                 Role.OPERATOR["name"]],
-#     )
-# ):
-#     """Upload the documents."""
-#     try:
-#         category = url.category
-#         if  url.url is None:
-#             raise HTTPException(
-#                 status_code=status.HTTP_400_BAD_REQUEST,
-#                 detail="No URL is provided",
-#             )
-
-#         document = await create_url_documents(
-#             db=db,
-#             file_name=url.url,
-#             category=category,
-#             current_user=current_user,
-#             departments=url.departments_ids,
-#             log_audit=log_audit,
-#         )
-#         checker = schemas.DocumentCheckerUpdate(
-#             action_type=MakerCheckerActionType.UPDATE,
-#             status=MakerCheckerStatus.APPROVED,
-#             is_enabled=True,
-#             verified_at=datetime.now(),
-#             verified_by=current_user.id,
-#             verified=True,
-#         )
-#         crud.documents.update(db=db, db_obj=document, obj_in=checker)
-        
-#         log_audit(
-#             model='Document',
-#             action='update',
-#             details={
-#                 'filename': f'{url.url}',
-#                 'approved': f'{current_user.id}'
-#             },
-#             user_id=current_user.id
-#         )
-#         return await ingest_url(request, url.url)
-#         # return document
-
-#     except HTTPException:
-#         print(traceback.print_exc())
-#         raise
-
-#     except Exception as e:
-#         print(traceback.print_exc())
-#         logger.error(f"There was an error uploading the file(s): {str(e)}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="Internal Server Error: Unable to upload file.",
-#         )
-
 
 @router.post('/document_update', response_model=schemas.DocumentList)
 def update_document_associations(

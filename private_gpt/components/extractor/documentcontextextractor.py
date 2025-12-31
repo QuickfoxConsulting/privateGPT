@@ -134,12 +134,12 @@ class DocumentContextExtractor(BaseExtractor):
         return encoding.decode(truncated_tokens)
 
     async def _agenerate_node_context(
-    self,
-    node: Node,
-    metadata: MetadataDict,
-    document: Document,
-    prompt: str,
-    key: str
+        self,
+        node: Node,
+        metadata: MetadataDict,
+        document: Document,
+        prompt: str,
+        key: str
     ) -> MetadataDict:
         """
         Generate context for a node using LLM with retry logic.

@@ -59,7 +59,7 @@ llm:
 rag:
   similarity_top_k: 10
   #This value controls how many "top" documents the RAG returns to use in the context.
-  similarity_value: 0.65
+  similarity_value: 0.40
   #This value is disabled by default.  If you enable this settings, the RAG will only use articles that meet a certain percentage score.
   rerank:
     enabled: true
@@ -88,10 +88,17 @@ embedding:
   # Should be matching the value above in most cases
   mode: huggingface
   ingest_mode: simple
-  embed_dim: 768 # 768 is for nomic-ai/nomic-embed-text-v1.5
+  embed_dim: 1024 # 768 is for nomic-ai/nomic-embed-text-v1.5
+
+# Chunking strategy for document ingestion
+# Options: late_chunking, sentence_window, semantic, hierarchical
+chunking:
+  strategy: hierarchical  # Use hierarchical for multi-level chunks with auto-merging
+  # Hierarchical creates 3 levels: 2048 tokens (parent) -> 512 tokens (child) -> 128 tokens (leaf)
+  # AutoMergingRetriever will merge child chunks into parents when >50% children are retrieved
 
 huggingface:
-  embedding_hf_model_name: BAAI/bge-base-en-v1.5
+  embedding_hf_model_name: Qwen/Qwen3-Embedding-0.6B
   access_token: ${HF_TOKEN:}
   # Warning: Enabling this option will allow the model to download and execute code from the internet.
   # Nomic AI requires this option to be enabled to use the model, be aware if you are using a different model.
@@ -101,12 +108,14 @@ vectorstore:
   database: qdrant
 
 nodestore:
-  database: postgres
+  database: simple
 
-milvus:
-  uri: local_data/private_gpt/milvus/milvus_local.db
-  collection_name: milvus_db
-  overwrite: false
+# milvus:
+#   uri: http://standalone:19530
+#   collection_name: private_gpt
+#   overwrite: true
+#   enable_hybrid: true
+#   enable_sparse: true
 
 qdrant:
   path: http://qdrant:6333
@@ -153,8 +162,10 @@ gemini:
   model: models/gemini-pro
   embedding_model: models/embedding-001
 
-
 redis:
   host: redis
   port: 6379
   db: 0
+
+faq:
+  enabled: ${ENABLE_FAQS:false}

@@ -3,11 +3,14 @@ import typing
 
 from injector import inject, singleton
 from llama_index.core.indices.vector_store import VectorIndexRetriever, VectorStoreIndex
+from llama_index.core.retrievers import AutoMergingRetriever
 from llama_index.core.vector_stores.types import (
     FilterCondition,
+    FilterOperator,
     MetadataFilter,
     MetadataFilters,
     VectorStore,
+    BasePydanticVectorStore
 )
 
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
@@ -126,6 +129,8 @@ class VectorStoreComponent:
                         client=client,
                         # aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
+                        vector_name="text-dense",
+                        sparse_vector_name="text-sparse-new",
                         enable_hybrid=True, 
                         fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
                         # batch_size=20,
@@ -158,6 +163,8 @@ class VectorStoreComponent:
                                 dim=settings.embedding.embed_dim,
                                 collection_name="make_this_parameterizable_per_api_call",
                                 overwrite=True,
+                                enable_hybrid=True,
+                                enable_sparse=True,
                             ),
                         )
 
@@ -170,6 +177,8 @@ class VectorStoreComponent:
                                 token=settings.milvus.token,
                                 collection_name=settings.milvus.collection_name,
                                 overwrite=settings.milvus.overwrite,
+                                enable_hybrid=settings.milvus.enable_hybrid,
+                                enable_sparse=settings.milvus.enable_sparse,
                             ),
                         )
             case "clickhouse":
@@ -211,7 +220,37 @@ class VectorStoreComponent:
         index: VectorStoreIndex,
         context_filter: ContextFilter | None = None,
         similarity_top_k: int = 2,
-    ) -> VectorIndexRetriever:
+    ) -> VectorIndexRetriever | AutoMergingRetriever:
+        """Get retriever, automatically using AutoMergingRetriever for hierarchical chunks."""
+        
+        # Check if index contains hierarchical nodes by looking for parent relationships
+        has_hierarchical_nodes = False
+        try:
+            # Sample a few nodes to check for hierarchical structure
+            docstore = index.storage_context.docstore
+            if docstore and hasattr(docstore, 'docs') and docstore.docs:
+                sample_nodes = list(docstore.docs.values())[:5]
+                for node in sample_nodes:
+                    # Hierarchical nodes have parent_node relationship
+                    if hasattr(node, 'relationships') and node.relationships:
+                        from llama_index.core.schema import NodeRelationship
+                        if NodeRelationship.PARENT in node.relationships:
+                            has_hierarchical_nodes = True
+                            break
+        except Exception as e:
+            logger.debug(f"Could not detect hierarchical nodes: {e}")
+        
+        # Use AutoMergingRetriever for hierarchical chunks
+        if has_hierarchical_nodes:
+            logger.info("Detected hierarchical chunks, using AutoMergingRetriever")
+            return self.get_auto_merging_retriever(
+                index=index,
+                context_filter=context_filter,
+                similarity_top_k=similarity_top_k * 2,  # Retrieve more leaf chunks
+                simple_ratio_thresh=0.5,
+            )
+        
+        # Standard retriever for non-hierarchical chunks
         return VectorIndexRetriever(
             index=index,
             similarity_top_k=similarity_top_k,
@@ -221,9 +260,9 @@ class VectorStoreComponent:
                 if self.settings.vectorstore.database != "qdrant"
                 else None
             ),
-            sparse_top_k=12, 
+            sparse_top_k=20,              # Increased from 12 for better BM25 recall
             vector_store_query_mode="hybrid",
-            alpha=0.5,
+            alpha=0.7,                     # Increased from 0.5 (70% vector, 30% BM25 - better for semantic search)
         )
     
     def file_vector_retriever(
@@ -231,12 +270,53 @@ class VectorStoreComponent:
         index: VectorStoreIndex, 
         file_name: str,
         similarity_top_k: int = 2,
-    )-> VectorIndexRetriever:
+    ) -> VectorIndexRetriever | AutoMergingRetriever:
+        """Get file-specific retriever, automatically using AutoMergingRetriever for hierarchical chunks."""
+        
+        # Check for hierarchical nodes (same logic as get_retriever)
+        has_hierarchical_nodes = False
+        try:
+            docstore = index.storage_context.docstore
+            if docstore and hasattr(docstore, 'docs') and docstore.docs:
+                sample_nodes = list(docstore.docs.values())[:5]
+                for node in sample_nodes:
+                    if hasattr(node, 'relationships') and node.relationships:
+                        from llama_index.core.schema import NodeRelationship
+                        if NodeRelationship.PARENT in node.relationships:
+                            has_hierarchical_nodes = True
+                            break
+        except Exception as e:
+            logger.debug(f"Could not detect hierarchical nodes: {e}")
+        
         filters = MetadataFilters(
             filters=[
-                MetadataFilter(key="file_name", value=f"{file_name}", condition=FilterCondition.OR),
-            ]
+                MetadataFilter(key="file_name", value=f"{file_name}", operator=FilterOperator.EQ),
+                MetadataFilter(key="document_id", value=f"{file_name}", operator=FilterOperator.EQ),
+            ],
+            condition=FilterCondition.OR
         )
+        
+        if has_hierarchical_nodes:
+            logger.info("Detected hierarchical chunks for file retrieval, using AutoMergingRetriever")
+            base_retriever = VectorIndexRetriever(
+                index=index,
+                filters=(
+                    filters
+                    if self.settings.vectorstore.database != "qdrant"
+                    else None
+                ),
+                similarity_top_k=similarity_top_k * 2,
+                sparse_top_k=20,
+                vector_store_query_mode="hybrid",
+                alpha=0.7,
+            )
+            return AutoMergingRetriever(
+                base_retriever,
+                storage_context=index.storage_context,
+                simple_ratio_thresh=0.5,
+                verbose=True,
+            )
+        
         return VectorIndexRetriever(
             index=index,
             filters=(
@@ -245,9 +325,48 @@ class VectorStoreComponent:
                 else None
             ),
             similarity_top_k=similarity_top_k,
-            sparse_top_k=12,
+            sparse_top_k=20,              # Increased from 12
             vector_store_query_mode="hybrid",
-            alpha=0.5,
+            alpha=0.7,                     # Increased from 0.5
+        )
+    
+    def get_auto_merging_retriever(
+        self,
+        index: VectorStoreIndex,
+        context_filter: ContextFilter | None = None,
+        similarity_top_k: int = 12,
+        simple_ratio_thresh: float = 0.5,
+    ) -> AutoMergingRetriever:
+        """Create AutoMergingRetriever for hierarchical chunk merging.
+        
+        This retriever intelligently merges child chunks into parent chunks
+        when enough children from the same parent are retrieved.
+        
+        Args:
+            index: Vector store index
+            context_filter: Optional document filter
+            similarity_top_k: Number of chunks to retrieve initially
+            simple_ratio_thresh: Ratio of children needed to merge into parent (0.5 = 50%)
+        """
+        base_retriever = VectorIndexRetriever(
+            index=index,
+            similarity_top_k=similarity_top_k,
+            doc_ids=context_filter.docs_ids if context_filter else None,
+            filters=(
+                _doc_id_metadata_filter(context_filter)
+                if self.settings.vectorstore.database != "qdrant"
+                else None
+            ),
+            sparse_top_k=20,
+            vector_store_query_mode="hybrid",
+            alpha=0.7,
+        )
+        
+        return AutoMergingRetriever(
+            base_retriever,
+            storage_context=index.storage_context,
+            simple_ratio_thresh=simple_ratio_thresh,
+            verbose=True,
         )
 
     def close(self) -> None:

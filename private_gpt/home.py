@@ -1,35 +1,26 @@
 """This file should be imported only and only if you want to run the UI locally."""
-from private_gpt.users.core import security
-from private_gpt.users.api import deps
-from private_gpt.users import crud, models, schemas
+
 import time
+import logging
+import itertools
+from pathlib import Path
+from pydantic import BaseModel
+from collections.abc import Iterable
+from typing import Any, List, Literal
 from fastapi import File, Request, UploadFile
 from fastapi.responses import StreamingResponse
-import itertools
-import logging
-from collections.abc import Iterable
-from pathlib import Path
-from typing import Any, List, Literal
 
-from fastapi import APIRouter, Depends, Request, FastAPI, Body, status, HTTPException, Security
-from fastapi.responses import JSONResponse
-from gradio.themes.utils.colors import slate  # type: ignore
 from injector import inject, singleton
+from fastapi import APIRouter, Depends, Request, Body, status, HTTPException, Security
 from llama_index.llms import ChatMessage, ChatResponse, MessageRole
-from pydantic import BaseModel
 
-from private_gpt.server.ingest.model import IngestedDoc
-from private_gpt.constants import PROJECT_ROOT_PATH
 from private_gpt.di import global_injector
-from private_gpt.server.chat.chat_service import ChatService, CompletionGen
-from private_gpt.server.chunks.chunks_service import Chunk, ChunksService
-from private_gpt.server.ingest.ingest_service import IngestService
 from private_gpt.settings.settings import settings
-from private_gpt.ui.images import logo_svg
-from private_gpt.ui.common import Source
-from private_gpt.constants import UPLOAD_DIR
-
-
+from private_gpt.constants import PROJECT_ROOT_PATH
+from private_gpt.server.ingest.model import IngestedDoc
+from private_gpt.server.ingest.ingest_service import IngestService
+from private_gpt.server.chunks.chunks_service import Chunk, ChunksService
+from private_gpt.server.chat.chat_service import ChatService, CompletionGen
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +135,6 @@ class Home:
         files = set()
         for ingested_document in self._ingest_service.list_ingested():
             if ingested_document.doc_metadata is None:
-                # Skipping documents without metadata
                 continue
             file_name = ingested_document.doc_metadata.get(
                 "file_name", "[FILE NAME MISSING]"

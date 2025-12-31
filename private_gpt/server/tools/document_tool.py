@@ -30,7 +30,7 @@ class DocumentSpecificTool(BaseTool):
         node_postprocessors: Optional[List[BaseNodePostprocessor]] = None,
         callback_manager: Optional[CallbackManager] = None,
         tool_name_prefix: str = "doc",
-        citation_format: str = "[Document: {file_name}, Page {page}]",
+        citation_format: str = "[Page {page}]({file_name})", 
         similarity_top_k: int = 4,
         verbose: bool = False,
         max_retries: int = 3,
@@ -56,8 +56,6 @@ class DocumentSpecificTool(BaseTool):
         self._description = self._generate_tool_description(file_name)
 
         self.document_retriever = self._create_document_retriever()
-
-        
 
         if self.verbose:
             logger.info(f"[INIT] Document tool created for '{self.file_name}' with tool name '{self._name}'")
@@ -103,12 +101,11 @@ class DocumentSpecificTool(BaseTool):
                 "{context_str}\n"
                 "---------------------\n"
                 "Instructions:\n"
-                "1. Base the response solely on the document content.\n"
+                "1. Base the response solely on the document content. Do not use outside knowledge.\n"
                 "2. Organize complex answers into structured sections.\n"
-                f"3. Cite like: {self.citation_format.format(file_name=self.file_name, page='X')}\n"
-                "4. If data is missing, explicitly say so.\n"
-                "5. Add metadata when relevant (page, section, etc).\n"
-                "6. Synthesize when multiple contexts apply.\n\n"
+                f"3. Cite your sources using Markdown format: {self.citation_format.format(file_name=self.file_name, page='X')}\n"
+                "4. If data is missing or the answer is not in the context, explicitly say 'I cannot find this information in the document'.\n"
+                "5. Be precise and avoid hallucination.\n\n"
                 "Query: {query_str}\n\n"
                 "Comprehensive Answer:"
             )

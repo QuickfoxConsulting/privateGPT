@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \  
     libcairo2 \     
     libasound2 \ 
+    zlib1g-dev \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install poetry
@@ -35,19 +36,19 @@ ENV PATH="/root/.local/bin:$PATH"
 ENV PATH=".venv/bin/:$PATH"
 # https://python-poetry.org/docs/configuration/#virtualenvsin-project
 ENV POETRY_VIRTUALENVS_IN_PROJECT=true
+ENV POETRY_HTTP_TIMEOUT=600
 
 FROM base AS dependencies
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
-ARG POETRY_EXTRAS="vector-stores-qdrant llms-ollama embeddings-huggingface llms-gemini embeddings-gemini storage-nodestore-postgres"
+ARG POETRY_EXTRAS="vector-stores-qdrant embeddings-huggingface llms-gemini embeddings-gemini storage-nodestore-postgres"
 RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
 RUN playwright install 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
 # ARG HF_TOKEN="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"
 ARG HF_TOKEN
-ENV HF_TOKEN=$HF_TOKEN
-# ENV HF_TOKEN=${HF_TOKEN}
+ENV HF_TOKEN=${HF_TOKEN}
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
@@ -89,6 +90,10 @@ alembic upgrade 0c3bba0d99f7\n\
 alembic upgrade d06186f6137d\n\
 alembic upgrade b3579174f52d\n\
 alembic upgrade 4aae9ee1ebd1\n\
+alembic upgrade 93338be47304\n\
+alembic upgrade aa67a3d40eb8\n\
+alembic upgrade 4ab215adb170\n\
+alembic upgrade efd1005423e3\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
@@ -97,6 +102,6 @@ playwright install \n\
 \n\
 echo "Starting FastAPI server"\n\
 echo "Starting PrivateGPT"\n\
-PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 4' > /app/startup.sh && chmod +x /app/startup.sh
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
 
 ENTRYPOINT ["/app/startup.sh"]

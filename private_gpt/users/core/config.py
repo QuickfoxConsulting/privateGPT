@@ -34,16 +34,23 @@ class Settings(BaseSettings):
     LDAP_SERVER: str
     LDAP_ENABLE: bool
     ENABLE_MAKER_CHECKER: bool
+    CACHE_ENABLE: bool
 
     HF_TOKEN: str
     SERPER_API: str
     LLAMA_PARSE: str
     VECTOR_DB: str
+    GEMINI_API_KEY: str
+    INTEGRATION_ENCRYPTION_KEY: str
+    API_BASE_URL: Optional[str] = "http://localhost:8000"
+    FRONTEND_BASE_URL: Optional[str] = "http://localhost:3000"
 
     REDIS_HOST: str
     REDIS_PORT: str
     REDIS_PASSWORD: str
     REDIS_DB: str
+
+    ENABLE_FAQS: bool
     
     class Config:
         case_sensitive = True

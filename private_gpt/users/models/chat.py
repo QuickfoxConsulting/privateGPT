@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from typing import List, Dict, Any, Optional, Union, Literal
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from sqlalchemy.orm import relationship, Session
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 class ChatContentSchema(BaseModel):
     text: str = Field(..., description="The text content of the message")
     
-    class Config:
-        extra = "allow" 
+    model_config = ConfigDict(extra="allow")
 
 class Rating(PythonEnum):
     """User feedback ratings for chat messages"""
@@ -54,8 +53,7 @@ class ChatHistory(Base):
         "ChatItem", 
         back_populates="chat_history", 
         cascade="save-update, merge, delete",
-        order_by="ChatItem.created_at.desc()",
-        lazy="dynamic",
+        order_by="ChatItem.created_at.asc()", # Chronological order is standard for history
     )
     
     title_generated = Column(Boolean, default=False)
@@ -70,25 +68,29 @@ class ChatHistory(Base):
         if self.title_generated:
             return
             
+        # Since chat_items is not dynamic, this is a list access.
+        # Ensure we filter for 'user' sender.
         user_chat_items = [item for item in self.chat_items if item.sender == "user"]
         
         if user_chat_items:
             try:
+                # Sort by creation time to ensure we get the absolute first message
+                user_chat_items.sort(key=lambda x: x.created_at)
                 first_message_content = user_chat_items[0].content
+                
+                title_text = "New Chat"
                 if isinstance(first_message_content, dict) and "text" in first_message_content:
-                    text = first_message_content["text"]
-                    self.title = text[:50] + "..." if len(text) > 50 else text
+                    title_text = first_message_content["text"]
                 elif isinstance(first_message_content, str):
-                    self.title = first_message_content[:50] + "..." if len(first_message_content) > 50 else first_message_content
-                else:
-                    self.title = "New Chat"
+                    title_text = first_message_content
+                
+                self.title = title_text[:50] + "..." if len(title_text) > 50 else title_text
+                self.title_generated = True
             except (KeyError, TypeError, IndexError) as e:
                 logger.warning(f"Error generating title: {str(e)}")
-                self.title = "New Chat"
-        else:
-            self.title = "New Chat"
-            
-        self.title_generated = True
+                # Don't set title_generated=True here so we can retry? 
+                # Or set it to prevent infinite retries on bad data.
+                self.title = "New Chat" # Fallback
     
     def soft_delete(self) -> None:
         """Mark the chat history as deleted without removing from database"""
@@ -120,14 +122,15 @@ class ChatHistory(Base):
         if not self.chat_items:
             return None
         
-        first_message = min(self.chat_items, key=lambda x: x.created_at)
-        last_message = max(self.chat_items, key=lambda x: x.created_at)
+        # chat_items is already ordered by created_at.asc()
+        first_message = self.chat_items[0]
+        last_message = self.chat_items[-1]
         
         return (last_message.created_at - first_message.created_at).total_seconds()
     
     def __repr__(self) -> str:
         """Returns string representation of model instance"""
-        return f"<ChatHistory conversation_id={self.conversation_id} title={self.title!r} messages={len(self.chat_items)}>"
+        return f"<ChatHistory conversation_id={self.conversation_id} title={self.title!r}>"
 
 
 class ChatItem(Base):
@@ -138,7 +141,7 @@ class ChatItem(Base):
     
     sender = Column(String(225), nullable=False, index=True)
     content = Column(JSONB, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)  # Added index for ordering
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     rating = Column(SQLAlchemyEnum(Rating), nullable=True)
     status = Column(SQLAlchemyEnum(MessageStatus), default=MessageStatus.DELIVERED)
@@ -153,7 +156,7 @@ class ChatItem(Base):
     chat_history = relationship("ChatHistory", back_populates="chat_items")
     __table_args__ = (
         Index('idx_chat_items_sender', 'conversation_id', 'sender'),
-        Index('idx_chat_items_created', 'conversation_id', 'created_at'),  # New index for ordering
+        Index('idx_chat_items_created', 'conversation_id', 'created_at'),
     )
     
     def validate_content(self) -> bool:
@@ -196,6 +199,17 @@ class ChatItem(Base):
 @event.listens_for(ChatItem, "before_delete")
 def log_chat_item_deletion(mapper, connection, target):
     logger.warning(f"Deleting ChatItem: {target}")
+
+@event.listens_for(ChatItem, "after_insert")
+def update_chat_history_title(mapper, connection, target):
+    """
+    Update title after insertion if not already generated.
+    Checks if the message is from the user and if the history title needs generation.
+    """
+    if target.sender == "user" and target.chat_history and not target.chat_history.title_generated:
+        target.chat_history.generate_title()
+        # Explicitly updating the history object might be needed depending on session state,
+        # but usually SQLAlchemy handles the dirty state update.
 
 
 def get_recent_chats(db: Session, user_id: int, limit: int = 10) -> List[ChatHistory]:

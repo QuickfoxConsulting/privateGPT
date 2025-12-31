@@ -24,6 +24,17 @@ from private_gpt.utils.eta import eta
 
 logger = logging.getLogger(__name__)
 
+def sync_transform_file_into_documents(
+    file_name: str, file_data: Path, file_metadata: dict[str, Any] | None = None
+) -> List[Document]:
+    import asyncio
+
+    return asyncio.run(
+        IngestionHelper.transform_file_into_documents(
+            file_name, file_data, file_metadata
+        )
+    )
+
 
 class BaseIngestComponent(abc.ABC):
     def __init__(
@@ -54,6 +65,10 @@ class BaseIngestComponent(abc.ABC):
 
     @abc.abstractmethod
     async def delete(self, doc_id: str) -> None:
+        pass
+
+    @abc.abstractmethod
+    async def delete_by_metadata(self, key: str, value: Any) -> None:
         pass
 
 
@@ -137,8 +152,15 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
     async def delete_doc_ids(self, doc_ids: list[str]) -> None:
         with self._index_thread_lock:
             try:
-                for docs in doc_ids:
-                    self._index.delete_ref_doc(docs, delete_from_docstore=True)
+                for doc_id in doc_ids:
+                    # Collect file names to delete from vector store directly as well
+                    ref_doc_info = self._index.docstore.get_ref_doc_info(doc_id)
+                    if ref_doc_info and ref_doc_info.metadata:
+                        file_name = ref_doc_info.metadata.get("file_name")
+                        if file_name:
+                            await self.delete_by_metadata("file_name", file_name)
+
+                    self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
                 logger.debug(f"Successfully deleted documents with doc_ids={doc_ids}")
 
                 # Save the index
@@ -146,6 +168,16 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
             except Exception as e:
                 logger.error(f"Failed to delete documents with doc_ids={doc_ids}: {str(e)}")
                 # raise
+
+    async def delete_by_metadata(self, key: str, value: Any) -> None:
+        """Delete documents from vector store by metadata filter."""
+        try:
+            from llama_index.core.vector_stores.types import MetadataFilter, MetadataFilters
+            filters = MetadataFilters(filters=[MetadataFilter(key=key, value=value)])
+            self._index.vector_store.delete_nodes(filters=filters)
+            logger.debug(f"Successfully deleted nodes with metadata {key}={value}")
+        except Exception as e:
+            logger.error(f"Failed to delete nodes with metadata {key}={value}: {str(e)}")
 
 class SimpleIngestComponent(BaseIngestComponentWithIndex):
     def __init__(
@@ -262,7 +294,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         file_metadata: dict[str, Any] | None = None,
     ) -> list[Document]:
         logger.info("Ingesting file_name=%s", file_name)
-        documents = IngestionHelper.transform_file_into_documents(
+        documents = sync_transform_file_into_documents(
             file_name, file_data, file_metadata
         )
         logger.info(
@@ -275,7 +307,7 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         documents = list(
             itertools.chain.from_iterable(
                 self._file_to_documents_work_pool.starmap(
-                    IngestionHelper.transform_file_into_documents, files
+                    sync_transform_file_into_documents, files
                 )
             )
         )
@@ -308,7 +340,8 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         return documents
 
     async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
-        pass
+        logger.info("Ingesting URL=%s", url)
+        return await self._save_docs(documents)
 
 class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
     """Parallelize the file ingestion (file reading, embeddings, and index insertion).
@@ -356,7 +389,7 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         # Running in a single (1) process to release the current
         # thread, and take a dedicated CPU core for computation
         documents = self._file_to_documents_work_pool.apply(
-            IngestionHelper.transform_file_into_documents, (file_name, file_data, file_metadata)
+            sync_transform_file_into_documents, (file_name, file_data, file_metadata)
         )
         logger.info(
             "Transformed file=%s into count=%s documents", file_name, len(documents)
@@ -368,9 +401,10 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         # Lightweight threads, used for parallelize the
         # underlying IO calls made in the ingestion
 
+        import asyncio
         documents = list(
             itertools.chain.from_iterable(
-                self._ingest_work_pool.starmap(self.ingest, files)
+                await asyncio.gather(*[self.ingest(*file) for file in files])
             )
         )
         return documents
@@ -409,8 +443,9 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         self._file_to_documents_work_pool.join()
         self._file_to_documents_work_pool.terminate()
 
-    def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
-        pass
+    async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
+        logger.info("Ingesting URL=%s", url)
+        return await self._save_docs(documents)
 
 
 class PipelineIngestComponent(BaseIngestComponentWithIndex):
@@ -591,7 +626,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         file_data: Path,
         file_metadata: dict[str, Any] | None = None,
     ) -> list[Document]:
-        documents = IngestionHelper.transform_file_into_documents(
+        documents = sync_transform_file_into_documents(
             file_name, file_data, file_metadata
         )
         self.doc_q.put(("process", file_name, documents))
@@ -602,7 +637,7 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         docs = []
         for file_name, file_data in eta(files):
             try:
-                documents = IngestionHelper.transform_file_into_documents(
+                documents = sync_transform_file_into_documents(
                     file_name, file_data
                 )
                 self.doc_q.put(("process", file_name, documents))
@@ -613,7 +648,10 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
         return docs
 
     async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
-        pass
+        logger.info("Ingesting URL=%s", url)
+        self.doc_q.put(("process", url, documents))
+        self._flush()
+        return documents
 
 def get_ingestion_component(
     storage_context: StorageContext,

@@ -4,7 +4,8 @@ import asyncio
 import logging
 from typing import Any, Dict
 from urllib.parse import urlparse
-from crawl4ai import AsyncWebCrawler
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai.async_configs import CacheMode
 from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.core.tools import BaseTool
@@ -37,12 +38,15 @@ class Crawl4AITool(BaseTool):
         """Async crawling logic using Crawl4AI."""
         try:
             async with AsyncWebCrawler(verbose=self.verbose) as crawler:
-                result = await crawler.arun(
-                    url=url,
+                config = CrawlerRunConfig(
                     word_count_threshold=10,
                     extraction_strategy="NoExtractionStrategy",
                     chunking_strategy="RegexChunking",
-                    bypass_cache=True
+                    cache_mode=CacheMode.BYPASS
+                )
+                result = await crawler.arun(
+                    url=url,
+                    config=config
                 )
                 if result.success and result.markdown:
                     content = re.sub(r'\n\s*\n', '\n\n', result.markdown)

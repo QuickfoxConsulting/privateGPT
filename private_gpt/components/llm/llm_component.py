@@ -218,23 +218,7 @@ class LLMComponent:
                         "Google Gemini dependencies not found, install with `poetry install --extras llms-gemini`"
                     ) from e
                 gemini_settings = settings.gemini
-                class GeminiMultimodalWrapper(Gemini):
-                    def __init__(self, model_name, api_key):
-                        super().__init__(model_name=model_name, api_key=api_key)
-                    def chat(self, text, image=None):
-                        from llama_index.core.llms import ChatMessage, MessageRole
-                        if image:
-                            msg = ChatMessage(
-                                role=MessageRole.USER,
-                                content={"parts": [text, image]}
-                            )
-                        else:
-                            msg = ChatMessage(
-                                role=MessageRole.USER,
-                                content=text
-                            )
-                        return super().chat([msg])
-                self.llm = GeminiMultimodalWrapper(
+                self.llm = Gemini(
                     model_name=gemini_settings.model, api_key=gemini_settings.api_key
                 )
             case "mock":

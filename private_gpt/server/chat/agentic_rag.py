@@ -1,9 +1,12 @@
 import asyncio
 import logging
-from typing import Any, List, Optional, Tuple, Dict, Set
+import json
+import re
+from typing import Any, List, Optional, Tuple, Dict, Set, Union
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.callbacks import CallbackManager, trace_method
+from llama_index.core.schema import TextNode
 from llama_index.core.chat_engine.types import (
     AgentChatResponse,
     BaseChatEngine,
@@ -27,14 +30,22 @@ from llama_index.core.settings import (
 from llama_index.core.types import Thread
 from llama_index.core.utilities.token_counting import TokenCounter
 
+from private_gpt.server.chat.citation_utils import CitationHelper
+from private_gpt.server.chat.rag_config import RAG_CONFIG
+from private_gpt.server.tools.document_tool import DocumentSpecificTool
+from private_gpt.server.tools.summary_tool import DocumentSummaryTool
+from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
+from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.server.chunks.chunks_service import ChunksService, Chunk
+from private_gpt.di import global_injector
+
 logger = logging.getLogger(__name__)
 
 # --- Prompt Templates ---
 
-# Combines ideas from both previous engines
 DEFAULT_CONTEXT_PROMPT_TEMPLATE = """
-You are a helpful and knowledgeable AI assistant.
-Your goal is to provide a comprehensive and accurate answer based *only* on the provided context documents.
+You are a helpful RAG (Retrieval-Augmented Generation) assistant.
+Your goal is to answer the user's question using the provided context documents as your primary source of information.
 
 **Original Question:**
 {original_question}
@@ -44,18 +55,25 @@ To gather information, the original question was broken down into these sub-ques
 {sub_questions_str}
 
 **Context Documents:**
-The following sections contain relevant information retrieved based on the sub-questions:
+The following sections contain relevant information retrieved based on the sub-questions. Each source is numbered:
 ---------------------
 {context_str}
 ---------------------
 
-**Instructions:**
-1.  Synthesize a single, comprehensive answer to the **Original Question**.
-2.  Use **ONLY** the information present in the **Context Documents** section above.
-3.  Do **NOT** use any prior knowledge or information outside the provided context.
-4.  If the context does not contain enough information to answer the original question fully, state what information is missing or cannot be found in the documents.
-5.  Cite relevant source document node IDs or filenames in square brackets (e.g., `[node_id_123]` or `[file_name.pdf]`) after the information they support, if the node ID or filename is available in the context metadata. When using information from a context document, always cite its node ID or filename inline.
-6.  Be detailed, clear, and well-organized in your response.
+**INSTRUCTIONS:**
+1.  **Prioritize Context**: Answer the **Original Question** primarily using the information present in the numbered **Context Documents** section above.
+2.  **Fill Gaps safely**: If the context doesn't fully answer the question, you may use your general knowledge to provide a complete answer, but you must clearly distinguish between what is in the documents and what is general knowledge.
+3.  **Mandatory Citations**: Whenever you use information from the context, you MUST cite your sources using the format `[N]` (e.g., `[1]`, `[2]`) immediately after the sentence or fact derived from that source.
+    - **IMPORTANT**: Use ONLY the `[N]` format. Do not create markdown links or append filenames to the citations.
+    - Correct: "The revenue grew by 5% [1]."
+    - Incorrect: "The revenue grew by 5% [1](Source.pdf)."
+    - Incorrect: "The revenue grew by 5%."
+4.  **Tone**: Be professional, helpful, and concise.
+
+**Response Structure:**
+- Start with a direct answer to the question.
+- Use bullet points for lists.
+- End with a citation-based summary if multiple sources are used.
 """
 
 # Standard condense prompt
@@ -88,13 +106,7 @@ class AgenticCondenseChatEngine(BaseChatEngine):
     """
     Agentic Condense Chat Engine.
 
-    Combines chat history condensation with query decomposition for RAG.
-    Flow:
-    1. Condense chat history + user message -> standalone query.
-    2. Decompose standalone query -> sub-queries.
-    3. Retrieve context for each sub-query.
-    4. Post-process retrieved nodes.
-    5. Synthesize response using LLM with context, history, and query info.
+    Combines chat history condensation, query decomposition, and dynamic tool routing for Advanced RAG.
     """
 
     def __init__(
@@ -111,6 +123,9 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         node_postprocessors: Optional[List[BaseNodePostprocessor]] = None,
         callback_manager: Optional[CallbackManager] = None,
         verbose: bool = False,
+        condense_timeout: float = None,
+        decompose_timeout: float = None,
+        retrieval_timeout: float = None,
     ):
         self._retriever = retriever
         self._llm = llm
@@ -134,6 +149,24 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
         self._token_counter = TokenCounter()
         self._verbose = verbose
+        
+        # Timeout configuration
+        self._condense_timeout = condense_timeout or RAG_CONFIG.query_processing.condense_timeout_seconds
+        self._decompose_timeout = decompose_timeout or RAG_CONFIG.query_processing.decompose_timeout_seconds
+        self._retrieval_timeout = retrieval_timeout or RAG_CONFIG.query_processing.retrieval_timeout_seconds
+        
+        # Chunks Service
+        self._chunks_service = global_injector.get(ChunksService)
+
+    def _get_default_system_prompt(self) -> str:
+        """Generate a balanced default system prompt for RAG."""
+        return (
+            "You are a dedicated RAG (Retrieval-Augmented Generation) assistant. "
+            "Your PRIMARY role is to retrieve and synthesize information from the user's uploaded documents. "
+            "ALWAYS prioritize the provided context. "
+            "However, if the context is insufficient, you may use your general knowledge to provide a helpful response, "
+            "but please indicate when information comes from outside the documents."
+        )
 
     @classmethod
     def from_defaults(
@@ -157,9 +190,8 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         llm = llm or llm_from_settings_or_context(Settings, service_context)
 
         chat_history = chat_history or []
-        # Adjust memory token limit calculation if needed, considering prompt complexity
         memory = memory or ChatMemoryBuffer.from_defaults(
-            chat_history=chat_history, token_limit=llm.metadata.context_window * 0.7 # Conservative estimate
+            chat_history=chat_history, token_limit=llm.metadata.context_window * 0.7 
         )
 
         return cls(
@@ -178,8 +210,72 @@ class AgenticCondenseChatEngine(BaseChatEngine):
             system_prompt=system_prompt,
             verbose=verbose,
         )
+    
+    # --- Tool Routing ---
+    
+    def _detect_specific_document_intent(self, query: str) -> Optional[Dict[str, str]]:
+        """
+        Heuristic to detect if the user wants to query a specific document.
+        Returns {'type': 'summary'|'qa', 'file_name': ...} or None.
+        """
+        # Pattern for summary: "summarize <file>"
+        summary_pattern = r"summarize\s+(?:the\s+)?(.+\.[a-zA-Z0-9]+)"
+        summary_match = re.search(summary_pattern, query, re.IGNORECASE)
+        if summary_match:
+            return {"type": "summary", "file_name": summary_match.group(1).strip()}
+            
+        # Pattern for QA: "in <file>", "from <file>", "what does <file> say"
+        qa_pattern = r"(?:in|from|about)\s+(?:the\s+)?(.+\.[a-zA-Z0-9]+)"
+        qa_match = re.search(qa_pattern, query, re.IGNORECASE)
+        if qa_match:
+             return {"type": "qa", "file_name": qa_match.group(1).strip()}
+             
+        return None
 
-    # --- Core Logic Methods ---
+    def _create_and_run_tool(self, intent: Dict[str, str], query: str) -> ToolOutput:
+        """Dynamically creates and runs the appropriate document tool."""
+        try:
+            vector_store_component = global_injector.get(VectorStoreComponent)
+            node_store_component = global_injector.get(NodeStoreComponent)
+            
+            index = getattr(self._retriever, "_index", None) 
+            if not index:
+                  index = vector_store_component.index
+            
+            tool = None
+            if intent["type"] == "summary":
+                tool = DocumentSummaryTool.from_defaults(
+                    retriever=self._retriever,
+                    file_name=intent["file_name"],
+                    llm=self._llm,
+                    index=index,
+                    node_store_component=node_store_component,
+                    vector_store_component=vector_store_component,
+                    verbose=self._verbose
+                )
+            else:
+                tool = DocumentSpecificTool.from_defaults(
+                     retriever=self._retriever,
+                     file_name=intent["file_name"],
+                     llm=self._llm,
+                     vector_store_component=vector_store_component,
+                     index=index,
+                     verbose=self._verbose
+                )
+                
+            return tool(query)
+            
+        except Exception as e:
+            logger.error(f"Failed to create/run tool: {e}")
+            return ToolOutput(
+                content=f"I couldn't access the specific document '{intent['file_name']}'. Falling back to general search.",
+                tool_name="error",
+                raw_input={"query": query},
+                raw_output=str(e),
+                is_error=True
+            )
+
+    # --- Core Logic ---
 
     def _condense_question(
         self, chat_history: List[ChatMessage], latest_message: str
@@ -190,7 +286,7 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
         chat_history_str = messages_to_history_str(chat_history)
         if self._verbose:
-            print(f"Condensing query with history: {chat_history_str}")
+            logger.info(f"Condensing query with history: {chat_history_str}")
 
         response = self._llm.predict(
             self._condense_prompt_template,
@@ -208,7 +304,7 @@ class AgenticCondenseChatEngine(BaseChatEngine):
 
         chat_history_str = messages_to_history_str(chat_history)
         if self._verbose:
-            print(f"Condensing query with history: {chat_history_str}")
+            logger.info(f"Condensing query with history: {chat_history_str}")
 
         response = await self._llm.apredict(
             self._condense_prompt_template,
@@ -217,314 +313,306 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         )
         return response.strip()
 
+    def _should_decompose(self, query: str) -> bool:
+        """Determine if query benefits from decomposition."""
+        word_count = len(query.split())
+        if word_count < RAG_CONFIG.query_processing.decomposition_threshold_words:
+            return False
+        
+        complexity_indicators = [
+            " and " in query.lower(),
+            " or " in query.lower(),
+            query.count("?") > 1,
+            "compare" in query.lower(),
+            "difference between" in query.lower(),
+            "both" in query.lower() and word_count > 10,
+        ]
+        return any(complexity_indicators)
+
     def _decompose_query(self, query: str) -> List[str]:
         """Decompose a query into sub-queries using LLM."""
+        if not self._should_decompose(query):
+            return [query]
+        
         prompt = self._decompose_prompt_template.format(
             query=query, max_sub_queries=self._max_sub_queries
         )
         response = self._llm.complete(prompt)
         text = response.text.strip()
 
+        # Robust Parsing
         try:
-            # Try parsing as Python list literal
             if text.startswith("[") and text.endswith("]"):
-                sub_queries = eval(text)
-                if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
-                    return sub_queries[:self._max_sub_queries]
-            # Fallback: treat each line as a sub-query
-            logger.warning(f"Decomposition result was not a valid list: {text}. Splitting by lines.")
-            sub_queries = [line.strip('- ').strip() for line in text.splitlines() if line.strip()]
-            return sub_queries[:self._max_sub_queries] if sub_queries else [query]
+                 try:
+                    return json.loads(text)[:self._max_sub_queries]
+                 except: pass # Parsing failed, try regex
+            
+            # Regex fallback
+            matches = re.findall(r'"([^"]+)"', text)
+            if matches:
+                 return matches[:self._max_sub_queries]
+            
+            # Line fallback
+            lines = [l.strip("- ").strip() for l in text.splitlines() if l.strip()]
+            return lines[:self._max_sub_queries] if lines else [query]
+            
         except Exception as e:
-            logger.error(f"Failed to parse decomposed queries: {e}. Falling back to original query. Raw response: {text}")
-            return [query] # Fallback
+            logger.warning(f"Decomposition parsing failed: {e}. Using original query.")
+            return [query]
 
     async def _adecompose_query(self, query: str) -> List[str]:
-        """Async decompose a query into sub-queries."""
+        """Async decomposition."""
+        if not self._should_decompose(query):
+            return [query]
+            
         prompt = self._decompose_prompt_template.format(
             query=query, max_sub_queries=self._max_sub_queries
         )
         response = await self._llm.acomplete(prompt)
         text = response.text.strip()
-
+        
+        # Robust Parsing
         try:
-             if text.startswith("[") and text.endswith("]"):
-                sub_queries = eval(text)
-                if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
-                    return sub_queries[:self._max_sub_queries]
-             logger.warning(f"Decomposition result was not a valid list: {text}. Splitting by lines.")
-             sub_queries = [line.strip('- ').strip() for line in text.splitlines() if line.strip()]
-             return sub_queries[:self._max_sub_queries] if sub_queries else [query]
-        except Exception as e:
-            logger.error(f"Failed to parse decomposed queries: {e}. Falling back to original query. Raw response: {text}")
+            if text.startswith("[") and text.endswith("]"):
+                 try:
+                    return json.loads(text)[:self._max_sub_queries]
+                 except: pass
+            
+            matches = re.findall(r'"([^"]+)"', text)
+            if matches:
+                 return matches[:self._max_sub_queries]
+            
+            lines = [l.strip("- ").strip() for l in text.splitlines() if l.strip()]
+            return lines[:self._max_sub_queries] if lines else [query]
+            
+        except Exception:
             return [query]
 
-    async def _aretrieve_and_process_nodes(
-        self, query_bundle: QueryBundle, sub_queries: List[str]
-    ) -> Tuple[str, List[NodeWithScore]]:
-        """Retrieve nodes for sub-queries, deduplicate, post-process, and format context."""
-        all_nodes_map: Dict[str, NodeWithScore] = {} # Use node ID for deduplication
+    def _convert_chunks_to_nodes(self, chunks: List[Chunk]) -> List[NodeWithScore]:
+        """Convert Chunks back to NodeWithScore, adding sibling context."""
+        nodes = []
+        for chunk in chunks:
+             # Construct content with siblings
+            content = chunk.text
+            if chunk.previous_texts:
+                content = "\n".join(chunk.previous_texts) + "\n" + content
+            if chunk.next_texts:
+                content = content + "\n" + "\n".join(chunk.next_texts)
+                
+            # Create node
+            node = NodeWithScore(
+                node=TextNode(
+                    text=content,
+                    id_=chunk.node_id or "missing_node_id",
+                    metadata=chunk.document.doc_metadata or {},
+                    embedding=None # Not needed for context
+                ),
+                score=chunk.score
+            )
+            nodes.append(node)
+        return nodes
 
-        async def retrieve_for_sub_query(sub_q: str):
-            try:
-                sub_q_bundle = QueryBundle(sub_q)
-                nodes = await self._retriever.aretrieve(sub_q_bundle)
-                return sub_q, nodes
-            except Exception as e:
-                logger.error(f"Error retrieving for sub-query '{sub_q}': {e}")
-                return sub_q, []
-
-        tasks = [retrieve_for_sub_query(sq) for sq in sub_queries]
-        results = await asyncio.gather(*tasks)
-
-        for sub_q, nodes in results:
-            for node in nodes:
-                if node.node.node_id not in all_nodes_map:
-                    # Add metadata about which sub-query retrieved this node (optional)
-                    node.node.metadata["retrieved_by_sub_query"] = sub_q
-                    all_nodes_map[node.node.node_id] = node
-
-        combined_nodes = list(all_nodes_map.values())
-
-        if self._node_postprocessors:
-             for postprocessor in self._node_postprocessors:
-                  combined_nodes = postprocessor.postprocess_nodes(
-                       combined_nodes, query_bundle=query_bundle # Use original query bundle for postprocessing context
-                  )
-        context_str = "\n\n".join(
-            [n.node.get_content(metadata_mode=MetadataMode.LLM).strip() for n in combined_nodes]
-        )
-        return context_str, combined_nodes
-
-    def _retrieve_and_process_nodes_sync(
-         self, query_bundle: QueryBundle, sub_queries: List[str]
-    ) -> Tuple[str, List[NodeWithScore]]:
-        """ Synchronous version of node retrieval and processing. """
+    def _retrieve_and_process_nodes(self, sub_queries: List[str]) -> Tuple[str, List[NodeWithScore]]:
+        """Retrieve using ChunksService, deduplicate, and post-process nodes."""
         all_nodes_map: Dict[str, NodeWithScore] = {}
-
+        
         for sub_q in sub_queries:
             try:
-                sub_q_bundle = QueryBundle(sub_q)
-                nodes = self._retriever.retrieve(sub_q_bundle)
+                # Use ChunksService
+                chunks = self._chunks_service.retrieve_relevant_sync(sub_q, limit=5, prev_next_chunks=1)
+                nodes = self._convert_chunks_to_nodes(chunks)
+                
                 for node in nodes:
                     if node.node.node_id not in all_nodes_map:
-                         node.node.metadata["retrieved_by_sub_query"] = sub_q
                          all_nodes_map[node.node.node_id] = node
             except Exception as e:
-                logger.error(f"Error retrieving for sub-query '{sub_q}': {e}")
-
+                logger.error(f"Error retrieving for '{sub_q}': {e}")
+                
         combined_nodes = list(all_nodes_map.values())
-
+        
         if self._node_postprocessors:
+            primary_query_bundle = QueryBundle(sub_queries[0] if sub_queries else "")
             for postprocessor in self._node_postprocessors:
                 combined_nodes = postprocessor.postprocess_nodes(
-                    combined_nodes, query_bundle=query_bundle
+                    combined_nodes, query_bundle=primary_query_bundle
                 )
-
-        context_str = "\n\n".join(
-            [n.node.get_content(metadata_mode=MetadataMode.LLM).strip() for n in combined_nodes]
-        )
+                
+        context_parts = []
+        for idx, node in enumerate(combined_nodes):
+            content = node.node.get_content(metadata_mode=MetadataMode.LLM).strip()
+            context_parts.append(f"Source [{idx + 1}]:\n{content}")
+            
+        context_str = "\n\n".join(context_parts)
         return context_str, combined_nodes
 
+    async def _aretrieve_and_process_nodes(self, sub_queries: List[str]) -> Tuple[str, List[NodeWithScore]]:
+        """Async retrieve using ChunksService, deduplicate, and post-process."""
+        all_nodes_map: Dict[str, NodeWithScore] = {}
+        
+        async def retrieve_safe(sq):
+            try:
+                # Use ChunksService
+                chunks = await self._chunks_service.retrieve_relevant(sq, limit=5, prev_next_chunks=1)
+                return self._convert_chunks_to_nodes(chunks)
+            except Exception as e: 
+                logger.error(f"Async retrieval error: {e}")
+                return []
+            
+        results = await asyncio.gather(*[retrieve_safe(sq) for sq in sub_queries])
+        
+        for nodes in results:
+            for node in nodes:
+                if node.node.node_id not in all_nodes_map:
+                    all_nodes_map[node.node.node_id] = node
+                    
+        combined_nodes = list(all_nodes_map.values())
+        
+        if self._node_postprocessors:
+            primary_query_bundle = QueryBundle(sub_queries[0] if sub_queries else "")
+            for postprocessor in self._node_postprocessors:
+                combined_nodes = postprocessor.postprocess_nodes(
+                    combined_nodes, query_bundle=primary_query_bundle
+                )
+        
+        context_parts = []
+        for idx, node in enumerate(combined_nodes):
+            content = node.node.get_content(metadata_mode=MetadataMode.LLM).strip()
+            context_parts.append(f"Source [{idx + 1}]:\n{content}")
+            
+        context_str = "\n\n".join(context_parts)
+        return context_str, combined_nodes
 
-    async def _arun_agentic_condense(
-        self, message: str, chat_history: Optional[List[ChatMessage]] = None
-    ) -> Tuple[List[ChatMessage], ToolOutput, List[NodeWithScore]]:
-        """Core async logic for condense -> decompose -> retrieve -> prepare messages."""
-        if chat_history is not None:
-            self._memory.set(chat_history)
-
-        current_chat_history = self._memory.get(input=message)
-
-        # 1. Condense
-        standalone_question = await self._acondense_question(current_chat_history, message)
-        logger.info(f"Standalone question: {standalone_question}")
-        if self._verbose: print(f"Standalone question: {standalone_question}")
-
-        # 2. Decompose
-        sub_queries = await self._adecompose_query(standalone_question)
-        logger.info(f"Decomposed sub-queries: {sub_queries}")
-        if self._verbose: print(f"Decomposed sub-queries: {sub_queries}")
-
-        # 3. Retrieve & Process Nodes
-        query_bundle = QueryBundle(standalone_question) # Use standalone for retrieval context
-        context_str, context_nodes = await self._aretrieve_and_process_nodes(
-            query_bundle, sub_queries
-        )
-        context_source = ToolOutput(
-            tool_name="agentic_retriever",
-            content=context_str, 
-            raw_input={
-                "standalone_query": standalone_question,
-                "sub_queries": sub_queries
-            },
-            raw_output=context_nodes,
-        )
-        logger.debug(f"Retrieved Context: {context_str[:500]}...") # Log snippet
-        if self._verbose: print(f"Retrieved Context: {context_str[:500]}...")
-
-        # 4. Prepare messages for LLM
-        self._memory.put(ChatMessage(content=message, role=MessageRole.USER))
-
-        sub_questions_str = "\n".join([f"- {sq}" for sq in sub_queries])
-        formatted_context_prompt = self._context_prompt_template.format(
-            original_question=standalone_question, # Use the condensed question here
-            sub_questions_str=sub_questions_str,
-            context_str=context_str
-        )
-
-        final_system_prompt = formatted_context_prompt
-        if self._system_prompt: # Add user-defined overall system prompt if provided
-            final_system_prompt = f"{self._system_prompt}\n\n{formatted_context_prompt}"
-
-        system_message = ChatMessage(
-            content=final_system_prompt, role=self._llm.metadata.system_role
-        )
-
-        initial_token_count = self._token_counter.estimate_tokens_in_messages(
-            [system_message]
-        )
-        final_chat_history = self._memory.get(initial_token_count=initial_token_count)
-        chat_messages = [system_message] + final_chat_history
-        return chat_messages, context_source, context_nodes
+    # --- Execution Flows ---
 
     def _run_agentic_condense_sync(
         self, message: str, chat_history: Optional[List[ChatMessage]] = None
-     ) -> Tuple[List[ChatMessage], ToolOutput, List[NodeWithScore]]:
-        """Core sync logic"""
+    ) -> Tuple[List[ChatMessage], ToolOutput, List[NodeWithScore]]:
+        
+        # 0. Tool Routing Check
+        tool_intent = self._detect_specific_document_intent(message)
+        if tool_intent:
+            logger.info(f"Detected tool intent: {tool_intent}")
+            tool_output = self._create_and_run_tool(tool_intent, message)
+            if not tool_output.is_error:
+                 # In this advanced system, we inject the tool output directly as context
+                 pass # Fall through to RAG flow but with Tool Context
+
+        # 1. Memory Setup
         if chat_history is not None:
             self._memory.set(chat_history)
-
-        current_chat_history = self._memory.get(input=message)
-
-        standalone_question = self._condense_question(current_chat_history, message)
-        logger.info(f"Standalone question: {standalone_question}")
-        if self._verbose: print(f"Standalone question: {standalone_question}")
-
+        
+        # 2. Condense
+        current_history = self._memory.get(input=message)
+        standalone_question = self._condense_question(current_history, message)
+        
+        # 3. Decompose
         sub_queries = self._decompose_query(standalone_question)
-        logger.info(f"Decomposed sub-queries: {sub_queries}")
-        if self._verbose: print(f"Decomposed sub-queries: {sub_queries}")
-
-        query_bundle = QueryBundle(standalone_question)
-        context_str, context_nodes = self._retrieve_and_process_nodes_sync(
-            query_bundle, sub_queries
-        )
-        context_source = ToolOutput(
-            tool_name="agentic_retriever",
-            content=context_str,
-            raw_input={
-                "standalone_query": standalone_question,
-                "sub_queries": sub_queries
-            },
-            raw_output=context_nodes,
-        )
-        logger.debug(f"Retrieved Context: {context_str[:500]}...")
-        if self._verbose: print(f"Retrieved Context: {context_str[:500]}...")
-
-        self._memory.put(ChatMessage(content=message, role=MessageRole.USER))
-
+        
+        # 4. Retrieve
+        context_str, context_nodes = self._retrieve_and_process_nodes(sub_queries)
+        
+        # 5. Construct System Message
         sub_questions_str = "\n".join([f"- {sq}" for sq in sub_queries])
-        formatted_context_prompt = self._context_prompt_template.format(
+        formatted_prompt = self._context_prompt_template.format(
             original_question=standalone_question,
             sub_questions_str=sub_questions_str,
             context_str=context_str
         )
-
-        final_system_prompt = formatted_context_prompt
+        
         if self._system_prompt:
-            final_system_prompt = f"{self._system_prompt}\n\n{formatted_context_prompt}"
-
+             final_system_msg = f"{self._system_prompt}\n\n{formatted_prompt}"
+        else:
+             # Use default strict prompt if none provided
+             final_system_msg = f"{self._get_default_system_prompt()}\n\n{formatted_prompt}"
+             
         system_message = ChatMessage(
-            content=final_system_prompt, role=self._llm.metadata.system_role
+            content=final_system_msg, role=self._llm.metadata.system_role
         )
-
-        initial_token_count = self._token_counter.estimate_tokens_in_messages(
-            [system_message]
+        
+        # 6. Update Memory with User Message
+        self._memory.put(ChatMessage(content=message, role=MessageRole.USER))
+        
+        # 7. Prepare Final History
+        initial_token_count = self._token_counter.estimate_tokens_in_messages([system_message])
+        final_history = self._memory.get(initial_token_count=initial_token_count)
+        
+        chat_messages = [system_message] + final_history
+        
+        context_source = ToolOutput(
+            tool_name="advanced_rag",
+            content=context_str,
+            raw_input={"standalone_query": standalone_question},
+            raw_output=context_nodes
         )
-        final_chat_history = self._memory.get(initial_token_count=initial_token_count)
-        chat_messages = [system_message] + final_chat_history
-
+        
         return chat_messages, context_source, context_nodes
 
-    def _extract_cited_node_ids(self, response: str) -> set:
-        """Extract cited node IDs or filenames from the LLM response."""
-        import re
-        # Matches [node_id_123] or [file.pdf]
-        pattern = r'\[([\w\-\.]+)\]'
-        return set(re.findall(pattern, response))
-
-    def _filter_nodes_by_citation(self, cited_ids: set, nodes: list) -> list:
-        """Filter nodes to only those cited in the response (by node_id or filename)."""
-        filtered = []
-        for node in nodes:
-            node_id = getattr(node.node, 'node_id', None)
-            filename = node.node.metadata.get('file_name') or node.node.metadata.get('filename')
-            if node_id in cited_ids or (filename and filename in cited_ids):
-                filtered.append(node)
-        return filtered
-
-    def _llm_post_analysis_attribution(self, response: str, nodes: list) -> list:
-        """Ask the LLM to identify which nodes were used in the answer."""
-        prompt = (
-            "Given the following answer and context nodes, return a JSON list of node IDs that contributed information to the answer.\n"
-            "Answer:\n"
-            f"{response}\n"
-            "Context Nodes (format: Node ID: Content):\n"
+    async def _arun_agentic_condense(
+        self, message: str, chat_history: Optional[List[ChatMessage]] = None
+    ) -> Tuple[List[ChatMessage], ToolOutput, List[NodeWithScore]]:
+        
+        # Async logic following same flow
+        if chat_history is not None:
+             self._memory.set(chat_history)
+             
+        current_history = self._memory.get(input=message)
+        standalone_question = await self._acondense_question(current_history, message)
+        
+        sub_queries = await self._adecompose_query(standalone_question)
+        
+        context_str, context_nodes = await self._aretrieve_and_process_nodes(sub_queries)
+        
+        sub_questions_str = "\n".join([f"- {sq}" for sq in sub_queries])
+        formatted_prompt = self._context_prompt_template.format(
+            original_question=standalone_question,
+            sub_questions_str=sub_questions_str,
+            context_str=context_str
         )
-        for node in nodes:
-            node_id = getattr(node.node, 'node_id', None)
-            content = node.node.get_content(metadata_mode=MetadataMode.LLM).strip()
-            prompt += f"{node_id}: {content}\n"
-        prompt += "\nReturn a JSON array of node IDs, e.g. [\"node_id_1\", \"node_id_2\"]"
-        analysis_response = self._llm.complete(prompt)
-        import json
-        try:
-            used_node_ids = json.loads(analysis_response.text)
-            return [node for node in nodes if getattr(node.node, 'node_id', None) in used_node_ids]
-        except Exception as e:
-            logger.error(f"LLM post-analysis parsing failed: {e}")
-            return []
+        
+        if self._system_prompt:
+             final_system_msg = f"{self._system_prompt}\n\n{formatted_prompt}"
+        else:
+             # Use default strict prompt if none provided
+             final_system_msg = f"{self._get_default_system_prompt()}\n\n{formatted_prompt}"
+        system_message = ChatMessage(content=final_system_msg, role=self._llm.metadata.system_role)
+        
+        self._memory.put(ChatMessage(content=message, role=MessageRole.USER))
+        
+        initial_token_count = self._token_counter.estimate_tokens_in_messages([system_message])
+        final_history = self._memory.get(initial_token_count=initial_token_count)
+        
+        chat_messages = [system_message] + final_history
+        
+        context_source = ToolOutput(
+            tool_name="advanced_rag",
+            content=context_str,
+            raw_input={"standalone_query": standalone_question},
+            raw_output=context_nodes
+        )
+        
+        return chat_messages, context_source, context_nodes
 
-    def _react_agent_attribution(self, response: str, nodes: list) -> list:
-        """Use a ReACT agent to attribute sources if available. Placeholder for integration."""
-        # This is a placeholder. You would integrate your ReACT agent here.
-        # For now, just return all nodes (no filtering)
-        return nodes
-
-    # --- Public Chat Methods ---
+    # --- Public Methods ---
 
     @trace_method("chat")
     def chat(
-        self, message: str, chat_history: Optional[List[ChatMessage]] = None,
-        attribution_method: str = "inline_citation"  # or "llm_post_analysis" or "react_agent"
+        self, message: str, chat_history: Optional[List[ChatMessage]] = None
     ) -> AgentChatResponse:
         chat_messages, context_source, context_nodes = self._run_agentic_condense_sync(
             message, chat_history
         )
+        
         chat_response = self._llm.chat(chat_messages)
         assistant_message = chat_response.message
         self._memory.put(assistant_message)
-
-        # Attribution logic
-        if attribution_method == "inline_citation":
-            cited_ids = self._extract_cited_node_ids(assistant_message.content)
-            used_nodes = self._filter_nodes_by_citation(cited_ids, context_nodes)
-        elif attribution_method == "llm_post_analysis":
-            used_nodes = self._llm_post_analysis_attribution(assistant_message.content, context_nodes)
-        elif attribution_method == "react_agent":
-            used_nodes = self._react_agent_attribution(assistant_message.content, context_nodes)
-        else:
-            used_nodes = context_nodes
-
+        
+        final_response = CitationHelper.smart_citation_replacement(assistant_message.content, context_nodes)
+        cited_nodes = CitationHelper.get_cited_nodes(assistant_message.content, context_nodes)
+        
         return AgentChatResponse(
-            response=str(assistant_message.content),
-            sources=[ToolOutput(
-                tool_name="agentic_retriever",
-                content=context_source.content,
-                raw_input=context_source.raw_input,
-                raw_output=used_nodes
-            )],
-            source_nodes=used_nodes,
+            response=final_response,
+            sources=[context_source],
+            source_nodes=cited_nodes
         )
 
     @trace_method("chat")
@@ -534,52 +622,41 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         chat_messages, context_source, context_nodes = self._run_agentic_condense_sync(
             message, chat_history
         )
-
+        
+        chat_stream = self._llm.stream_chat(chat_messages)
+        
         chat_response = StreamingAgentChatResponse(
-            chat_stream=self._llm.stream_chat(chat_messages),
+            chat_stream=chat_stream,
             sources=[context_source],
             source_nodes=context_nodes,
         )
-        # Start thread to write streamed response to memory *after* it's finished
+        
         thread = Thread(
             target=chat_response.write_response_to_history, args=(self._memory,)
         )
         thread.start()
-
+        
         return chat_response
 
     @trace_method("chat")
     async def achat(
-        self, message: str, chat_history: Optional[List[ChatMessage]] = None,
-        attribution_method: str = "inline_citation"
+        self, message: str, chat_history: Optional[List[ChatMessage]] = None
     ) -> AgentChatResponse:
         chat_messages, context_source, context_nodes = await self._arun_agentic_condense(
             message, chat_history
         )
+        
         chat_response = await self._llm.achat(chat_messages)
         assistant_message = chat_response.message
         self._memory.put(assistant_message)
-
-        # Attribution logic
-        if attribution_method == "inline_citation":
-            cited_ids = self._extract_cited_node_ids(assistant_message.content)
-            used_nodes = self._filter_nodes_by_citation(cited_ids, context_nodes)
-        elif attribution_method == "llm_post_analysis":
-            used_nodes = self._llm_post_analysis_attribution(assistant_message.content, context_nodes)
-        elif attribution_method == "react_agent":
-            used_nodes = self._react_agent_attribution(assistant_message.content, context_nodes)
-        else:
-            used_nodes = context_nodes
-
+        
+        final_response = CitationHelper.smart_citation_replacement(assistant_message.content, context_nodes)
+        cited_nodes = CitationHelper.get_cited_nodes(assistant_message.content, context_nodes)
+        
         return AgentChatResponse(
-            response=str(assistant_message.content),
-            sources=[ToolOutput(
-                tool_name="agentic_retriever",
-                content=context_source.content,
-                raw_input=context_source.raw_input,
-                raw_output=used_nodes
-            )],
-            source_nodes=used_nodes,
+            response=final_response,
+            sources=[context_source],
+            source_nodes=cited_nodes
         )
 
     @trace_method("chat")
@@ -589,18 +666,17 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         chat_messages, context_source, context_nodes = await self._arun_agentic_condense(
             message, chat_history
         )
-
+        
+        chat_stream = await self._llm.astream_chat(chat_messages)
+        
         chat_response = StreamingAgentChatResponse(
-            achat_stream=await self._llm.astream_chat(chat_messages),
+            achat_stream=chat_stream,
             sources=[context_source],
             source_nodes=context_nodes,
         )
-        # Start async task to write streamed response to memory
+        
         asyncio.create_task(chat_response.awrite_response_to_history(self._memory))
-
         return chat_response
-
-    # --- Memory Management ---
 
     def reset(self) -> None:
         self._memory.reset()

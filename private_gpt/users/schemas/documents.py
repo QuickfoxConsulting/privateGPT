@@ -1,6 +1,6 @@
 import json
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from fastapi import Form, UploadFile, File
 
@@ -47,8 +47,7 @@ class Document(BaseModel):
     uploaded_at: datetime
     departments: List[DepartmentList] = []  # Keep for backward compatibility
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentMakerChecker(DocumentCreate):
     doc_metadata: Optional[Dict[str, Any]] = None
@@ -81,8 +80,7 @@ class DocumentVerify(BaseModel):
     categories: List[CategoryList] = []
     doc_metadata: Optional[Dict[str, Any]] = {}
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentFilter(BaseModel):
     filename: Optional[str] = None
@@ -123,9 +121,9 @@ class DocumentVersionOut(DocumentVersionBase):
     uploaded_by: int
     reviewed_by: Optional[int] = None
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "id": 1,
                 "version_number": 1,
@@ -139,6 +137,7 @@ class DocumentVersionOut(DocumentVersionBase):
                 "reviewed_by": 2
             }
         }
+    )
 
 class DocumentView(BaseModel):
     """Schema for document list view with related information."""
@@ -153,9 +152,9 @@ class DocumentView(BaseModel):
     categories: List[CategoryList] = []
     version: Optional[DocumentVersionOut] = None
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "id": 1,
                 "is_enabled": True,
@@ -185,6 +184,7 @@ class DocumentView(BaseModel):
                 }
             }
         }
+    )
 
 class DocCatUpdate(BaseModel):
     filename: str
@@ -201,8 +201,7 @@ class DocumentList(DocumentsBase):
     categories: List[CategoryList] = []
     departments: List[DepartmentList] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 # =================
 # Form Model

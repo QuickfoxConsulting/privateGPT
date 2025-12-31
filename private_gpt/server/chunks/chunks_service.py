@@ -24,6 +24,7 @@ class Chunk(BaseModel):
     score: float = Field(examples=[0.023])
     document: IngestedDoc
     text: str = Field(examples=["Outbound sales increased 20%, driven by new leads."])
+    node_id: str | None = Field(default=None, examples=["node_id_123"])
     previous_texts: list[str] | None = Field(
         default=None,
         examples=[["SALES REPORT 2023", "Inbound didn't show major changes."]],
@@ -50,6 +51,7 @@ class Chunk(BaseModel):
                 doc_metadata=node.metadata,
             ),
             text=node.get_content(),
+            node_id=node.node.node_id,
         )
 
 
@@ -113,7 +115,20 @@ class ChunksService:
         
         return same_doc_nodes
     
-    async def retrieve_relevant(
+    def _process_retrieved_nodes(self, nodes: list[NodeWithScore], prev_next_chunks: int) -> list[Chunk]:
+        """Shared logic to process retrieved nodes into Chunks."""
+        nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
+        retrieved_nodes = []
+        for node in nodes:
+            chunk = Chunk.from_node(node)
+            chunk.previous_texts = self._get_sibling_nodes_text(
+                node, prev_next_chunks, False
+            )
+            chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
+            retrieved_nodes.append(chunk)
+        return retrieved_nodes
+
+    def retrieve_relevant_sync(
         self,
         text: str,
         context_filter: ContextFilter | None = None,
@@ -131,18 +146,24 @@ class ChunksService:
             index=index, context_filter=context_filter, similarity_top_k=limit
         )
         nodes = vector_index_retriever.retrieve(text)
-        nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
+        return self._process_retrieved_nodes(nodes, prev_next_chunks)
 
-        retrieved_nodes = []
-        for node in nodes:
-            chunk = Chunk.from_node(node)
-            chunk.previous_texts = self._get_sibling_nodes_text(
-                node, prev_next_chunks, False
-            )
-            chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
-            same_docs_nodes = self._get_nodes_from_same_document(node)
-            retrieved_nodes.append(chunk)
-            retrieved_nodes.append(same_docs_nodes)
-        
-
-        return retrieved_nodes
+    async def retrieve_relevant(
+        self,
+        text: str,
+        context_filter: ContextFilter | None = None,
+        limit: int = 10,
+        prev_next_chunks: int = 0,
+    ) -> list[Chunk]:
+        index = VectorStoreIndex.from_vector_store(
+            self.vector_store_component.vector_store,
+            storage_context=self.storage_context,
+            llm=self.llm_component.llm,
+            embed_model=self.embedding_component.embedding_model,
+            show_progress=True,
+        )
+        vector_index_retriever = self.vector_store_component.get_retriever(
+            index=index, context_filter=context_filter, similarity_top_k=limit
+        )
+        nodes = await vector_index_retriever.aretrieve(text)
+        return self._process_retrieved_nodes(nodes, prev_next_chunks)

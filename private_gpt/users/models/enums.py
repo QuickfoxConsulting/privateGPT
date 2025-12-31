@@ -4,6 +4,7 @@ class MakerCheckerStatus(PythonEnum):
     PENDING = 'PENDING'
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
+
 class MakerCheckerActionType(PythonEnum):
     INSERT = 'INSERT'
     UPDATE = 'UPDATE'
@@ -13,3 +14,4 @@ class DocumentStatus(PythonEnum):
     INGESTING = 'INGESTING'
     EMBEDDING = 'EMBEDDING'
     READY = 'READY'
+    ERROR = 'ERROR'

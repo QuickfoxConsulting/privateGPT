@@ -85,6 +85,9 @@ class IngestionHelper:
                 import uuid
                 document.doc_id = str(uuid.uuid4())
             
+            # Sync LlamaIndex document id_ with our doc_id
+            document.id_ = document.doc_id
+            
             # Make sure the doc_id is in the document's metadata
             document.metadata["doc_id"] = document.doc_id
             document.metadata["document_id"] = document.doc_id

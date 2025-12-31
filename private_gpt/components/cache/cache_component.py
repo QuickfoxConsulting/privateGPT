@@ -54,6 +54,11 @@ class CacheComponent:
             bool: True if Redis is connected, False otherwise.
         """
         with self._lock:
+            if not settings().faq.enabled:
+                logger.info("FAQ feature is disabled in settings, skipping Redis initialization.")
+                self._status = CacheStatus.DISCONNECTED
+                return False
+
             if self._redis_client is not None and not force_reconnect:
                 logger.debug("Redis client already initialized, skipping reconnect")
                 return self._status == CacheStatus.CONNECTED

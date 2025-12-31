@@ -1,5 +1,5 @@
 from private_gpt.users.api import deps
-from private_gpt.users.api.v1.routers import auth, roles, user_roles, users, subscriptions, companies, departments, documents, audits, chat_history, categories
+from private_gpt.users.api.v1.routers import auth, roles, user_roles, users, subscriptions, companies, departments, documents, audits, chat_history, categories, prompts
 # Note: FAQ router is now in server/cache/cache_router.py
 from fastapi import APIRouter
 
@@ -16,3 +16,4 @@ api_router.include_router(documents.router)
 api_router.include_router(audits.router)
 api_router.include_router(chat_history.router)
 api_router.include_router(categories.router)
+api_router.include_router(prompts.router)

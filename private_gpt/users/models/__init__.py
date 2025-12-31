@@ -9,3 +9,5 @@ from .audit import Audit
 from .document_department import document_department_association
 from .chat import ChatHistory, ChatItem
 from .category import Category, document_category_association
+from .integration import GoogleDriveAuth, WebsiteCrawlConfig, WebsiteCrawlPage
+from .prompt import Prompt

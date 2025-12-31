@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 import logging
 
+from private_gpt.settings.settings import settings
 from private_gpt.users import crud, schemas, models
 from private_gpt.users.api import deps
 from private_gpt.server.cache.faq_service import FAQService
@@ -10,7 +11,14 @@ from private_gpt.server.cache.cache_service import CacheService, FAQSearchResult
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/faq", tags=["FAQ Management"])
+def check_faq_enabled():
+    if not settings().faq.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="FAQ feature is disabled"
+        )
+
+router = APIRouter(prefix="/v1/faq", tags=["FAQ Management"], dependencies=[Depends(check_faq_enabled)])
 
 @router.post("/", response_model=schemas.FAQ, status_code=status.HTTP_201_CREATED)
 def create_faq(

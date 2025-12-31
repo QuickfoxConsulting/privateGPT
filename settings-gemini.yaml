@@ -28,17 +28,11 @@ embedding:
   mode: gemini
 
 gemini:
-  api_key: AIzaSyBHpnkkAv02r731CVmCM3b8Fl9wt9RaH9I
+  api_key: ${GEMINI_API_KEY}
   model: models/gemini-2.0-flash
-  embedding_model: models/text-embedding-004
-
-# embedding:
-#   # Should be matching the value above in most cases
-#   mode: huggingface
-#   ingest_mode: simple
-#   embed_dim: 768 # 384 is for BAAI/bge-small-en-v1.5
+  embedding_model: models/gemini-embedding-001
 
 # huggingface:
-#   embedding_hf_model_name: BAAI/bge-large-en-v1.5
-#   access_token: ${HUGGINGFACE_TOKEN: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}
+#   embedding_hf_model_name: Qwen/Qwen3-Embedding-0.6B
+#   access_token: ${HF_TOKEN}
 #   trust_remote_code: true

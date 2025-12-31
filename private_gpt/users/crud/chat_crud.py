@@ -89,17 +89,17 @@ class CRUDChat(CRUDBase[ChatHistory, ChatHistoryCreate, ChatHistoryUpdate]):
     #         skip: Number of chat items to skip
     #         limit: Maximum number of chat items to return
     #         include_deleted: Whether to include soft-deleted chats
-            
+    #         
     #     Returns:
     #         ChatHistory object if found, None otherwise
     #     """
     #     query = db.query(self.model).filter(ChatHistory.conversation_id == id)
-        
+    #     
     #     if not include_deleted:
     #         query = query.filter(ChatHistory.is_deleted == False)
-            
+    #         
     #     chat_history = query.first()
-        
+    #     
     #     if chat_history:
     #         chat_history.chat_items = (
     #             db.query(ChatItem)
@@ -109,7 +109,7 @@ class CRUDChat(CRUDBase[ChatHistory, ChatHistoryCreate, ChatHistoryUpdate]):
     #             .limit(limit)
     #             .all()
     #         )
-            
+    #         
     #     return chat_history
 
     def get_by_id(  # New name for clarity, or modify get_by_id
@@ -357,6 +357,17 @@ class CRUDChat(CRUDBase[ChatHistory, ChatHistoryCreate, ChatHistoryUpdate]):
                 .scalar()
             )
         }
+
+    def update_title(self, db: Session, *, conversation_id: uuid.UUID, title: str, user_id: int) -> Optional[ChatHistory]:
+        """Update the title of a chat history"""
+        chat_history = self.get_conversation(db, conversation_id=conversation_id)
+        if chat_history and chat_history.user_id == user_id:
+            chat_history.title = title
+            chat_history.updated_at = func.now()
+            db.commit()
+            db.refresh(chat_history)
+            return chat_history
+        return None
 
 
 class CRUDChatItem(CRUDBase[ChatItem, ChatItemCreate, ChatItemUpdate]):

@@ -27,25 +27,25 @@ snapshot_download(
 )
 print("Embedding model downloaded!")
 
-# Download LLM and create a symlink to the model file
-print(f"Downloading LLM {settings().llamacpp.llm_hf_model_file}")
-hf_hub_download(
-    repo_id=settings().llamacpp.llm_hf_repo_id,
-    filename=settings().llamacpp.llm_hf_model_file,
-    cache_dir=models_cache_path,
-    local_dir=models_path,
-    resume_download=resume_download,
-)
-print("LLM model downloaded!")
+# # Download LLM and create a symlink to the model file
+# print(f"Downloading LLM {settings().llamacpp.llm_hf_model_file}")
+# hf_hub_download(
+#     repo_id=settings().llamacpp.llm_hf_repo_id,
+#     filename=settings().llamacpp.llm_hf_model_file,
+#     cache_dir=models_cache_path,
+#     local_dir=models_path,
+#     resume_download=resume_download,
+# )
+# print("LLM model downloaded!")
 
 # Download Tokenizer
-print(f"Downloading tokenizer {settings().llm.tokenizer}")
+# print(f"Downloading tokenizer {settings().llm.tokenizer}")
 
-AutoTokenizer.from_pretrained(
-    pretrained_model_name_or_path=settings().llm.tokenizer,
-    cache_dir=models_cache_path,
-)
-print("Tokenizer downloaded!")
+# AutoTokenizer.from_pretrained(
+#     pretrained_model_name_or_path=settings().llm.tokenizer,
+#     cache_dir=models_cache_path,
+# )
+# print("Tokenizer downloaded!")
 
 # Download Reranker
 print(f"Downloading reranker {settings().rag.rerank.model}")

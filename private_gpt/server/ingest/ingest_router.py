@@ -68,7 +68,7 @@ class IngestTextBody(BaseModel):
         le=10
     )
     strategy: ChunkingStrategy = Field(
-        ChunkingStrategy.LATE_CHUNKING,
+        ChunkingStrategy.HIERARCHICAL,
         description="The chunking strategy to use"
     )
 
@@ -105,7 +105,7 @@ class IngestFileBody(BaseModel):
         le=10
     )
     strategy: ChunkingStrategy = Field(
-        ChunkingStrategy.LATE_CHUNKING,
+        ChunkingStrategy.HIERARCHICAL,
         description="The chunking strategy to use"
     )
 
@@ -127,7 +127,7 @@ async def ingest_file(
     chunk_size: int = Form(512),
     chunk_overlap: int = Form(100),
     window_size: int = Form(3),
-    strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING),
+    strategy: ChunkingStrategy = Form(ChunkingStrategy.HIERARCHICAL),
     db: Session = Depends(deps.get_db),
     log_audit: models.Audit = Depends(deps.get_audit_logger),
     current_user: models.User = Security(
@@ -306,7 +306,10 @@ async def delete_file(
         document = crud.documents.get_by_filename(db, file_name=filename)
         if document:
             document_versions = crud.document_versions.get_by_document_id(db, document_id=document.id)
-            chunking_strategy = document.doc_metadata['strategy'] 
+            chunking_strategy = document.doc_metadata.get(
+                'strategy',
+                ChunkingStrategy.HIERARCHICAL.value
+            )
             for version in document_versions:
                 upload_path = version.file_path
                 logger.info(f"Deleting file at: {upload_path}")
@@ -318,6 +321,11 @@ async def delete_file(
                         # await service.delete(doc_id)
                     # delete everything at once
                     await service.delete_docs(doc_ids, chunking_strategy)
+                else:
+                    # Fallback: delete by filename directly in vector store if doc_ids not found
+                    logger.info(f"No doc_ids found for {filename}, attempting direct metadata deletion")
+                    await service.delete_by_metadata("file_name", filename, chunking_strategy)
+                
                 try:
                     upload_path = Path(upload_path)
                     if upload_path.exists():
@@ -547,7 +555,7 @@ async def ingest_url(
     chunk_size: int = 512,
     chunk_overlap: int = 100,
     window_size: int = 3,
-    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
+    strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
 ) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)
@@ -579,7 +587,7 @@ async def ingest(
     request: Request, 
     file_path: str, 
     tags: Optional[dict[str, Any]] = None,
-    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
+    strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
 ) -> IngestResponse:
     """Ingests and processes a file, storing its chunks to be used as context."""
     service = request.state.injector.get(IngestService)

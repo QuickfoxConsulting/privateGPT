@@ -1,7 +1,10 @@
 import logging
 from typing import Annotated
 from injector import Injector
+from pathlib import Path
 from fastapi import Depends, FastAPI, Request, WebSocket
+from fastapi.staticfiles import StaticFiles
+from private_gpt.constants import UPLOAD_DIR, UNCHECKED_DIR
 from fastapi.middleware.cors import CORSMiddleware
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.callbacks.global_handlers import create_global_handler
@@ -17,7 +20,9 @@ from private_gpt.server.embeddings.embeddings_router import embeddings_router
 from private_gpt.server.recipes.summarize.summarize_router import summarize_router
 from private_gpt.server.cache.cache_router import router as cache_router
 from private_gpt.users.api.v1.routers.websocket_router import websocket_router
+from private_gpt.server.integrations.integrations_router import integrations_router
 
+from private_gpt.server.integrations.website_crawl_service import WebsiteCrawlService
 logger = logging.getLogger(__name__)
 
 def create_app(root_injector: Injector) -> FastAPI:
@@ -29,6 +34,11 @@ def create_app(root_injector: Injector) -> FastAPI:
     except Exception as e:
         logger.error(f"Failed to initialize cache management: {str(e)}")
     
+    try:
+        WebsiteCrawlService.start_scheduler()
+    except Exception as e:
+        logger.error(f"Failed to start website crawl scheduler: {str(e)}")
+        
     app = FastAPI()
     
     # Use middleware for regular HTTP requests
@@ -49,6 +59,11 @@ def create_app(root_injector: Injector) -> FastAPI:
     app.include_router(websocket_router)
     app.include_router(cache_router)
     app.include_router(api_router)
+    app.include_router(integrations_router)
+
+    # Mount static and media files
+    app.mount("/static", StaticFiles(directory=str(UNCHECKED_DIR)), name="static")
+    app.mount("/media", StaticFiles(directory=str(Path(UPLOAD_DIR) / "documents")), name="media")
     
     # Define a function to get injector from request
     def get_injector(request: Request) -> Injector:

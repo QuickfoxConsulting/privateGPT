@@ -24,7 +24,6 @@ def chunk_list(
     for i in range(0, len(lst), max_chunk_size):
         yield lst[i : i + max_chunk_size]
 
-
 class BatchedChromaVectorStore(ChromaVectorStore):  # type: ignore
     """Chroma vector store, batching additions to avoid reaching the max batch limit.
 

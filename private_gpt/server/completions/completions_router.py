@@ -1,26 +1,15 @@
-import json
 import os
-from pathlib import Path
-from private_gpt.server.cache.faq_service import FAQService
-from private_gpt.users.schemas.faq import FAQCreate
-from private_gpt.utils.chat_enums import ChatMode
-from private_gpt.server.chat.chat_service import ChatService
-from private_gpt.users import crud, models, schemas
-import itertools
-from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
-from fastapi import APIRouter, Depends, Request, Security, HTTPException, status
-from private_gpt.server.ingest.ingest_service import IngestService
-from private_gpt.users.services import DocumentSelectionService
-
-from private_gpt.users.models.document import Document
-from private_gpt.users.models.enums import MakerCheckerStatus
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Union
-from sqlalchemy.orm import Session
-import traceback
+import json
+import uuid
 import logging
+import traceback
+import itertools
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
+
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any, Optional, Union
 
 from starlette.responses import StreamingResponse
 
@@ -29,11 +18,31 @@ from private_gpt.open_ai.openai_models import (
     OpenAICompletion,
     OpenAIMessage,
 )
-from private_gpt.server.chat.chat_router import ChatBody, chat_completion
-from private_gpt.server.utils.auth import authenticated
+
+from private_gpt.server.cache.faq_service import FAQService
+from private_gpt.server.integrations.website_crawl_service import WebsiteCrawlService
+from private_gpt.server.integrations.google_drive_service import GoogleDriveService
+from private_gpt.users.schemas.faq import FAQCreate
+from private_gpt.utils.chat_enums import ChatMode
+from private_gpt.server.chat.chat_service import ChatService
+from private_gpt.users import crud, models, schemas
+from llama_index.core.llms import ChatMessage, ChatResponse, MessageRole
+from fastapi import APIRouter, Depends, Request, Security, HTTPException, status
+from private_gpt.server.ingest.ingest_service import IngestService
+from private_gpt.users.services import DocumentSelectionService
+from private_gpt.settings.settings import settings
+from private_gpt.users.models.document import Document
+from private_gpt.users.models.enums import MakerCheckerStatus
+
+
+
 from private_gpt.users.api import deps
 from private_gpt.users import crud, models, schemas
-import uuid
+from private_gpt.server.utils.auth import authenticated
+from private_gpt.server.chat.chat_router import ChatBody, chat_completion
+
+
+logger = logging.getLogger(__name__)
 completions_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
 
@@ -191,7 +200,7 @@ async def prompt_completion(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Chat not found"
             )
-        
+        logger.info(f"Chat Mode: {body.use_context}")
         is_using_context = body.use_context != ChatMode.CHAT.value        
         if is_using_context:
             service = request.state.injector.get(IngestService)
@@ -217,6 +226,7 @@ async def prompt_completion(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No department assigned to you"
                 )
+                
             documents = crud.documents.get_enabled_documents_by_departments(
                 db,
                 department_id=department.id,
@@ -227,7 +237,7 @@ async def prompt_completion(
             if not documents:
                 document_status = "no_documents"
                 is_using_context = False
-                body.use_context = ChatMode.CHAT.value
+                body.use_context = ChatMode.SEARCH.value
                 body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
                 body.context_filter = None
                 logger.warning(f"No documents found for department {department.id}")
@@ -248,33 +258,64 @@ async def prompt_completion(
                 )
             else:
                 latest_doc_ids = await get_latest_version_ids(service, documents)
+            
+            # Add website content
+            try:
+                website_service = WebsiteCrawlService(db)
+                # Pass department_id to filter by department
+                ingested_pages = website_service.get_ingested_pages(department.id)
+                for page in ingested_pages:
+                     # Use URL as filename to get doc IDs
+                    page_doc_ids = service.get_doc_ids_by_filename(page.url)
+                    latest_doc_ids.extend(page_doc_ids)
                 
-                if not latest_doc_ids:
-                    document_status = "no_valid_versions"
-                    is_using_context = False
-                    body.use_context = ChatMode.CHAT.value
-                    body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No valid document versions are available. "
-                    body.context_filter = None
-                    logger.warning(f"No valid document versions found for documents: {[doc.id for doc in documents]}")
-                    
-                    # Log no valid versions
-                    log_audit(
-                        model="Chat",
-                        action="no_valid_versions",
-                        details={
-                            "query": original_prompt,
-                            "user": current_user.username,
-                            "document_ids": [doc.id for doc in documents],
-                            "department_id": department.id
-                        },
-                        user_id=current_user.id,
-                        username=current_user.username,
-                        severity="WARNING"
-                    )
-                else:
-                    document_status = "available"
-                    body.context_filter = {"docs_ids": latest_doc_ids}
-                    logger.info(f"Found {len(latest_doc_ids)} valid document versions")
+                if ingested_pages:
+                    logger.info(f"Added nodes from {len(ingested_pages)} website pages")
+            except Exception as e:
+                logger.error(f"Failed to add website content: {e}")
+
+            # Add Google Drive content
+            try:
+                drive_service = GoogleDriveService(db)
+                ingested_drive_files = drive_service.get_ingested_files(department.id)
+                for file in ingested_drive_files:
+                    # Use unique doc_id stored in metadata to avoid filename collisions
+                    unique_doc_id = f"google_drive_{file.file_id}"
+                    drive_doc_ids = service.get_doc_ids_by_metadata("doc_id", unique_doc_id)
+                    latest_doc_ids.extend(drive_doc_ids)
+                
+                if ingested_drive_files:
+                    logger.info(f"Added nodes from {len(ingested_drive_files)} Google Drive files")
+            except Exception as e:
+                logger.error(f"Failed to add Google Drive content: {e}")
+
+            if not latest_doc_ids:
+                document_status = "no_valid_versions"
+                # Do NOT force fallback to CHAT mode.
+                # Instead, set empty context filter so strict RAG returns "I don't know"
+                # body.use_context = ChatMode.CHAT.value  <-- REMOVED
+                
+                body.context_filter = ContextFilter(docs_ids=[])
+                
+                logger.warning(f"No valid document/website versions found")
+                
+                # Log no valid versions
+                log_audit(
+                    model="Chat",
+                    action="no_valid_versions",
+                    details={
+                        "query": original_prompt,
+                        "user": current_user.username,
+                        "department_id": department.id
+                    },
+                    user_id=current_user.id,
+                    username=current_user.username,
+                    severity="WARNING"
+                )
+            else:
+                document_status = "available"
+                body.context_filter = ContextFilter(docs_ids=latest_doc_ids)
+                logger.info(f"Found {len(latest_doc_ids)} valid document nodes/versions")
 
         def build_history() -> List[OpenAIMessage]:
             history_messages: List[OpenAIMessage] = []
@@ -335,7 +376,9 @@ async def prompt_completion(
         chat_response = await chat_completion(
             request=request,
             body=chat_body,
-            file_list=file_list
+            file_list=file_list,
+            db=db,
+            token_user=current_user
         )
         if isinstance(chat_response, StreamingResponse):
             # Log streaming response
@@ -364,34 +407,35 @@ async def prompt_completion(
             "content": ai_response["choices"][0]["message"]["content"],
             "sources": ai_response["choices"][0]["sources"]
         }
-
-        try:
-            # Get FAQ service once
-            faq_service = request.state.injector.get(FAQService)            
-            cache_id = ai_response["choices"][0].get("cache_id")
-            if cache_id:
-                # Convert cache_id string back to integer for database operations
-                try:
-                    cache_id_int = int(cache_id)
-                    success = faq_service.increment_cache_hit_frequency(db, cache_id_int)
-                    if success:
-                        logger.info(f"Successfully incremented frequency for cached FAQ {cache_id}")
-                    else:
-                        logger.warning(f"Failed to increment frequency for cached FAQ {cache_id}")
-                except (ValueError, TypeError) as e:
-                    logger.error(f"Invalid cache_id format '{cache_id}': {e}")
-            else:
-                # This is a new interaction - optionally create FAQ for future caching
-                # Only create FAQ if it meets certain criteria (e.g., not already exists)
-                cache_in = FAQCreate(
-                    question=original_prompt,
-                    answer=cache_response,
-                    category='cache'
-                )
-                new_faq = faq_service.create_faq(db, cache_in, current_user.id)
-                logger.info(f"Created new FAQ entry {new_faq.id} for potential future caching")
-        except Exception as e:
-            logger.error(f"Error handling FAQ cache operations: {e}", exc_info=True)
+            
+        if settings().faq.enabled:
+            try:
+                # Get FAQ service once
+                faq_service = request.state.injector.get(FAQService)            
+                cache_id = ai_response["choices"][0].get("cache_id")
+                if cache_id:
+                    # Convert cache_id string back to integer for database operations
+                    try:
+                        cache_id_int = int(cache_id)
+                        success = faq_service.increment_cache_hit_frequency(db, cache_id_int)
+                        if success:
+                            logger.info(f"Successfully incremented frequency for cached FAQ {cache_id}")
+                        else:
+                            logger.warning(f"Failed to increment frequency for cached FAQ {cache_id}")
+                    except (ValueError, TypeError) as e:
+                        logger.error(f"Invalid cache_id format '{cache_id}': {e}")
+                else:
+                    # This is a new interaction - optionally create FAQ for future caching
+                    # Only create FAQ if it meets certain criteria (e.g., not already exists)
+                    cache_in = FAQCreate(
+                        question=original_prompt,
+                        answer=cache_response,
+                        category='cache'
+                    )
+                    new_faq = faq_service.create_faq(db, cache_in, current_user.id)
+                    logger.info(f"Created new FAQ entry {new_faq.id} for potential future caching")
+            except Exception as e:
+                logger.error(f"Error handling FAQ cache operations: {e}", exc_info=True)
     
         response = ChatResponse(id=chat.id, response=chat_response)
         

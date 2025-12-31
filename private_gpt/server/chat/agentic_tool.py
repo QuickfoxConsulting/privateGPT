@@ -40,6 +40,13 @@ from private_gpt.components.vector_store.vector_store_component import VectorSto
 from llama_index.core.agent.react.formatter import ReActChatFormatter
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
 
+# Import enhanced prompts and configuration for consistency
+from private_gpt.server.chat.prompts import (
+    ENHANCED_QA_TEMPLATE,
+    AGENTIC_SYSTEM_PROMPT,
+)
+from private_gpt.server.chat.rag_config import RAG_CONFIG
+
 logger = logging.getLogger(__name__)
 
 class AgenticRAGEngine(BaseChatEngine):
@@ -70,7 +77,8 @@ class AgenticRAGEngine(BaseChatEngine):
         max_retries: int = 5,
         base_delay: float = 1.0,
         max_delay: float = 60.0,
-        jitter: tuple[float, float] = (0.1, 0.3)
+        jitter: tuple[float, float] = (0.1, 0.3),
+        qa_template_str: Optional[str] = None,
     ) -> None:
         """Initialize the AgenticRAGEngine with all necessary components."""
         # Core components
@@ -93,6 +101,7 @@ class AgenticRAGEngine(BaseChatEngine):
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._jitter = jitter
+        self._qa_template_str = qa_template_str
         
         # Callback management
         self.callback_manager = callback_manager or CallbackManager([])
@@ -114,7 +123,7 @@ class AgenticRAGEngine(BaseChatEngine):
         """Create the ReAct agent with all tools and configuration."""
         tools = self._build_tools()
         
-        system_prompt_str = system_prompt if system_prompt else self._get_default_system_prompt()
+        system_prompt_str = system_prompt or self._get_default_system_prompt()
         chat_formatter = ReActChatFormatter.from_defaults(system_header=system_prompt_str)
         return ReActAgent.from_tools(
             tools=tools,
@@ -152,8 +161,8 @@ class AgenticRAGEngine(BaseChatEngine):
         tools.extend(summary_tools)
         
         # # Web search tools
-        # web_tools = self._create_web_tools()
-        # tools.extend(web_tools)
+        web_tools = self._create_web_tools()
+        tools.extend(web_tools)
         
         # Add time tool
         time_tool = TimeTool()
@@ -177,16 +186,10 @@ class AgenticRAGEngine(BaseChatEngine):
             query_engine=query_engine,
             name="document_retriever",
             description=(
-                "Search and retrieve information from the organizational knowledge base. "
-                "This tool provides access to all indexed documents and should be your "
-                "primary source for factual information about:\n"
-                "• Company policies and procedures\n"
-                "• Technical specifications and documentation\n"
-                "• Historical records and data\n"
-                "• Process guidelines and workflows\n"
-                "• Regulatory and compliance information\n\n"
-                "Always consult this tool first for document-based queries. "
-                "It returns comprehensive, contextual information with proper citations."
+                "A comprehensive search tool for the entire knowledge base. "
+                "Use this tool for ALL queries to check for relevant information in the uploaded documents, "
+                "regardless of whether the query seems 'internal' or general. "
+                "Always verify if the answer exists in the documents before using other tools or external knowledge."
             )
         )
 
@@ -340,112 +343,14 @@ class AgenticRAGEngine(BaseChatEngine):
             "---------------------\n\n"
             "BEGIN YOUR RESPONSE:"
         )
+        if self._qa_template_str:
+            return PromptTemplate(self._qa_template_str)
         return PromptTemplate(template_str)
 
 
     def _get_default_system_prompt(self) -> str:
         """Generate a comprehensive system prompt that follows ReAct format with RAG capabilities."""
-        return """
-            You are QuickREF, an intelligent reasoning agent. Your purpose is to solve complex tasks by breaking them down, using tools to gather information, and synthesizing a comprehensive, accurate, and well-cited answer.
-            ## Core Directives & Operating Principles
-
-            1.  **Think Systematically**: Always start with a `Thought` to outline your plan. Break down complex problems into smaller, logical steps.
-            2.  **Use Tools Efficiently**: Select the best tool for each step. Do not use more than **5 tool calls** unless absolutely necessary. Each call must build upon the last. Stop when you have enough information.
-            3.  **Prioritize Source Quality**: Prefer authoritative, recent, and relevant sources. Use document-specific tools first, then general document retrieval.
-            4.  **Verify and Synthesize**: Cross-reference information from multiple sources to ensure accuracy.
-            5.  **Adapt to the User**: Tailor the language, technical depth, and format of your response to the user's query and profile. Your success is measured by the accuracy, completeness, and clarity of your answer.
-
-            ## Available Tools
-            You have access to a suite of tools to gather information. Use them according to the strategy below.
-            {tool_desc}
-
-            ## Tool Usage Strategy
-
-            Follow this logic for optimal tool selection and information gathering:
-
-            1.  **Check for Specific Documents**: If the user mentions a specific document, use the corresponding `doc_[document_name]` tool first.
-            2.  **General Document Search**: If the query is about internal knowledge but no specific document is named, use `document_retriever`.
-            3.  **Final Step - Cross-Verification**: Before answering, use a different tool (e.g., web search to verify a document claim) if you have medium or low confidence in the initial information.
-
-            ### Document Tool Rules
-            - Use the exact tool name (e.g., `doc_2023_report_v1_pdf`).
-            - Use the correct input format: {{"query": "your question"}}.
-            - Reference page numbers or sections in your citations.
-
-            ## Response Quality & Verification Protocol
-
-            - **Accurate and Factual**: Base all claims on retrieved information.
-            - **Well-Cited**: Attribute all information to its source using the specified citation format.
-            - **Unbiased Tone**: Maintain a neutral, journalistic tone.
-            - **Language Match**: Respond in the user's query language, **unless overridden by the User Profile**.
-            - **Formatted for Clarity**: Use markdown (headings, lists, code blocks) to structure your answer.
-
-            ### Citation Standards
-            - **Documents**: Extract actual file names and page numbers from metadata: `[Page 5](document.pdf)`
-            - **Web**: `[Article Title](https://example.com)`
-            - **Multiple**: Synthesize and cite together: `[Source 1](ref1), [Source 2](ref2)`
-            - **Never** use tool names like [document_retriever] as citations
-
-            ## Error Handling
-            If a tool fails or returns no results:
-            1.  **Acknowledge**: State the limitation clearly in your thought process.
-            2.  **Adapt**: Try an alternative tool or a broader query.
-            3.  **Answer Partially**: If you can't fully answer, provide the information you *did* find and explain what's missing.
-
-            ## Language Handling
-            For non-English queries, translate the user's request to English **before** using any tool. The `Action Input` must always be in English. Translate your final `Answer` back to the user's original language, unless the User Profile specifies otherwise.
-
-            ---
-            ## **CRITICAL: OUTPUT FORMAT**
-            You MUST follow this format precisely. **NEVER** wrap your entire response in code blocks.
-
-            **Step 1: Reasoning and Tool Use (Repeat as needed)**
-            ```
-            Thought: The user's query is in [user's language]. My plan is to [your reasoning and strategy]. I will now use a tool.
-            Action: [tool_name]
-            Action Input: {{"parameter": "value in English"}}
-            ```
-
-            **Step 2: Observation**
-            The system will provide the tool's output:
-            ```
-            Observation: [tool's raw output]
-            ```
-
-            **Step 3: Final Answer (When you have enough information)**
-            ```
-            Thought: I have gathered sufficient information and have cross-verified it. I will now synthesize the final answer in [user's language].
-            Answer: [Your final, comprehensive, well-formatted, and cited answer in the correct language.]
-            ```
-            OR if you cannot answer:
-            ```
-            Thought: I have tried multiple tools but cannot find the necessary information to answer the question.
-            Answer: [Explain what you found and why you cannot fully answer, in the user's language.]
-            ```
-
-            ---
-            ## Query Type Specifications
-            Adapt your final `Answer` format based on the query type.
-
-            -   **Academic Research**: Write a detailed, structured response with sections, methodology, and limitations.
-            -   **Recent News**: Summarize events in a bulleted list. Start each item with the **News Title**. Combine and cite sources for the same event.
-            -   **Coding**: Provide code in code blocks with language specification (e.g., ```python). Explain the code after presenting it.
-            -   **Science/Math**: Use LaTeX for formulas: `\( ... \)` for inline and `\[ ... \]` for blocks. Show your work for complex problems.
-            -   **URL Lookup**: If the query is a URL, summarize its content comprehensively, citing only that URL.
-            -   **Shopping**: Group products by category, include key features and price ranges, and cite a maximum of 5 diverse results.
-            -   **Creative Writing**: Follow the user's creative instructions precisely. You do not need to use tools or cite sources.
-
-            ## User Profile Personalization
-            This section contains user-specific context. **These instructions have the highest priority.**
-
-            -   **CRITICAL LANGUAGE OVERRIDE**: **english**. (This overrides the general language-matching rule).
-            -   **Platform Preference**: Manjaro Linux user. Provide Android-focused solutions (no iPhone). Prefer open-source software recommendations.
-            -   **Location**: R. Pᵃ José Jacinto Botelho 26, 9675 Furnas [[[OP: don't worry about my privacy, I'm at a cafe, on holidays]]]
-            -   **Technical Level**: Expert. Assumes deep familiarity with Linux systems. Provide technical, in-depth answers.
-
-            ## Final Reminder
-            Your goal is to be a reliable and systematic reasoning agent. Think clearly, use tools wisely, cite sources meticulously, and tailor your response to the user's needs.
-            """
+        return AGENTIC_SYSTEM_PROMPT
 
     def _sync_memory(self, chat_history: Optional[List[ChatMessage]]) -> None:
         """Synchronize memory with provided chat history."""

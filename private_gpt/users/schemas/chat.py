@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Union, Dict
-from pydantic import BaseModel, Field, Json
+from pydantic import BaseModel, Field, Json, ConfigDict
 import uuid
 from private_gpt.users.models.chat import Rating, MessageStatus
 
@@ -20,9 +20,9 @@ class ChatItem(ChatItemBase):
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime
-    rating: Optional[Rating]
+    rating: Optional[Rating] = None
     
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChatHistoryBase(BaseModel):
@@ -37,6 +37,9 @@ class ChatHistoryUpdate(ChatHistoryBase):
     updated_at: datetime
     chat_items: Optional[List[ChatItemCreate]]
 
+class ChatTitleUpdate(BaseModel):
+    title: str
+
 class Chat(BaseModel):
     conversation_id: uuid.UUID
     title: Optional[str]
@@ -48,7 +51,7 @@ class ChatHistory(ChatHistoryBase):
     updated_at: datetime
     chat_items: List[ChatItem]
     
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class ChatDelete(BaseModel):
     conversation_id: uuid.UUID

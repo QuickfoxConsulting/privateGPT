@@ -44,6 +44,13 @@ from private_gpt.server.chat.search_tool import SearchRAGEngine
 from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
 from private_gpt.server.cache.cache_service import CacheService
+from private_gpt.users.services.prompt_service import prompt_service
+from sqlalchemy.orm import Session
+from private_gpt.server.chat.prompts import (
+    DEFAULT_SYSTEM_PROMPT,
+    RETRIEVAL_SYSTEM_PROMPT,
+    AGENTIC_SYSTEM_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,51 +66,8 @@ class CompletionGen(BaseModel):
 class TitleGeneration(BaseModel):
     title: str
 
+
 reranker_path = models_path / 'reranker'
-current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-DEFAULT_SYSTEM_PROMPT = f"""
-You are QuickREF, a helpful, honest, and knowledgeable assistant from Quickfox Consulting.
-Current date is {current_date}.
-Your goal is to support users effectively by providing clear, accurate, and respectful responses. 
-- When context is available, use it faithfully and avoid speculation.
-- When context is missing, draw on general knowledge confidently — but never make things up.
-- Communicate in a helpful, human tone. No over-apologies or robotic phrasing.
-
-Stay professional, avoid hedging language, and aim to genuinely assist.
-"""
-
-RETRIEVAL_SYSTEM_PROMPT = f"""
-You are a retrieval-augmented assistant built to provide clear, accurate, and context-grounded responses using provided documents.
-Current date is {current_date}
-### Key Principles
-
-1. **Answer Only From Documents**
-   - Use ONLY the retrieved context to answer — no speculation or external knowledge.
-   - If something is **not in the documents**, clearly say:  
-     "The provided documents do not contain information about [topic]."
-
-2. **Professional and Clear Style**
-   - Communicate with clarity, confidence, and respect.
-   - Sound like a knowledgeable expert — approachable and helpful, not overly formal.
-   - Avoid phrases like "I believe" or "It appears" unless uncertainty is present in the documents.
-
-3. **Well-Structured Responses**
-   - Use **bold** for key terms or phrases.
-   - Organize answers with bullet points, numbered lists, or Markdown headers as needed.
-   - Keep responses concise but complete.
-
-4. **Transparent Handling of Gaps**
-   - If only partial information is available, say what is known and clarify what is missing.
-   - Avoid guessing or inventing missing parts — never "fill in the blanks."
-
-5. **Natural Tone + Honest Limits**
-   - Feel free to paraphrase when appropriate, but quote directly if accuracy matters.
-   - If the question is ambiguous, ask for clarification — but only when necessary.
-   - Avoid over-explaining limitations unless it's helpful to the user.
-
-Your job is to make complex information easy to understand, grounded in evidence, and free of fluff or guesswork.
-"""
 
 CONTEXT_PROMPT_TEMPLATE = """  
 You are a document-grounded assistant. Use ONLY the context below to answer the user's question.
@@ -222,8 +186,13 @@ class ChatService:
         )
         self.node_store = node_store_component
         
-    def _get_qa_template(self) -> str:
+    def _get_qa_template(self, db: Session, user_id: int | None, mode: str) -> str:
         """Custom QA template with better context integration."""
+        if db and user_id:
+            qa_prompt = prompt_service.get_resolved_prompt(db, user_id, mode, "qa")
+            if qa_prompt:
+                return qa_prompt
+
         return """Context information is below:
             ---------------------
             {context_str}
@@ -300,14 +269,38 @@ class ChatService:
         context_filter: ContextFilter | None = None,
         file_list: List[str] = None,
         chat_history: list[ChatMessage] | None = None,
+        user_id: int | None = None,
+        db: Session | None = None,
     ) -> BaseChatEngine:
         settings = self.settings
+        logger.info(f"Chat mode: {use_context}")
+
+        # Resolve dynamic prompts
+        resolved_system_prompt = system_prompt
+        resolved_qa_template = None
+        resolved_condense_prompt = None
+        resolved_decompose_prompt = None
+        resolved_context_prompt = None
+
+        if db and user_id:
+            # System Prompt
+            db_system_prompt = prompt_service.get_resolved_prompt(db, user_id, use_context, "system")
+            if db_system_prompt:
+                resolved_system_prompt = db_system_prompt
+            
+            # QA Template
+            resolved_qa_template = prompt_service.get_resolved_prompt(db, user_id, use_context, "qa")
+            
+            # Condense Prompt
+            resolved_condense_prompt = prompt_service.get_resolved_prompt(db, user_id, use_context, "condense")
+
+            # Decompose Prompt
+            resolved_decompose_prompt = prompt_service.get_resolved_prompt(db, user_id, use_context, "decompose")
+
+            # Context Prompt
+            resolved_context_prompt = prompt_service.get_resolved_prompt(db, user_id, use_context, "context")
+
         if use_context == ChatMode.AGENTIC.value:
-            # vector_index_retriever = self.vector_store_component.get_retriever(
-            #     index=self.index,
-            #     context_filter=context_filter,
-            #     similarity_top_k=self.settings.rag.similarity_top_k,
-            # )   
             node_postprocessors = [
                 MetadataReplacementPostProcessor(target_metadata_key="window"),
                 SimilarityPostprocessor(
@@ -328,7 +321,7 @@ class ChatService:
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
                     llm=self.llm_component.llm, 
-                    top_n=10,
+                    top_n=5,
                     verbose=True
                 )
                 node_postprocessors.append(rerank_postprocessor)
@@ -340,6 +333,8 @@ class ChatService:
                 node_store_component=self.node_store,
                 vector_store_component=self.vector_store_component,
                 node_postprocessors=node_postprocessors,
+                system_prompt=resolved_system_prompt or AGENTIC_SYSTEM_PROMPT,
+                qa_template_str=resolved_qa_template,
                 max_iterations=20,
                 verbose=True,
             )
@@ -364,7 +359,7 @@ class ChatService:
                     next_pages=1,
                     mode="next"
                 ),
-            LongContextReorder(),
+                LongContextReorder(),
             ]
             if settings.rag.rerank.enabled:
                 rerank_postprocessor = rankGPT_rerank.RankGPTRerank(
@@ -378,7 +373,7 @@ class ChatService:
                 response_mode="tree_summarize",
                 llm=self.llm_component.llm,
                 structured_answer_filtering=True,
-                text_qa_template=self._get_qa_template(),
+                text_qa_template=resolved_qa_template or self._get_qa_template(db, user_id, use_context),
                 # streaming=True  # Enable streaming for better responsiveness
             )
             custom_query_engine = RetrieverQueryEngine.from_args(
@@ -387,39 +382,29 @@ class ChatService:
                 response_synthesizer=response_synthesizer,
                 verbose=True  # For debugging and understanding the process
             )
-            return ContextChatEngine.from_defaults(
-                system_prompt=system_prompt,
+            return CondensePlusContextChatEngine.from_defaults(
+                system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
                 retriever=custom_query_engine,
                 llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
-                # condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-                # context_prompt=CONTEXT_PROMPT_TEMPLATE,
+                condense_prompt=resolved_condense_prompt,
+                context_prompt=resolved_context_prompt,
                 verbose=True,
             )
             # return AgenticCondenseChatEngine.from_defaults(
             #     retriever=vector_index_retriever,
             #     llm=self.llm_component.llm, 
             #     node_postprocessors=node_postprocessors,
-            #     condense_prompt=CONDENSE_PROMPT_TEMPLATE,
-            #     context_prompt=CONTEXT_PROMPT_TEMPLATE,
-            #     system_prompt=RETRIEVAL_SYSTEM_PROMPT,
+            #     condense_prompt=resolved_condense_prompt,
+            #     decompose_prompt=resolved_decompose_prompt,
+            #     context_prompt=resolved_context_prompt,
+            #     system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
             #     skip_condense=True,
             #     verbose=True,
             # )
-            # return SearchRAGEngine(
-            #     llm=self.llm_component.llm,
-            #     index=self.index,
-            #     document_files=file_list,
-            #     node_store_component=self.node_store,
-            #     vector_store_component=self.vector_store_component,
-            #     node_postprocessors=node_postprocessors,
-            #     max_iterations=5,
-            #     verbose=True,
-            # )
-        
         else:
             return SimpleChatEngine.from_defaults(
-                system_prompt=DEFAULT_SYSTEM_PROMPT,
+                system_prompt=resolved_system_prompt or DEFAULT_SYSTEM_PROMPT,
                 llm=self.llm_component.llm,
             )
 
@@ -430,28 +415,39 @@ class ChatService:
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
         cache_service: CacheService | None = None,
+        user_id: int | None = None,
+        db: Session | None = None,
     ) -> CompletionGen:
-        # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
             else None
         )
-    
-        system_prompt = (
-            chat_engine_input.system_message.content
-            if chat_engine_input.system_message
-            else None
-        )
+        
+        # Check FAQ cache for streaming mode too (performance optimization)
+        if cache_service and last_message and use_context == ChatMode.SEARCH.value:
+            cache_answer = self._check_faq_cache(cache_service, last_message)
+            if cache_answer:
+                # Convert cached response to streaming format
+                async def cached_stream():
+                    yield cache_answer["content"]
+                
+                return CompletionGen(
+                    response=cached_stream(),
+                    sources=cache_answer["sources"]
+                )
+        
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
         chat_engine = await self._chat_engine(
-            system_prompt=system_prompt,
+            system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
             file_list=file_list,
             context_filter=context_filter,
+            user_id=user_id,
+            db=db,
         )
         streaming_response = chat_engine.stream_chat(
             message=last_message if last_message is not None else "",
@@ -470,6 +466,8 @@ class ChatService:
         file_list: List[str] = None,
         context_filter: ContextFilter | None = None,
         cache_service: CacheService | None = None,
+        user_id: int | None = None,
+        db: Session | None = None,
     ) -> Completion:
         # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
@@ -478,37 +476,24 @@ class ChatService:
             if chat_engine_input.last_message
             else None
         )
-
-        ## Check whether the query answer is in the cache
-        cache_answer = None
-        if cache_service and last_message and (use_context == ChatMode.SEARCH.value):
-            cache_answer = self._check_faq_cache(cache_service, last_message)
-
-            if cache_answer:
-                completion = Completion(
-                    cache_id=cache_answer["id"],
-                    response=cache_answer["content"],
-                    sources=cache_answer["sources"]
-                )
-                return completion
-
-        ## If not:
         chat_history = (
             chat_engine_input.chat_history if chat_engine_input.chat_history else None
         )
-
         chat_engine = await self._chat_engine(
             system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
             context_filter=context_filter,
             file_list=file_list,
-            chat_history=chat_history
+            chat_history=chat_history,
+            user_id=user_id,
+            db=db,
         )
         wrapped_response = chat_engine.chat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        
+        logger.info(f"Response: {wrapped_response.response}")
+        logger.info(f"Source nodes: {wrapped_response.source_nodes}")
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources, cache_id=None)
         return completion
