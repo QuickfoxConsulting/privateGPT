@@ -58,18 +58,18 @@ EXPOSE 8000
 WORKDIR /app
 
 # Create directories
-RUN mkdir -p local_data models
+RUN mkdir -p local_data models static
 
 # Copy dependencies
 COPY --from=dependencies /app/.venv/ .venv
 
-# Copy only necessary application files
+# Copy configuration and metadata files
+COPY pyproject.toml poetry.lock alembic.ini version.txt Makefile *.yaml /app/
+
+# Copy application directories
 COPY private_gpt/ /app/private_gpt/
 COPY scripts/ /app/scripts/
-COPY *.yaml /app/
 COPY alembic/ /app/alembic/
-COPY alembic.ini /app/
-COPY pyproject.toml poetry.lock /app/
 
 # Create startup script with Hugging Face login
 RUN echo '#!/bin/bash\n\
@@ -85,7 +85,22 @@ else\n\
 fi\n\
 \n\
 # Apply Alembic database migrations\n\
-echo "Applying database migrations"\n\
+echo "Applying database migrations in sequence"\n\
+alembic upgrade 0c3bba0d99f7\n\
+alembic upgrade d06186f6137d\n\
+alembic upgrade b3579174f52d\n\
+alembic upgrade 4aae9ee1ebd1\n\
+alembic upgrade 93338be47304\n\
+alembic upgrade aa67a3d40eb8\n\
+alembic upgrade 4ab215adb170\n\
+alembic upgrade efd1005423e3\n\
+alembic upgrade bd924bd5f7c7\n\
+alembic upgrade 402b01ec4e0c\n\
+alembic upgrade ad321d227e01\n\
+alembic upgrade b27038ed57a8\n\
+alembic upgrade 74c21a6df740\n\
+alembic upgrade 8cd9ac60d165\n\
+alembic upgrade cbb350a4679c\n\
 alembic upgrade head\n\
 \n\
 # Load fixture data\n\
