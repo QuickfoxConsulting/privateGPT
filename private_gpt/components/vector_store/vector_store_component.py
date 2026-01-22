@@ -122,22 +122,19 @@ class VectorStoreComponent:
                 #         "Trying to connect to Qdrant at localhost:6333."
                 #     )
                 client = QdrantClient(url="http://qdrant:6333")
-                # aclient = AsyncQdrantClient(url="http://qdrant:6333")
+                aclient = AsyncQdrantClient(url="http://qdrant:6333")
                 self.vector_store = typing.cast(
                     VectorStore,
                     QdrantVectorStore(
                         client=client,
-                        # aclient=aclient,
+                        aclient=aclient,
                         collection_name="make_this_parameterizable_per_api_call",
                         vector_name="text-dense",
                         sparse_vector_name="text-sparse-new",
                         enable_hybrid=True, 
-                        fastembed_sparse_model="Qdrant/bm42-all-minilm-l6-v2-attentions",
-                        # batch_size=20,
-                        # sparse_doc_fn=sparse_doc_vectors,
-                        # sparse_query_fn=sparse_query_vectors,
+                        fastembed_sparse_model="prithivida/Splade_PP_en_v1",
+                        fastembed_cache_dir="/app/models/cache/fastembed",
                         use_async=True,
-                        # hybrid_fusion_fn=relative_score_fusion,
                     ),  # TODO
                 )
             case "milvus":

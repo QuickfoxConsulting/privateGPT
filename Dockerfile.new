@@ -86,22 +86,29 @@ fi\n\
 \n\
 # Apply Alembic database migrations\n\
 echo "Applying database migrations"\n\
-alembic upgrade 0c3bba0d99f7\n\
-alembic upgrade d06186f6137d\n\
-alembic upgrade b3579174f52d\n\
-alembic upgrade 4aae9ee1ebd1\n\
-alembic upgrade 93338be47304\n\
-alembic upgrade aa67a3d40eb8\n\
-alembic upgrade 4ab215adb170\n\
-alembic upgrade efd1005423e3\n\
+alembic upgrade head\n\
 \n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
 poetry run python scripts/fixtures.py\n\
 playwright install \n\
 \n\
-echo "Starting FastAPI server"\n\
-echo "Starting PrivateGPT"\n\
+# Fix for tiktoken download issues\n\
+if [ -n "$TIKTOKEN_CACHE_DIR" ]; then\n\
+  mkdir -p "$TIKTOKEN_CACHE_DIR"\n\
+  TIKTOKEN_URL="https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"\n\
+  CACHE_FILE="$TIKTOKEN_CACHE_DIR/9b5ad71b4cead37050684f88e"\n\
+  if [ ! -f "$CACHE_FILE" ]; then\n\
+    echo "Pre-downloading tiktoken encoding..."\n\
+    curl -L --retry 5 "$TIKTOKEN_URL" -o "$CACHE_FILE" || echo "Warning: Failed to pre-download tiktoken"\n\
+  fi\n\
+fi\n\
+\n\
+# Pre-download fastembed sparse model to bypass runtime network issues\n\
+echo \"Ensuring fastembed sparse model is present...\"\n\
+mkdir -p /app/models/cache/fastembed\n\
+huggingface-cli download prithivida/Splade_PP_en_v1 --cache-dir /app/models/cache/fastembed || echo \"Warning: Failed to pre-download fastembed model\"\n\
+\n\
+echo "Starting FastAPI server with profile: gemini"\n\
 PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 2' > /app/startup.sh && chmod +x /app/startup.sh
-
 ENTRYPOINT ["/app/startup.sh"]

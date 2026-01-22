@@ -20,6 +20,7 @@ from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 from private_gpt.users.core.config import settings
 from private_gpt.users import crud, models, schemas
+from private_gpt.users.db.session import SessionLocal
 from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.constants import UNCHECKED_DIR, UPLOAD_DIR
 from private_gpt.manager.document_manager import DocumentManager
@@ -388,10 +389,15 @@ async def verify_document_background(
                 metadata_dict,
                 strategy=strategy
             )
+
+            db = SessionLocal()
             status_update = schemas.StatusUpdate(
                doc_status=DocumentStatus.READY.value
             )
             crud.documents.update(db=db, db_obj=document, obj_in=status_update)
+            db.add(document)
+            db.commit()
+            db.refresh(document)
             
         elif status == MakerCheckerStatus.REJECTED:
             await doc_manager.reject_document(temp_path)
@@ -491,7 +497,7 @@ async def verify_documents(
             doc_manager=doc_manager,
             log_audit=log_audit,
             request=request,
-            strategy=ChunkingStrategy.LATE_CHUNKING
+            strategy=ChunkingStrategy.HIERARCHICAL
         )
 
         return {"status": "verification_started", "message": "Document verification has been started"}

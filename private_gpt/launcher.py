@@ -1,5 +1,9 @@
 import logging
 from typing import Annotated
+import nest_asyncio
+
+# Patch asyncio to allow nested event loops (required for LlamaIndex sync tools in async context)
+nest_asyncio.apply()
 from injector import Injector
 from pathlib import Path
 from fastapi import Depends, FastAPI, Request, WebSocket
@@ -21,6 +25,7 @@ from private_gpt.server.recipes.summarize.summarize_router import summarize_rout
 from private_gpt.server.cache.cache_router import router as cache_router
 from private_gpt.users.api.v1.routers.websocket_router import websocket_router
 from private_gpt.server.integrations.integrations_router import integrations_router
+
 
 from private_gpt.server.integrations.website_crawl_service import WebsiteCrawlService
 logger = logging.getLogger(__name__)

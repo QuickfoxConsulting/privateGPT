@@ -17,7 +17,7 @@ from llama_index.core.postprocessor import (
     rankGPT_rerank
 )
 from llama_index.core.storage import StorageContext
-from llama_index.core.types import TokenGen
+from llama_index.core.types import TokenGen, TokenAsyncGen
 from private_gpt.server.cache.faq_service import FAQService
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.components.retriever.metadata_retriever import MetadataFilterRetriever
@@ -43,6 +43,9 @@ from private_gpt.server.chat.agentic_tool import AgenticRAGEngine
 from private_gpt.server.chat.search_tool import SearchRAGEngine
 from private_gpt.components.postprocessor.PrevNext import DocumentAwarePrevNextPostprocessor
 
+from private_gpt.server.agents.orchestrator_engine import HierarchicalAgentEngine
+from private_gpt.server.tools.tool_registry import ToolRegistry
+
 from private_gpt.server.cache.cache_service import CacheService
 from private_gpt.users.services.prompt_service import prompt_service
 from sqlalchemy.orm import Session
@@ -50,6 +53,7 @@ from private_gpt.server.chat.prompts import (
     DEFAULT_SYSTEM_PROMPT,
     RETRIEVAL_SYSTEM_PROMPT,
     AGENTIC_SYSTEM_PROMPT,
+    resolve_system_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +64,8 @@ class Completion(BaseModel):
     sources: list[Chunk] | None = None
 
 class CompletionGen(BaseModel):
-    response: TokenGen
+    model_config = {"arbitrary_types_allowed": True}
+    response: TokenGen | TokenAsyncGen
     sources: list[Chunk] | None = None
 
 class TitleGeneration(BaseModel):
@@ -326,14 +331,18 @@ class ChatService:
                 )
                 node_postprocessors.append(rerank_postprocessor)
 
-            return AgenticRAGEngine(
+            # Use HierarchicalAgentEngine instead of raw AgenticRAGEngine
+            tool_registry = ToolRegistry(db)
+            return HierarchicalAgentEngine(
                 llm=self.llm_component.llm,
+                tool_registry=tool_registry,
+                user_id=user_id,
                 index=self.index,
-                document_files=file_list,
-                node_store_component=self.node_store,
                 vector_store_component=self.vector_store_component,
+                node_store_component=self.node_store,
                 node_postprocessors=node_postprocessors,
-                system_prompt=resolved_system_prompt or AGENTIC_SYSTEM_PROMPT,
+                document_files=file_list,
+                system_prompt=resolve_system_prompt(resolved_system_prompt or AGENTIC_SYSTEM_PROMPT),
                 qa_template_str=resolved_qa_template,
                 max_iterations=20,
                 verbose=True,
@@ -374,21 +383,17 @@ class ChatService:
                 llm=self.llm_component.llm,
                 structured_answer_filtering=True,
                 text_qa_template=resolved_qa_template or self._get_qa_template(db, user_id, use_context),
-                # streaming=True  # Enable streaming for better responsiveness
+                streaming=True  # Enable streaming for better responsiveness
             )
-            custom_query_engine = RetrieverQueryEngine.from_args(
+            
+            return CondensePlusContextChatEngine.from_defaults(
                 retriever=vector_index_retriever,
                 llm=self.llm_component.llm,
-                response_synthesizer=response_synthesizer,
-                verbose=True  # For debugging and understanding the process
-            )
-            return CondensePlusContextChatEngine.from_defaults(
-                system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
-                retriever=custom_query_engine,
-                llm=self.llm_component.llm,  # Takes no effect at the moment
                 node_postprocessors=node_postprocessors,
+                system_prompt=resolve_system_prompt(resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT),
                 condense_prompt=resolved_condense_prompt,
                 context_prompt=resolved_context_prompt,
+                streaming=True,
                 verbose=True,
             )
             # return AgenticCondenseChatEngine.from_defaults(
@@ -404,8 +409,9 @@ class ChatService:
             # )
         else:
             return SimpleChatEngine.from_defaults(
-                system_prompt=resolved_system_prompt or DEFAULT_SYSTEM_PROMPT,
+                system_prompt=resolve_system_prompt(resolved_system_prompt or DEFAULT_SYSTEM_PROMPT),
                 llm=self.llm_component.llm,
+                streaming=True,
             )
 
     async def stream_chat(
@@ -418,17 +424,33 @@ class ChatService:
         user_id: int | None = None,
         db: Session | None = None,
     ) -> CompletionGen:
+        logger.info(f"Starting stream_chat with mode: {use_context}, user_id: {user_id}")
+        
+        # Debug logging for message content types
+        for i, msg in enumerate(messages):
+            logger.info(f"Message {i} ({msg.role}): content type={type(msg.content)}, content_preview={str(msg.content)[:100]}")
+
         chat_engine_input = ChatEngineInput.from_messages(messages)
-        last_message = (
+        last_message_content = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
             else None
         )
         
+        # Handle dict vs string content
+        last_message = ""
+        if isinstance(last_message_content, dict):
+            last_message = last_message_content.get('text', '')
+        elif isinstance(last_message_content, str):
+            last_message = last_message_content
+        
+        logger.info(f"Extracted last_message: '{last_message[:100]}...' (original type: {type(last_message_content)})")
+        
         # Check FAQ cache for streaming mode too (performance optimization)
         if cache_service and last_message and use_context == ChatMode.SEARCH.value:
             cache_answer = self._check_faq_cache(cache_service, last_message)
             if cache_answer:
+                logger.info(f"Using cached FAQ answer for streaming")
                 # Convert cached response to streaming format
                 async def cached_stream():
                     yield cache_answer["content"]
@@ -438,24 +460,118 @@ class ChatService:
                     sources=cache_answer["sources"]
                 )
         
-        chat_history = (
-            chat_engine_input.chat_history if chat_engine_input.chat_history else None
-        )
+        # Normalize chat_history to ensure all messages have string content
+        chat_history = []
+        if chat_engine_input.chat_history:
+            for msg in chat_engine_input.chat_history:
+                content = msg.content
+                if isinstance(content, dict):
+                    content = content.get('text', '')
+                chat_history.append(ChatMessage(role=msg.role, content=content))
+        
+        logger.info(f"Final last_message: '{last_message[:50]}...' (original type: {type(last_message_content)})")
+        logger.info(f"Final chat_history length: {len(chat_history)}")
+        
         chat_engine = await self._chat_engine(
-            system_prompt=RETRIEVAL_SYSTEM_PROMPT,
             use_context=use_context,
+            system_prompt=None, # System prompt handled in _chat_engine
             file_list=file_list,
             context_filter=context_filter,
             user_id=user_id,
             db=db,
         )
-        streaming_response = chat_engine.stream_chat(
-            message=last_message if last_message is not None else "",
+        
+        logger.info(f"Chat engine created: {type(chat_engine)}, starting astream_chat")
+        streaming_response = await chat_engine.astream_chat(
+            message=last_message,
             chat_history=chat_history,
         )
-        sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+        
+        # Debug: Inspect the streaming response object
+        logger.info(f"astream_chat returned type: {type(streaming_response)}")
+        logger.info(f"Streaming response attributes: chat_stream={getattr(streaming_response, 'chat_stream', 'NOT_FOUND')}, response_gen={getattr(streaming_response, 'response_gen', 'NOT_FOUND')}")
+        
+        # Try to extract initial sources if available
+        initial_sources = []
+        if hasattr(streaming_response, 'source_nodes') and streaming_response.source_nodes:
+            initial_sources = [Chunk.from_node(node) for node in streaming_response.source_nodes]
+        elif hasattr(streaming_response, 'sources') and streaming_response.sources:
+            initial_sources = streaming_response.sources
+        # Check for collected sources from nested engines
+        elif hasattr(streaming_response, '_collected_source_nodes') and streaming_response._collected_source_nodes:
+            initial_sources = [Chunk.from_node(node) for node in streaming_response._collected_source_nodes]
+        elif hasattr(streaming_response, '_collected_sources') and streaming_response._collected_sources:
+            initial_sources = streaming_response._collected_sources
+        
+        logger.info(f"Got streaming response with {len(initial_sources)} initial sources")
+        
+        # Wrap generator to log chunks and handle errors
+        async def logged_gen():
+            first_chunk = True
+            chunk_count = 0
+            
+            try:
+                # Helper to find the actual async generator among possible attributes
+                def get_async_gen(obj):
+                    # Try each possible generator attribute
+                    # IMPORTANT: Check chat_stream first as it's the custom wrapper from our engines
+                    # Check if it's callable (method) - if so, call it to get the generator
+                    for attr_name in ['chat_stream', 'async_response_gen', 'response_gen']:
+                        val = getattr(obj, attr_name, None)
+                        if val is None:
+                            continue
+                        
+                        # If callable, it's a method - call it to get the generator
+                        if callable(val):
+                            try:
+                                logger.info(f"Calling {attr_name}() to get generator")
+                                actual_gen = val()
+                                if actual_gen is not None:
+                                    # Verify it's an async generator
+                                    import inspect
+                                    if inspect.isasyncgen(actual_gen) or hasattr(actual_gen, '__aiter__'):
+                                        return actual_gen, attr_name
+                                    else:
+                                        logger.warning(f"{attr_name}() returned sync generator, need async")
+                            except Exception as e:
+                                logger.warning(f"Failed to call {attr_name}(): {e}")
+                        else:
+                            # It's already a generator - check if it's async
+                            import inspect
+                            if inspect.isasyncgen(val) or hasattr(val, '__aiter__'):
+                                return val, attr_name
+                            else:
+                                logger.warning(f"{attr_name} is a sync generator, need async")
+                    
+                    return None, None
+
+                active_generator, generator_name = get_async_gen(streaming_response)
+                
+                if active_generator is not None:
+                    logger.info(f"Using {generator_name} generator from {type(streaming_response)}")
+                    logger.info(f"Generator type: {type(active_generator)}")
+                    
+                    async for chunk in active_generator:
+                        chunk_count += 1
+                        if first_chunk:
+                            # Extract text from chunk if it's an object
+                            preview = str(getattr(chunk, 'delta', chunk))[:100] if hasattr(chunk, 'delta') else str(chunk)[:100]
+                            logger.info(f"First chunk type: {type(chunk)}, preview: {preview}")
+                            first_chunk = False
+                        yield chunk
+                    
+                    logger.info(f"Streaming completed with {chunk_count} chunks via {generator_name}")
+                else:
+                    logger.error(f"Could not find any valid generator in {type(streaming_response)}")
+                    logger.error(f"Available attributes: {[attr for attr in dir(streaming_response) if not attr.startswith('_')]}")
+                    yield "Error: No valid streaming generator found"
+                    
+            except Exception as e:
+                logger.error(f"Error during streaming: {e}", exc_info=True)
+                yield f"Error during streaming: {str(e)}"
+        
         completion_gen = CompletionGen(
-            response=streaming_response.response_gen, sources=sources
+            response=logged_gen(), sources=initial_sources
         )
         return completion_gen
 
@@ -488,12 +604,10 @@ class ChatService:
             user_id=user_id,
             db=db,
         )
-        wrapped_response = chat_engine.chat(
+        wrapped_response = await chat_engine.achat(
             message=last_message if last_message is not None else "",
             chat_history=chat_history,
         )
-        logger.info(f"Response: {wrapped_response.response}")
-        logger.info(f"Source nodes: {wrapped_response.source_nodes}")
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources, cache_id=None)
         return completion

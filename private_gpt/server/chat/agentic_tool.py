@@ -13,7 +13,9 @@ from threading import Thread
 from typing import Any, List, Optional, Dict, Union
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
-from llama_index.core.callbacks import CallbackManager, trace_method
+from llama_index.core.callbacks import CallbackManager, trace_method, CBEventType
+from llama_index.core.callbacks.base_handler import BaseCallbackHandler
+from llama_index.core.callbacks.schema import BASE_TRACE_EVENT
 from llama_index.core.chat_engine.types import (
     AgentChatResponse, 
     StreamingAgentChatResponse, 
@@ -31,10 +33,8 @@ from llama_index.core import get_response_synthesizer
 from llama_index.core.indices.vector_store import VectorStoreIndex
 
 from private_gpt.server.tools.time_tool import TimeTool
-from private_gpt.server.tools.web_tool import Crawl4AITool
 from private_gpt.server.tools.document_tool import DocumentSpecificTool
 from private_gpt.server.tools.summary_tool import DocumentSummaryTool
-from private_gpt.server.tools.websearch import SerperSearchToolSpec
 
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from llama_index.core.agent.react.formatter import ReActChatFormatter
@@ -48,6 +48,168 @@ from private_gpt.server.chat.prompts import (
 from private_gpt.server.chat.rag_config import RAG_CONFIG
 
 logger = logging.getLogger(__name__)
+
+class AgentStreamHandler(BaseCallbackHandler):
+    """Callback handler to capture agent steps and push them to a queue for streaming."""
+    
+    def __init__(self, 
+                 event_starts_to_ignore: List[CBEventType] = [], 
+                 event_ends_to_ignore: List[CBEventType] = []):
+        super().__init__(event_starts_to_ignore, event_ends_to_ignore)
+        self.queue = asyncio.Queue()
+        self._current_thought = ""
+        self._current_tool = None
+        self._tool_input = None
+        
+    def _put_event(self, event: Dict[str, Any]) -> None:
+        """Thread-safe event queuing"""
+        try:
+            # Get the running loop from the current context
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.call_soon_threadsafe(self.queue.put_nowait, event)
+        except RuntimeError:
+            # No running loop - try to find one or log warning
+            try:
+                loop = asyncio.get_event_loop()
+                loop.call_soon_threadsafe(self.queue.put_nowait, event)
+            except Exception as e:
+                logger.warning(f"Failed to queue event: {e}")
+
+    def on_event_start(self, 
+                       event_type: CBEventType, 
+                       payload: Optional[Dict[str, Any]] = None, 
+                       event_id: str = "", 
+                       **kwargs: Any) -> str:
+        """Capture event starts for context"""
+        
+        if event_type == CBEventType.LLM and payload:
+            # Capture LLM calls - this is where agent reasoning happens
+            messages = payload.get("messages", [])
+            if messages:
+                # The last message is usually the current reasoning
+                last_msg = messages[-1] if isinstance(messages, list) else None
+                if last_msg:
+                    content = getattr(last_msg, 'content', str(last_msg))
+                    # Check if this looks like agent reasoning
+                    if "Thought:" in content or "Action:" in content:
+                        # Optional: signal a new reasoning step
+                        pass
+        
+        elif event_type == CBEventType.RETRIEVE:
+            self._put_event({
+                "thought": "🔍 Searching knowledge base..."
+            })
+            
+        elif event_type == CBEventType.FUNCTION_CALL or (hasattr(CBEventType, 'TOOL') and event_type == CBEventType.TOOL):
+            # Extract tool information
+            tool_name = None
+            if payload:
+                tool_name = payload.get("tool_name") or payload.get("name")
+                if not tool_name and "tool" in payload:
+                    tool_obj = payload["tool"]
+                    tool_name = getattr(tool_obj, "name", None)
+            
+            self._current_tool = tool_name
+            if tool_name:
+                self._put_event({
+                    "action": tool_name,
+                    "action_input": str(payload.get("tool_input")) if payload.get("tool_input") else None
+                })
+        
+        return event_id
+
+    def on_event_end(self, 
+                     event_type: CBEventType, 
+                     payload: Optional[Dict[str, Any]] = None, 
+                     event_id: str = "", 
+                     **kwargs: Any) -> None:
+        """Capture completed events"""
+        
+        if event_type == CBEventType.LLM and payload:
+            # Capture LLM response - contains agent's reasoning
+            response = payload.get("response")
+            if response:
+                content = getattr(response, 'message', None)
+                if content:
+                    text = getattr(content, 'content', str(content))
+                    
+                    # Parse ReAct format: Thought: ... Action: ... Action Input: ...
+                    if "Thought:" in text:
+                        thought = self._extract_section(text, "Thought:", ["Action:", "Action Input:", "Observation:"])
+                        if thought:
+                            expected_thought = thought.strip()
+                            if expected_thought != self._current_thought:
+                                self._current_thought = expected_thought
+                                self._put_event({
+                                    "thought": expected_thought
+                                })
+                    
+                    if "Action:" in text:
+                        action = self._extract_section(text, "Action:", ["Action Input:", "Observation:", "Thought:"])
+                        if action:
+                            self._put_event({
+                                "action": action.strip()
+                            })
+                    
+                    if "Action Input:" in text:
+                        action_input = self._extract_section(text, "Action Input:", ["Observation:", "Thought:", "Answer:"])
+                        if action_input:
+                            self._put_event({
+                                "action_input": action_input.strip()
+                            })
+        
+        elif event_type == CBEventType.FUNCTION_CALL or (hasattr(CBEventType, 'TOOL') and event_type == CBEventType.TOOL):
+            if payload:
+                response = payload.get("response") or payload.get("output")
+                # tool_name = self._current_tool or "tool"
+                
+                # Truncate long responses for streaming
+                response_preview = str(response)[:500] if response else "completed"
+                
+                self._put_event({
+                    "observation": response_preview
+                })
+                self._current_tool = None
+        
+        # Handle errors
+        if payload and "error" in payload:
+            self._put_event({
+                "thought": f"❌ Error: {str(payload['error'])}"
+            })
+
+    def _extract_section(self, text: str, start_marker: str, end_markers: List[str]) -> Optional[str]:
+        """Extract a section between markers"""
+        if start_marker not in text:
+            return None
+        
+        try:
+            start_idx = text.index(start_marker) + len(start_marker)
+            
+            # Find the earliest end marker
+            end_idx = len(text)
+            for end_marker in end_markers:
+                if end_marker in text[start_idx:]:
+                    marker_idx = text.index(end_marker, start_idx)
+                    end_idx = min(end_idx, marker_idx)
+            
+            return text[start_idx:end_idx].strip()
+        except ValueError:
+            return None
+
+    def signal_complete(self):
+        """Signal that agent execution is complete"""
+        self._put_event({"event": "complete"})
+        
+    def start_trace(self, trace_id: Optional[str] = None) -> None:
+        pass
+
+    def end_trace(self, 
+                  trace_id: Optional[str] = None, 
+                  trace_map: Optional[Dict[str, List[str]]] = None, 
+                  **kwargs: Any) -> None:
+        """Signal end of trace"""
+        self.signal_complete()
 
 class AgenticRAGEngine(BaseChatEngine):
     """
@@ -79,6 +241,7 @@ class AgenticRAGEngine(BaseChatEngine):
         max_delay: float = 60.0,
         jitter: tuple[float, float] = (0.1, 0.3),
         qa_template_str: Optional[str] = None,
+        external_tools: Optional[List[BaseTool]] = None,
     ) -> None:
         """Initialize the AgenticRAGEngine with all necessary components."""
         # Core components
@@ -95,6 +258,7 @@ class AgenticRAGEngine(BaseChatEngine):
         self._tool_name_prefix = tool_name_prefix
         self._citation_format = citation_format
         self._similarity_top_k = similarity_top_k
+        self._external_tools = external_tools or []
         
         # Rate limit handling
         self._max_retries = max_retries
@@ -133,7 +297,8 @@ class AgenticRAGEngine(BaseChatEngine):
             verbose=self._verbose,
             callback_manager=self.callback_manager,
             max_iterations=self._max_iterations,
-            tool_retrieval_mode="structured"
+            tool_retrieval_mode="structured",
+            streaming=True
         )
 
     @property
@@ -167,6 +332,10 @@ class AgenticRAGEngine(BaseChatEngine):
         # Add time tool
         time_tool = TimeTool()
         tools.append(time_tool)
+        
+        # Add external tools injected from Registry or Planner
+        if self._external_tools:
+            tools.extend(self._external_tools)
         
         # Validate and return tools
         validated_tools = self._validate_tools(tools)
@@ -205,7 +374,7 @@ class AgenticRAGEngine(BaseChatEngine):
             llm=self._llm,
             structured_answer_filtering=True,
             text_qa_template=self._get_qa_template(),
-            streaming=False,
+            streaming=True,
             callback_manager=self.callback_manager
         )
         
@@ -277,23 +446,13 @@ class AgenticRAGEngine(BaseChatEngine):
         return tools
 
     def _create_web_tools(self) -> List[BaseTool]:
-        """Create web search and crawling tools."""
-        tools = []
+        """Create web search and crawling tools.
         
-        try:
-            search_tool_spec = SerperSearchToolSpec()
-            search_tools = search_tool_spec.to_tool_list()
-            tools.extend(search_tools)
-            
-            crawl_tool = Crawl4AITool()
-            tools.append(crawl_tool)
-            
-            if self._verbose:
-                logger.info(f"Created {len(tools)} web tools")
-                
-        except Exception as e:
-            logger.error(f"Failed to create web tools: {e}")
-        return tools
+        NOTE: Web tools are now handled as external tools or integrations.
+        This method is kept empty or minimal to avoid breaking calls, 
+        or we assume they come via self._external_tools.
+        """
+        return []
 
     def _validate_tools(self, tools: List[BaseTool]) -> List[BaseTool]:
         """Validate tools for name uniqueness and proper configuration."""
@@ -584,43 +743,183 @@ class AgenticRAGEngine(BaseChatEngine):
     ) -> StreamingAgentChatResponse:
         """
         Asynchronous streaming chat method following BaseChatEngine interface.
-        
-        Args:
-            message: User's message/query
-            chat_history: Optional chat history to restore context
-            
-        Returns:
-            StreamingAgentChatResponse with async streaming generator
         """
         self._sync_memory(chat_history)
         
-        for attempt in range(self._max_retries):
+        # Strategy: Use a custom callback handler to capture events
+        handler = AgentStreamHandler()
+        self.callback_manager.add_handler(handler)
+        
+        # Store source nodes to populate after streaming
+        collected_source_nodes = []
+        collected_sources = []
+        
+        async def combined_gen():
+            nonlocal collected_source_nodes, collected_sources
             try:
-                response = await self._agent.astream_chat(message)
+                # Start agent chat in a task
+                agent_task = asyncio.create_task(self._agent.astream_chat(message))
                 
-                result = StreamingAgentChatResponse(
-                    chat_stream=response.response_gen,
-                    sources=getattr(response, 'sources', []),
-                    source_nodes=getattr(response, 'source_nodes', [])
-                )
+                # Consume events until reasoning finishes and returns the response object
+                # Reasoning is done when agent_task returns the StreamingAgentChatResponse
+                while not agent_task.done():
+                    while not handler.queue.empty():
+                        event = await handler.queue.get()
+                        if isinstance(event, dict) and event.get("event") == "complete":
+                            continue
+                        yield event
+                    await asyncio.sleep(0.05)
                 
-                # Handle memory update in background thread
-                Thread(
-                    target=result.write_response_to_history, 
-                    args=(self._memory,),
-                    daemon=True
-                ).start()
+                # Check for remaining events after reasoning task completion
+                while not handler.queue.empty():
+                    event = await handler.queue.get()
+                    if isinstance(event, dict) and event.get("event") == "complete":
+                        continue
+                    yield event
                 
-                return result
+                # Once reasoning loop is done, get the streaming response object
+                response = await agent_task
                 
+                # Extract sources before streaming text
+                if hasattr(response, 'source_nodes') and response.source_nodes:
+                    collected_source_nodes.extend(response.source_nodes)
+                if hasattr(response, 'sources') and response.sources:
+                    collected_sources.extend(response.sources)
+                
+                # Stream the actual text response
+                # StreamingAgentChatResponse has multiple possible generator attributes
+                # Helper to find the actual async generator among possible attributes
+                def get_async_gen(obj):
+                    # Try each possible generator attribute
+                    # Check if it's callable (method) - if so, call it to get the generator
+                    for attr_name in ['async_response_gen', 'chat_stream', 'response_gen']:
+                        val = getattr(obj, attr_name, None)
+                        if val is None:
+                            continue
+                        
+                        # If callable, it's a method - call it to get the generator
+                        if callable(val):
+                            try:
+                                logger.info(f"AgenticRAG: Calling {attr_name}() to get generator")
+                                actual_gen = val()
+                                if actual_gen is not None:
+                                    return actual_gen, attr_name
+                            except Exception as e:
+                                logger.warning(f"AgenticRAG: Failed to call {attr_name}(): {e}")
+                        else:
+                            # It's already a generator - check if it's async
+                            import inspect
+                            if inspect.isasyncgen(val) or hasattr(val, '__aiter__'):
+                                return val, attr_name
+                            else:
+                                logger.warning(f"AgenticRAG: {attr_name} is a sync generator, need async")
+                    return None, None
+
+                active_generator, generator_name = get_async_gen(response)
+                
+                if active_generator is not None:
+                    logger.info(f"AgenticRAG: Using {generator_name} for streaming")
+                    logger.info(f"AgenticRAG: Generator type: {type(active_generator)}")
+                    
+                    # IMPORTANT: For ReAct agents, the callback handler already emitted
+                    # structured events (thought, action, observation). The response_gen
+                    # contains the RAW ReAct-formatted text which we should NOT stream
+                    # because it's redundant and confusing.
+                    #
+                    # We only need to extract the FINAL ANSWER from the agent's response.
+                    # The final answer comes AFTER all the Thought/Action/Observation cycles.
+                    
+                    full_response = ""
+                    async for chunk in active_generator:
+                        # Collect the full response
+                        if isinstance(chunk, str):
+                            full_response += chunk
+                    
+                    logger.info(f"AgenticRAG: Full response length: {len(full_response)} chars")
+                    logger.info(f"AgenticRAG: Response preview: {full_response[:500]}")
+                    
+                    # Now parse out ONLY the final answer
+                    # The agent's response format can be:
+                    # 1. Just the answer text (simple queries)
+                    # 2. Thought/Action/Observation cycles ending with Answer: <text>
+                    # 3. Answer may contain code blocks (```...```)
+                    
+                    # Strategy: Find "Answer:" that's NOT inside a code block
+                    # Then extract everything after it (including any code blocks in the answer)
+                    
+                    import re
+                    
+                    # Find all code block positions to avoid matching "Answer:" inside them
+                    code_block_ranges = []
+                    for match in re.finditer(r'```[\s\S]*?```', full_response):
+                        code_block_ranges.append((match.start(), match.end()))
+                    
+                    # Function to check if a position is inside a code block
+                    def is_in_code_block(pos):
+                        return any(start <= pos < end for start, end in code_block_ranges)
+                    
+                    # Find "Answer:" that's not in a code block
+                    answer_start = None
+                    for match in re.finditer(r'(?:^|\n)\s*Answer:\s*', full_response, re.IGNORECASE):
+                        if not is_in_code_block(match.start()):
+                            answer_start = match.end()
+                            break
+                    
+                    if answer_start is not None:
+                        # Extract from "Answer:" to the end (or until next ReAct marker outside code blocks)
+                        # Look for the next Thought:/Action:/Observation: that's not in a code block
+                        end_pos = len(full_response)
+                        for match in re.finditer(r'\n\s*(?:Thought|Action|Observation):', full_response[answer_start:], re.IGNORECASE):
+                            abs_pos = answer_start + match.start()
+                            if not is_in_code_block(abs_pos):
+                                end_pos = abs_pos
+                                break
+                        
+                        final_answer = full_response[answer_start:end_pos].strip()
+                        logger.info(f"AgenticRAG: Extracted answer using pattern match ({len(final_answer)} chars)")
+                    else:
+                        # Fallback: Check if response is pure ReAct formatting (has Thought/Action but no Answer)
+                        if ("Thought:" in full_response or "Action:" in full_response) and "Answer:" not in full_response:
+                            logger.warning("AgenticRAG: Response contains only ReAct formatting, no final answer")
+                            final_answer = "I apologize, but I wasn't able to formulate a complete answer."
+                        else:
+                            # The entire response might be the answer (no ReAct formatting)
+                            logger.info("AgenticRAG: Using full response as answer (no ReAct markers found)")
+                            final_answer = full_response.strip()
+                    
+                    # Stream the final answer word by word for better UX
+                    logger.info(f"AgenticRAG: Streaming answer: {final_answer[:200]}...")
+                    words = final_answer.split()
+                    for word in words:
+                        yield word + " "
+                        await asyncio.sleep(0.005)  # Faster streaming
+                else:
+                    logger.error(f"AgenticRAG: Could not find any valid async generator in {type(response)}")
+                    logger.error(f"Available attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+                    yield {"thought": "❌ Error: No valid streaming generator found"}
+                
+                # Final drain of the queue
+                while not handler.queue.empty():
+                    event = await handler.queue.get()
+                    if isinstance(event, dict) and event.get("event") == "complete":
+                        continue
+                    yield event
+                    
             except Exception as e:
-                if self._is_rate_limit_error(e) and attempt < self._max_retries - 1:
-                    await self._handle_rate_limit(attempt, e)
-                    continue
-                
-                logger.error(f"Async stream chat error: {e}", exc_info=self._verbose)
-                return StreamingAgentChatResponse(
-                    chat_stream=iter(["I encountered an error while processing your request."]),
-                    sources=[],
-                    source_nodes=[]
-                )
+                logger.error(f"Error in combined agent stream: {e}", exc_info=True)
+                yield {"thought": f"❌ Error: {str(e)}"}
+            finally:
+                self.callback_manager.remove_handler(handler)
+
+        # Create response object that will be populated with sources during streaming
+        streaming_response = StreamingAgentChatResponse(
+            chat_stream=combined_gen(),
+            sources=[],
+            source_nodes=[]
+        )
+        
+        # Attach references to collected data so they can be accessed after streaming
+        streaming_response._collected_source_nodes = collected_source_nodes
+        streaming_response._collected_sources = collected_sources
+        
+        return streaming_response

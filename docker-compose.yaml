@@ -13,6 +13,7 @@ services:
       - ./root/.cache:/root/.cache
       - ./private_gpt/:/app/private_gpt
       - ./alembic/:/app/alembic
+      - ./startup.sh:/app/startup.sh
     ports:
       - "8000:8000"
     depends_on:
@@ -28,6 +29,7 @@ services:
       PGPT_MODE: ollama
       DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
       QDRANT_URL: http://qdrant:6333
+      TIKTOKEN_CACHE_DIR: /app/models/tiktoken
       # OLLAMA_URL: http://ollama:11434
     restart: unless-stopped
     healthcheck:

@@ -17,3 +17,6 @@ api_router.include_router(audits.router)
 api_router.include_router(chat_history.router)
 api_router.include_router(categories.router)
 api_router.include_router(prompts.router)
+
+from private_gpt.server.tools.tools_router import router as tools_router
+api_router.include_router(tools_router)

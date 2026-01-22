@@ -11,3 +11,4 @@ from .chat import ChatHistory, ChatItem
 from .category import Category, document_category_association
 from .integration import GoogleDriveAuth, WebsiteCrawlConfig, WebsiteCrawlPage
 from .prompt import Prompt
+from .tool import ToolCategory, ToolDefinition, UserToolInstallation, ToolExecutionLog

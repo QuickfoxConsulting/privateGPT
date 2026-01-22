@@ -4,6 +4,7 @@ import uuid
 import logging
 import traceback
 import itertools
+import time
 from pathlib import Path
 
 
@@ -20,9 +21,12 @@ from private_gpt.open_ai.openai_models import (
 )
 
 from private_gpt.server.cache.faq_service import FAQService
+from private_gpt.server.cache.cache_service import CacheService
 from private_gpt.server.integrations.website_crawl_service import WebsiteCrawlService
 from private_gpt.server.integrations.google_drive_service import GoogleDriveService
 from private_gpt.users.schemas.faq import FAQCreate
+from private_gpt.users.db.session import SessionLocal
+from private_gpt.users.utils.audit import log_audit_entry
 from private_gpt.utils.chat_enums import ChatMode
 from private_gpt.server.chat.chat_service import ChatService
 from private_gpt.users import crud, models, schemas
@@ -132,6 +136,146 @@ def create_chat_item(db: Session, sender: str, content: dict, conversation_id: u
         chat_history.generate_title()
     new_chat_item = crud.chat_item.create(db, obj_in=chat_item_create)
     return new_chat_item
+
+async def save_response_to_db(full_response, unique_sources, conversation_id, original_prompt, current_user):
+    """Separate function to handle database persistence."""
+    if not full_response and not unique_sources:
+        logger.warning(f"No response content to save for conversation {conversation_id}")
+        return
+        
+    db_session = SessionLocal()
+    try:
+        final_sources = list(unique_sources.values())
+        
+        ai_response_json = {
+            "id": str(uuid.uuid4()),
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "private-gpt",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": full_response
+                },
+                "finish_reason": "stop",
+                "sources": final_sources
+            }]
+        }
+        
+        create_chat_item(db_session, "assistant", ai_response_json, conversation_id)
+        
+        log_audit_entry(
+            db_session,
+            model="Chat",
+            action="completion_success_streamed",
+            details={
+                "query": original_prompt,
+                "user": current_user.username,
+                "response_length": len(full_response),
+                "source_count": len(final_sources)
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            severity="INFO"
+        )
+        
+        db_session.commit()
+        logger.info(f"Successfully saved streamed response to DB for conversation {conversation_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to save streamed response to DB: {e}", exc_info=True)
+        db_session.rollback()
+    finally:
+        db_session.close()
+
+async def stream_with_persistence(response_gen, conversation_id, original_prompt, current_user):
+    """Wrap the SSE stream to persist the full response after streaming.
+    
+    Args:
+        response_gen: Iterator yielding SSE-formatted strings/bytes
+        conversation_id: UUID of the conversation
+        original_prompt: Original user prompt
+        current_user: Current user object
+    """
+    full_response = ""
+    unique_sources = {}
+    
+    async def process_and_yield():
+        nonlocal full_response, unique_sources
+        
+        try:
+            # Handle standard async iterator
+            if hasattr(response_gen, "__aiter__"):
+                async for chunk in response_gen:
+                    yield chunk
+                    try:
+                        line = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                continue
+                            data = json.loads(data_str)
+                            
+                            if "choices" in data and data["choices"]:
+                                delta = data["choices"][0].get("delta", {})
+                                if "content" in delta and delta["content"]:
+                                    full_response += delta["content"]
+                                
+                                chunk_sources = data["choices"][0].get("sources")
+                                if chunk_sources and isinstance(chunk_sources, list):
+                                    for s in chunk_sources:
+                                        doc_meta = s.get('document', {}).get('doc_metadata', {})
+                                        file_name = doc_meta.get('file_name', 'unknown')
+                                        page = doc_meta.get('page_label', '') or doc_meta.get('page', '')
+                                        source_key = f"{file_name}_{page}_{hash(s.get('text', ''))}"
+                                        
+                                        if source_key not in unique_sources:
+                                            unique_sources[source_key] = s
+                    except Exception as e:
+                        logger.warning(f"Failed to process SSE chunk for persistence: {e}")
+                        
+            # Handle sync iterator fallback (though FastAPI StreamingResponse usually wraps this)
+            else:
+                for chunk in response_gen:
+                    yield chunk
+                    try:
+                        line = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                continue
+                            data = json.loads(data_str)
+                            if "choices" in data and data["choices"]:
+                                delta = data["choices"][0].get("delta", {})
+                                if "content" in delta and delta["content"]:
+                                    full_response += delta["content"]
+                                chunk_sources = data["choices"][0].get("sources")
+                                if chunk_sources and isinstance(chunk_sources, list):
+                                    for s in chunk_sources:
+                                        doc_meta = s.get('document', {}).get('doc_metadata', {})
+                                        file_name = doc_meta.get('file_name', 'unknown')
+                                        source_key = f"{file_name}_{hash(s.get('text', ''))}"
+                                        if source_key not in unique_sources:
+                                            unique_sources[source_key] = s
+                    except Exception:
+                        pass
+                        
+        except Exception as e:
+            logger.error(f"Error during stream processing: {e}", exc_info=True)
+            # Re-raise to ensure client knows something went wrong, 
+            # though SSE might already have sent headers
+            raise
+        finally:
+            await save_response_to_db(
+                full_response, 
+                unique_sources, 
+                conversation_id, 
+                original_prompt, 
+                current_user
+            )
+            
+    return process_and_yield()
 
 @completions_router.post(
     "/chat",
@@ -380,21 +524,20 @@ async def prompt_completion(
             db=db,
             token_user=current_user
         )
+        
         if isinstance(chat_response, StreamingResponse):
-            # Log streaming response
-            log_audit(
-                model="Chat",
-                action="streaming_response",
-                details={
-                    "query": original_prompt,
-                    "user": current_user.username,
-                    "document_status": document_status,
-                },
-                user_id=current_user.id,
-                username=current_user.username,
-                severity="INFO"
+            # Wrap the iterator to persist it when done
+            # We await stream_with_persistence to get the generator
+            stream_gen = await stream_with_persistence(
+                chat_response.body_iterator,
+                body.conversation_id,
+                original_prompt,
+                current_user
             )
-            return chat_response         
+            return StreamingResponse(
+                stream_gen,
+                media_type="text/event-stream"
+            )
         
         ai_response = chat_response.model_dump(mode="json")
         chat = create_chat_item(

@@ -7,7 +7,7 @@ from private_gpt.server.chat.chat_router import ChatBody
 def test_chat_route_produces_a_stream(test_client: TestClient) -> None:
     body = ChatBody(
         messages=[OpenAIMessage(content="test", role="user")],
-        use_context=False,
+        use_context="chat",
         stream=True,
     )
     response = test_client.post("/v1/chat/completions", json=body.model_dump())
@@ -25,7 +25,7 @@ def test_chat_route_produces_a_stream(test_client: TestClient) -> None:
 def test_chat_route_produces_a_single_value(test_client: TestClient) -> None:
     body = ChatBody(
         messages=[OpenAIMessage(content="test", role="user")],
-        use_context=False,
+        use_context="chat",
         stream=False,
     )
     response = test_client.post("/v1/chat/completions", json=body.model_dump())

@@ -129,7 +129,16 @@ class IngestionHelper:
             except:
                 return file_data
         logger.debug("Specific reader found for extension=%s", extension)
-        return await reader_cls().load_data(file_data)
+        
+        # Instantiate the reader
+        reader = reader_cls()
+        
+        # Check if the reader has async support
+        if hasattr(reader, 'aload_data'):
+            return await reader.aload_data(file_data)
+        else:
+            # Fallback to synchronous load_data
+            return reader.load_data(file_data)
 
     @staticmethod
     def _exclude_metadata(documents: list[Document]) -> None:

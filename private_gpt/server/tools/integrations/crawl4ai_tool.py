@@ -1,31 +1,59 @@
+import logging
 import re
 import json
 import asyncio
-import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
-from crawl4ai.async_configs import CacheMode
 from concurrent.futures import ThreadPoolExecutor
 
-from llama_index.core.tools import BaseTool
-from llama_index.core.tools.types import ToolMetadata, ToolOutput
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, RegexChunking
+from crawl4ai.async_configs import CacheMode
+from crawl4ai.extraction_strategy import NoExtractionStrategy
+from llama_index.core.tools import BaseTool, FunctionTool, ToolMetadata, ToolOutput
+
+from private_gpt.server.tools.tool_interface import BaseMCPTool, ToolAuthConfig, ToolCapability
 
 logger = logging.getLogger(__name__)
 
-class Crawl4AITool(BaseTool):
+class Crawl4AITool(BaseMCPTool):
     """Tool to extract readable content from a webpage."""
 
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.verbose = verbose
         self._executor = ThreadPoolExecutor(max_workers=1)
 
-    @property
-    def metadata(self) -> ToolMetadata:
+
+    async def test_connection(self) -> bool:
+        """Test if the crawler is ready."""
+        return True
+
+    def _create_metadata(self) -> ToolMetadata:
         return ToolMetadata(
             name="crawl4ai_scraper",
             description="Extract readable content from a webpage using its URL."
         )
+
+    @classmethod
+    def get_config_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "verbose": {"type": "boolean"}
+            },
+            "required": []
+        }
+
+    @classmethod
+    def get_capabilities(cls) -> List[ToolCapability]:
+        return [ToolCapability.READ]
+
+    @classmethod
+    def get_auth_config(cls) -> Optional[ToolAuthConfig]:
+        return None
+
+    def validate_config(self, config: Dict[str, Any]) -> bool:
+        return True
 
     def _validate_url(self, url: str) -> bool:
         try:
@@ -40,8 +68,8 @@ class Crawl4AITool(BaseTool):
             async with AsyncWebCrawler(verbose=self.verbose) as crawler:
                 config = CrawlerRunConfig(
                     word_count_threshold=10,
-                    extraction_strategy="NoExtractionStrategy",
-                    chunking_strategy="RegexChunking",
+                    extraction_strategy=NoExtractionStrategy(),
+                    chunking_strategy=RegexChunking(),
                     cache_mode=CacheMode.BYPASS
                 )
                 result = await crawler.arun(
@@ -67,7 +95,22 @@ class Crawl4AITool(BaseTool):
         
         return self._executor.submit(_run).result()
 
+    def crawl_url(self, url: str) -> str:
+        """Extract readable content from a webpage."""
+        if not self._validate_url(url):
+            return f"Invalid URL format: {url}"
+
+        # Run the crawl in a separate thread with its own event loop
+        # This mirrors the original implementation's behavior
+        return self._run_in_thread(url)
+    
     def __call__(self, input: Any) -> ToolOutput:
+        # Maintain original __call__ behavior for backward compatibility if needed,
+        # but typical BaseMCPTool usage goes through to_tool_list -> FunctionTool -> fn
+        # However, checking the original code, it had a complex __call__ handling string/dict input.
+        # FunctionTool usually handles argument parsing.
+        # We'll implement the logic in crawl_url and expose that.
+        # If explicitly called as an object (not via FunctionTool wrapper), we use this:
         try:
             if isinstance(input, str):
                 try:
@@ -80,19 +123,8 @@ class Crawl4AITool(BaseTool):
                 input_dict = {"url": str(input)}
 
             url = input_dict.get("url", "").strip()
-
-            if not self._validate_url(url):
-                msg = f"Invalid URL format: {url}"
-                return ToolOutput(
-                    content=msg,
-                    raw_input=input_dict,
-                    raw_output=msg,
-                    tool_name="crawl4ai_scraper"
-                )
-
-            # Run the crawl in a separate thread with its own event loop
-            result = self._run_in_thread(url)
-
+            result = self.crawl_url(url)
+            
             return ToolOutput(
                 content=result,
                 raw_input=input_dict,
@@ -109,3 +141,12 @@ class Crawl4AITool(BaseTool):
                 raw_output=msg,
                 tool_name="crawl4ai_scraper"
             )
+
+    def to_tool_list(self) -> List[BaseTool]:
+        return [
+            FunctionTool.from_defaults(
+                fn=self.crawl_url,
+                name="crawl4ai_scraper",
+                description="Extract readable content from a webpage using its URL."
+            )
+        ]

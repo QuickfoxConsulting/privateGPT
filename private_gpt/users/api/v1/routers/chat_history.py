@@ -94,7 +94,7 @@ def read_chat_history(
         paginated_chat_items_orm = (
             db.query(models.ChatItem)
             .filter(models.ChatItem.conversation_id == conversation_id)
-            .order_by(models.ChatItem.created_at.asc())
+            .order_by(models.ChatItem.created_at.desc())
             .offset(skip)
             .limit(limit)
             .all()

@@ -143,48 +143,7 @@ def is_retryable_error(e: BaseException) -> bool:
     return any(k in error_str for k in retry_keywords)
 
 
-class TokenEncryption:
-    """Helper class for token encryption and decryption."""
-
-    def __init__(self) -> None:
-        self.encryption_key = settings.INTEGRATION_ENCRYPTION_KEY
-        self._cipher_suite: Optional[Fernet] = None
-
-    @property
-    def cipher_suite(self) -> Fernet:
-        """Get the cipher suite, initializing it if necessary."""
-        if self._cipher_suite is None:
-            if not self.encryption_key:
-                logger.error("INTEGRATION_ENCRYPTION_KEY is not set.")
-                raise ValueError(
-                    "INTEGRATION_ENCRYPTION_KEY must be set for token encryption/decryption"
-                )
-            try:
-                key = (
-                    self.encryption_key.encode()
-                    if isinstance(self.encryption_key, str)
-                    else self.encryption_key
-                )
-                self._cipher_suite = Fernet(key)
-            except Exception as e:
-                logger.error(f"Failed to initialize encryption cipher: {str(e)}")
-                raise ValueError(f"Invalid INTEGRATION_ENCRYPTION_KEY: {str(e)}") from e
-        return self._cipher_suite
-
-    def encrypt(self, data: str) -> str:
-        """Encrypt string data."""
-        if not data:
-            return ""
-        return self.cipher_suite.encrypt(data.encode()).decode()
-
-    def decrypt(self, encrypted_data: str) -> str:
-        """Decrypt string data."""
-        if not encrypted_data:
-            return ""
-        return self.cipher_suite.decrypt(encrypted_data.encode()).decode()
-
-
-token_encryption = TokenEncryption()
+from private_gpt.server.utils.encryption import token_encryption
 
 
 # -------------------------------------------------------------------------
@@ -1014,7 +973,6 @@ class GoogleDriveService(BaseIntegration):
                 GoogleDriveFile.is_selected == True,
                 GoogleDriveFile.ingest_status == "ingested",
             )
-            .all()
             .all()
         )
 
