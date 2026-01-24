@@ -196,7 +196,7 @@ class DocumentList(DocumentsBase):
     uploaded_by: int
     uploaded_at: datetime
     doc_status: str
-    vesion: Optional[DocumentVersionOut]
+    version: Optional[DocumentVersionOut]
     doc_metadata: Dict[str, Any] = {}
     categories: List[CategoryList] = []
     departments: List[DepartmentList] = []

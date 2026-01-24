@@ -720,7 +720,6 @@ class GoogleDriveService(BaseIntegration):
                         uploaded_by=user_id,
                     )
                     version = crud.document_versions.create(self.db, obj_in=version_in)
-                    document.current_version_id = version.id
                     self.db.commit()
                 else:
                     document.doc_status = DocumentStatus.INGESTING.value

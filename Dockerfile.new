@@ -43,7 +43,6 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 ARG POETRY_EXTRAS="vector-stores-qdrant embeddings-huggingface llms-gemini embeddings-gemini storage-nodestore-postgres"
 RUN poetry install --no-root --extras "${POETRY_EXTRAS}"
-RUN playwright install 
 FROM base AS app
 # Add ARG for Hugging Face token - can be passed at build time
 # ARG HF_TOKEN="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"
@@ -78,7 +77,7 @@ set -e\n\
 # Login to Hugging Face if token is provided\n\
 if [ -n "$HF_TOKEN" ]; then\n\
   echo "Logging into Hugging Face..."\n\
-  python -c "from huggingface_hub import login; login(token=\"$HF_TOKEN\", write_permission=True)"\n\
+  python -c "from huggingface_hub import login; login(token=\"$HF_TOKEN\")"\n\
   echo "Hugging Face login successful"\n\
 else\n\
   echo "No Hugging Face token provided, skipping login"\n\
@@ -106,7 +105,7 @@ alembic upgrade head\n\
 # Load fixture data\n\
 echo "Loading fixtures"\n\
 poetry run python scripts/fixtures.py\n\
-playwright install \n\
+# playwright install \n\
 \n\
 # Fix for tiktoken download issues\n\
 if [ -n "$TIKTOKEN_CACHE_DIR" ]; then\n\

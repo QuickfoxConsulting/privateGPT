@@ -413,19 +413,7 @@ async def create_documents(
     
     document = crud.documents.create(db=db, obj_in=docs_in)
     
-    # Create the initial document version
-    version_in = schemas.DocumentVersionCreate(
-        document_id=document.id,
-        version_number=1,
-        status=MakerCheckerStatus.PENDING,
-        action_type=MakerCheckerActionType.INSERT,
-        file_path="",
-        uploaded_by=current_user.id,
-    )
-    document_version = crud.document_versions.create(db=db, obj_in=version_in)
-    
-    document.current_version_id = document_version.id
-    db.commit()
+    # Version 1 is automatically created by crud.documents.create
     
     # Extract department IDs from metadata for backward compatibility
     department_ids = []

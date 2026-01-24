@@ -299,9 +299,7 @@ async def upload_documents(
                 document_id=document.id,
                 status=MakerCheckerStatus.APPROVED,
                 current_user_id=current_user.id,
-                db=db,
                 doc_manager=doc_manager,
-                log_audit=log_audit,
                 request=request,
                 strategy=documents.strategy
             )
@@ -321,14 +319,27 @@ async def verify_document_background(
     document_id: int,
     status: MakerCheckerStatus,
     current_user_id: int,
-    db: Session,
     doc_manager: DocumentManager,
-    log_audit: models.Audit,
     request: Request,
     strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
 ):
-    """Background task to handle document verification."""
+    """Background task to handle document verification with fresh DB session."""
+    db = SessionLocal()
     try:
+        # Create audit logger for this session
+        user_agent = request.headers.get("user-agent", None)
+        session_id = request.cookies.get("session_id", None) or request.headers.get("x-session-id", None)
+        request_id = request.headers.get("x-request-id", None)
+        client_host = request.client.host if request.client else None
+
+        from private_gpt.users.utils.audit import log_audit_entry
+        def local_log_audit(model, action, details, user_id=current_user_id):
+            log_audit_entry(
+                db, model, action, details, user_id=user_id, 
+                ip_address=client_host, user_agent=user_agent, 
+                session_id=session_id, request_id=request_id
+            )
+
         document = crud.documents.get_by_id(db, id=document_id)
         if not document or not document.current_version:
             logger.error(f"Document or version not found for ID: {document_id}")
@@ -370,19 +381,19 @@ async def verify_document_background(
                 verified=True,
             )
             crud.documents.update(db=db, db_obj=document, obj_in=checker)
-            db.add(document)
             db.commit()
             db.refresh(document)
 
-            log_audit(
+            local_log_audit(
                 model='Document',
                 action='update',
                 details={
                     'filename': document.filename,
                     'approved_by': str(current_user_id)
-                },
-                user_id=current_user_id
+                }
             )
+            
+            # Perform ingestion
             await ingest(
                 request, 
                 final_path, 
@@ -390,14 +401,16 @@ async def verify_document_background(
                 strategy=strategy
             )
 
-            db = SessionLocal()
+            # Update status to READY after ingestion
+            # Re-fetch document to ensure we have the latest state
+            document = crud.documents.get_by_id(db, id=document_id)
             status_update = schemas.StatusUpdate(
                doc_status=DocumentStatus.READY.value
             )
-            crud.documents.update(db=db, db_obj=document, obj_in=status_update)
-            db.add(document)
+            document = crud.documents.update(db=db, db_obj=document, obj_in=status_update)
             db.commit()
             db.refresh(document)
+            logger.info(f"Document {document.filename} ingestion complete and status set to READY")
             
         elif status == MakerCheckerStatus.REJECTED:
             await doc_manager.reject_document(temp_path)
@@ -426,18 +439,21 @@ async def verify_document_background(
             )
             crud.documents.update(db=db, db_obj=document, obj_in=checker)
             crud.documents.remove(db, id=document.id)
+            db.commit()
             
-            log_audit(
+            local_log_audit(
                 model='Document',
                 action='update',
                 details={
                     'filename': document.filename,
                     'rejected_by': str(current_user_id)
-                },
-                user_id=current_user_id
+                }
             )
     except Exception as e:
         logger.error(f"Error in background verification: {str(e)}\n{traceback.format_exc()}")
+        db.rollback()
+    finally:
+        db.close()
 
 @router.post('/verify')
 async def verify_documents(
@@ -493,9 +509,7 @@ async def verify_documents(
             document_id=checker_in.id,
             status=checker_in.status,
             current_user_id=current_user.id,
-            db=db,
             doc_manager=doc_manager,
-            log_audit=log_audit,
             request=request,
             strategy=ChunkingStrategy.HIERARCHICAL
         )
@@ -511,76 +525,7 @@ async def verify_documents(
             detail="Failed to verify document"
         )
 
-@router.post('/verify')
-async def verify_documents(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    checker_in: schemas.DocumentUpdate,
-    doc_manager: DocumentManager = Depends(deps.get_document_manager),
-    log_audit: models.Audit = Depends(deps.get_audit_logger),
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Security(
-        deps.get_current_user,
-        scopes=[Role.SUPER_ADMIN["name"], Role.OPERATOR["name"], Role.ADMIN['name']],
-    )
-):
-    """Verify (approve/reject) a document."""
-    try:
-        logger.info(f"VERIFYING DOCUMENT::: {checker_in.id}")
-        document = crud.documents.get_by_id(db, id=checker_in.id)
-        if not document or not document.current_version:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document or version not found"
-            )
 
-        if ENABLE_MAKER_CHECKER:
-            if document.verified:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Document already verified"
-                )
-            
-            if not current_user.checker:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Not authorized as checker"
-                )
-            
-            if document.uploaded_by == current_user.id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot verify own upload"
-                )
-
-        temp_path = Path(document.current_version.file_path)
-        if not temp_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Document file not found"
-            )
-
-        background_tasks.add_task(
-            verify_document_background,
-            document_id=checker_in.id,
-            status=checker_in.status,
-            current_user_id=current_user.id,
-            doc_manager=doc_manager,
-            log_audit=log_audit,
-            request=request,
-            strategy=ChunkingStrategy.LATE_CHUNKING
-        )
-
-        return {"status": "verification_started", "message": "Document verification has been started"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error verifying document: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to verify document"
-        )
 
 
 @router.get('/documents/{filename}', response_model=schemas.DocumentFilePath)

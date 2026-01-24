@@ -92,12 +92,18 @@ You are a document-grounded assistant. Use ONLY the context below to answer the 
   - Bullet points or lists where helpful
   - Headings (##, ###) for structure in longer answers
 - Quote directly when precision matters, otherwise paraphrase accurately and concisely
-- Cite sources clearly using [page](file_name) format when multiple documents are provided
+- **Citations (STRICT FORMAT)**: Use inline markdown links in the format `[page X](filename)` immediately after relevant claims.
+  - X is the page number and filename is the document name.
+  - **NEVER** use superscripts like `^[1]`.
+  - Example: "The revenue increased by 15% [page 23](report.pdf)."
+  - Multiple sources: "[page 5](doc1.pdf) [page 8](doc2.pdf)"
 - If information is **missing**, say:  
   "The provided documents do not contain information about [topic]."
 - If information is **contradictory**, acknowledge both perspectives neutrally
 - Be concise, informative, and natural — no apologies unless truly warranted
 Voice: clear, confident, and helpful — like a domain expert who communicates well.
+
+
 """
 
 CONDENSE_PROMPT_TEMPLATE = """
@@ -208,7 +214,13 @@ class ChatService:
             2. If the context does not contain the answer, state clearly "I cannot find information about this in the provided documents."
             3. Be concise and do not add information not present in the context.
             4. Quote relevant passages directly using quotation marks when possible.
-            5. Cite the source document filename using [page](file_name) format after the relevant sentence or paragraph. If page number is available in metadata, use [filename, p. N].
+            5. **Citations (STRICT FORMAT)**: Use inline markdown links in the format `[page X](filename)` immediately after relevant claims.
+               - X is the page number and filename is the document name.
+               - **NEVER** write text like `^[1]` or `(Source 1)`.
+               - Example: "Revenue grew 20% [page 12](report.pdf). Market share increased [page 5](stats.pdf)."
+               - Multiple sources: "[page 5](doc1.pdf) [page 8](doc2.pdf)"
+
+
 
             Query: {query_str}
 

@@ -89,6 +89,8 @@ class IngestionHelper:
             document.id_ = document.doc_id
             
             # Make sure the doc_id is in the document's metadata
+            if not document.metadata:
+                document.metadata = {}
             document.metadata["doc_id"] = document.doc_id
             document.metadata["document_id"] = document.doc_id
             
@@ -96,19 +98,8 @@ class IngestionHelper:
             document.metadata.update(file_metadata or {})
             document.metadata["file_name"] = file_name
             document.metadata["ingestion_time"] = datetime.now(timezone.utc).isoformat()
-            
-            # Ensure excluded metadata keys are set properly
-            if not hasattr(document, 'excluded_embed_metadata_keys'):
-                document.excluded_embed_metadata_keys = []
-            if not hasattr(document, 'excluded_llm_metadata_keys'):
-                document.excluded_llm_metadata_keys = []
                 
-            # Add doc_id to excluded metadata to prevent duplication
-            if "doc_id" not in document.excluded_embed_metadata_keys:
-                document.excluded_embed_metadata_keys.append("doc_id")
-            if "document_id" not in document.excluded_llm_metadata_keys:
-                document.excluded_llm_metadata_keys.append("document_id")
-                
+        # Apply metadata exclusion rules (handles excluded_embed/llm_metadata_keys)
         IngestionHelper._exclude_metadata(documents)
         return documents
 
@@ -126,8 +117,15 @@ class IngestionHelper:
             try:
                 string_reader = StringIterableReader()
                 return string_reader.load_data([file_data.read_text()])
-            except:
-                return file_data
+            except Exception as e:
+                logger.error(
+                    "Failed to read file_name=%s as plain text: %s",
+                    file_name,
+                    str(e)
+                )
+                raise ValueError(
+                    f"Unsupported file format '{extension}' and failed to read as plain text"
+                ) from e
         logger.debug("Specific reader found for extension=%s", extension)
         
         # Instantiate the reader
@@ -137,8 +135,10 @@ class IngestionHelper:
         if hasattr(reader, 'aload_data'):
             return await reader.aload_data(file_data)
         else:
-            # Fallback to synchronous load_data
-            return reader.load_data(file_data)
+            # Fallback to synchronous load_data in executor to avoid blocking event loop
+            import asyncio
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, reader.load_data, file_data)
 
     @staticmethod
     def _exclude_metadata(documents: list[Document]) -> None:

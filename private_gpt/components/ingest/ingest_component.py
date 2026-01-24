@@ -18,6 +18,7 @@ from llama_index.core.schema import BaseNode, Document, TransformComponent
 from llama_index.core.storage import StorageContext
 
 from private_gpt.components.ingest.ingest_helper import IngestionHelper
+from private_gpt.components.ingest.doc_id_utils import ensure_doc_id, ensure_ref_doc_id
 from private_gpt.paths import local_data_path
 from private_gpt.settings.settings import Settings
 from private_gpt.utils.eta import eta
@@ -167,7 +168,7 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
                 self._save_index()
             except Exception as e:
                 logger.error(f"Failed to delete documents with doc_ids={doc_ids}: {str(e)}")
-                # raise
+                raise
 
     async def delete_by_metadata(self, key: str, value: Any) -> None:
         """Delete documents from vector store by metadata filter."""
@@ -402,11 +403,18 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         # underlying IO calls made in the ingestion
 
         import asyncio
-        documents = list(
-            itertools.chain.from_iterable(
-                await asyncio.gather(*[self.ingest(*file) for file in files])
-            )
+        results = await asyncio.gather(
+            *[self.ingest(*file) for file in files],
+            return_exceptions=True
         )
+        
+        documents = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to ingest {files[i][0]}: {result}")
+            else:
+                documents.extend(result)
+        
         return documents
 
     async def _save_docs(self, documents: list[Document]) -> list[Document]:
@@ -430,18 +438,39 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
             logger.debug("Persisted the index and nodes")
         return documents
 
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup."""
+        self._cleanup_pools()
+        return False
+
+    def _cleanup_pools(self) -> None:
+        """Explicit cleanup method for multiprocessing pools."""
+        logging.info("Cleaning up multiprocessing pools")
+        try:
+            if hasattr(self, '_ingest_work_pool'):
+                logging.debug("Closing the ingest work pool")
+                self._ingest_work_pool.close()
+                self._ingest_work_pool.join(timeout=5)
+                self._ingest_work_pool.terminate()
+        except Exception as e:
+            logging.error(f"Error cleaning up ingest work pool: {e}")
+        
+        try:
+            if hasattr(self, '_file_to_documents_work_pool'):
+                logging.debug("Closing the file to documents work pool")
+                self._file_to_documents_work_pool.close()
+                self._file_to_documents_work_pool.join(timeout=5)
+                self._file_to_documents_work_pool.terminate()
+        except Exception as e:
+            logging.error(f"Error cleaning up file to documents work pool: {e}")
+
     def __del__(self) -> None:
-        # We need to do the appropriate cleanup of the multiprocessing pools
-        # when the object is deleted. Using root logger to avoid
-        # the logger to be deleted before the pool
-        logging.debug("Closing the ingest work pool")
-        self._ingest_work_pool.close()
-        self._ingest_work_pool.join()
-        self._ingest_work_pool.terminate()
-        logging.debug("Closing the file to documents work pool")
-        self._file_to_documents_work_pool.close()
-        self._file_to_documents_work_pool.join()
-        self._file_to_documents_work_pool.terminate()
+        """Fallback cleanup in destructor (unreliable, prefer context manager)."""
+        self._cleanup_pools()
 
     async def ingest_url(self, url: str, documents: list[Document]) -> list[Document]:
         logger.info("Ingesting URL=%s", url)
@@ -549,31 +578,12 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
             )
             # Ensure all nodes have proper ref_doc_id before insertion
             for node in nodes:
-                if isinstance(node, TextNode) and not node.ref_doc_id:
-                    # Find the source document for this node to get the correct ref_doc_id
-                    if node.metadata and "doc_id" in node.metadata:
-                        node.ref_doc_id = node.metadata["doc_id"]
-                    elif hasattr(node, 'source_doc_id') and node.source_doc_id:
-                        node.ref_doc_id = node.source_doc_id
-                    else:
-                        # Generate a new ref_doc_id if none exists
-                        import uuid
-                        node.ref_doc_id = str(uuid.uuid4())
+                if isinstance(node, TextNode):
+                    ensure_ref_doc_id(node)
                         
             # Ensure all documents have proper doc_id before insertion
             for document in documents:
-                # Ensure document has a doc_id before setting hash
-                if not hasattr(document, 'doc_id') or not document.doc_id:
-                    # Generate a new doc_id if one doesn't exist
-                    import uuid
-                    document.doc_id = str(uuid.uuid4())
-                    if not document.metadata:
-                        document.metadata = {}
-                    document.metadata["doc_id"] = document.doc_id
-                    document.metadata["document_id"] = document.doc_id
-                    
-                # Note: We don't set ref_doc_id on Document objects as that's a property of TextNode objects
-                # The ref_doc_id will be set by the node parser when creating nodes from documents
+                ensure_doc_id(document)
                     
             self._index.insert_nodes(nodes)
             for document in documents:

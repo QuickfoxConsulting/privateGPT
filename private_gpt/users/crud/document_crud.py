@@ -10,6 +10,7 @@ from private_gpt.users.models.document_department import document_department_ass
 from private_gpt.users.models.category import document_category_association, Category
 from private_gpt.users.crud.base import CRUDBase
 from private_gpt.constants import ALL_DEPARTMENT
+from private_gpt.users.models.enums import MakerCheckerStatus, MakerCheckerActionType
 from sqlalchemy import and_
 
 def get_versioned_filename_pattern(file_name: str) -> str:
@@ -20,6 +21,24 @@ def get_versioned_filename_pattern(file_name: str) -> str:
 
 
 class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
+    def create(self, db: Session, *, obj_in: DocumentCreate) -> Document:
+        """Create a new document and its initial version."""
+        db_obj = super().create(db, obj_in=obj_in)
+        
+        # Automatically create version 1
+        initial_version = DocumentVersion(
+            document_id=db_obj.id,
+            version_number=1,
+            status=MakerCheckerStatus.PENDING,
+            action_type=MakerCheckerActionType.INSERT,
+            file_path="",
+            uploaded_by=db_obj.uploaded_by
+        )
+        db.add(initial_version)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
 
     def get_document(self, db: Session, *, id: int):
         return db.query(Document).options(joinedload(Document.current_version)).filter(Document.id == id).first()
@@ -130,7 +149,7 @@ class CRUDDocuments(CRUDBase[Document, DocumentCreate, DocumentUpdate]):
         if uploaded_by:
             query = query.filter(Document.uploaded_by == uploaded_by)
         if status:
-            query = query.join(DocumentVersion).filter(DocumentVersion.status == status)
+            query = query.join(Document.current_version).filter(DocumentVersion.status == status)
         if category_id:
             query = query.join(document_category_association).filter(
                 document_category_association.c.category_id == category_id

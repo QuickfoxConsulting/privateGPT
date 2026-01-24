@@ -17,6 +17,8 @@ alembic upgrade head
 # Load fixture data
 echo "Loading fixtures"
 poetry run python scripts/fixtures.py
+echo "Seeding prompts"
+poetry run python scripts/seed_prompts.py
 playwright install 
 
 # Fix for tiktoken download issues

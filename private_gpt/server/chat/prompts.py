@@ -68,12 +68,16 @@ Current date is {current_date}
    - If only partial information is available, say what is known and clarify what is missing.
    - Avoid guessing or inventing missing parts — never "fill in the blanks."
 
-5. **Natural Tone + Honest Limits**
-   - Feel free to paraphrase when appropriate, but quote directly if accuracy matters.
-   - If the question is ambiguous, ask for clarification — but only when necessary.
-   - Avoid over-explaining limitations unless it's helpful to the user.
+6. **STRICT Citation Format**
+   - YOU MUST cite every claim using the format `[page X](filename)` where X is the page number and filename is the document name.
+   - **NEVER** use superscript markers like `^[1]`.
+   - **NEVER** use plain text like `Source 1` or `(Doc A)`.
+   - **ONLY** use markdown links: `[page 23](chunking_strategy.pdf)`.
+   - Example: "The strategy involves recursive splitting [page 5](manual.pdf). This ensures better context [page 12](manual.pdf)."
 
 Your job is to make complex information easy to understand, grounded in evidence, and free of fluff or guesswork.
+
+
 """
 
 AGENTIC_SYSTEM_PROMPT = """
@@ -173,11 +177,16 @@ Answer: ✅ Email sent successfully to user@example.com!
 - **Language Match**: Respond in the user's query language.
 - **Formatted for Clarity**: Use markdown (headings, lists, code blocks) to structure your answer.
 
-### Citation Standards
-- **Documents**: Extract actual file names and page numbers from metadata: `[Page 5](document.pdf)`
-- **Web**: `[Article Title](https://example.com)`
-- **Multiple**: Synthesize and cite together: `[Source 1](ref1), [Source 2](ref2)`
-- **Never** use tool names like [document_retriever] as citations
+### STRICT Citation Standards
+- **Balanced Density**: DO NOT cite every sentence. If an entire paragraph or list item comes from a source, place the citation at the end of that paragraph/item.
+- **Markdown Link Format**: ALWAYS use the format `[page X](filename)`.
+- **Placement**: Place markers immediately after the relevant sentence, claim, or paragraph (e.g., "The feature was released in 2025 [page 10](report.pdf).").
+- **Multiple sources**: If a claim relies on multiple sources, list them (e.g., "[page 5](doc1.pdf) [page 8](doc2.pdf)").
+- **NO Plain Text References**: NEVER write references like `(Source 1)` or `(Doc A)`.
+- **NO Superscripts**: NEVER use `^[1]` or similar.
+- **CRITICAL**: The filename MUST match the one provided in the source context.
+
+
 
 ## Error Handling
 If a tool fails or returns no results:
@@ -334,10 +343,15 @@ You are a document-grounded assistant. Use ONLY the context below to answer the 
   - **Supporting details** with proper formatting
   - **Limitations** if context is incomplete
 
-**Step 3: Add Citations**
-- Cite sources using [page](file_name) format after each claim
-- When quoting directly, use quotation marks
-- If multiple sources support a point, cite all of them
+**Step 3: Add Citations (STRICT FORMAT)**
+- Use inline markdown links in the format `[page X](filename)` immediately after relevant sentences or claims.
+- **NEVER** use superscripts like `^[1]`.
+- Place markers right after the claim, not at the end of paragraphs.
+- Correct: "The policy was updated in 2024 [page 5](policy.pdf)."
+- Incorrect: "The policy was updated in 2024^[1]."
+- Incorrect: "The policy was updated in 2024 [page 5]."
+
+
 
 **Step 4: Format for Readability**
 - Use **bold** for important concepts
@@ -373,10 +387,13 @@ Query: {query_str}
 - Organize logically (most important first)
 - Use clear, professional language
 
-**Step 4: Cite Your Sources**
-- After each claim, add citation: [filename] or [filename, p. N]
-- Quote directly when precision matters
-- Paraphrase accurately when appropriate
+**Step 4: Cite Your Sources (STRICT FORMAT)**
+- Add inline citations in the format `[page X](filename)` immediately after relevant claims.
+- **NEVER** use superscripts like `^[1]`.
+- Place markers after sentences, not grouped at paragraph ends.
+- The filename must match the source document exactly.
+
+
 
 **Step 5: Quality Check**
 - Is the answer complete?
@@ -387,7 +404,7 @@ Query: {query_str}
 **Important Rules:**
 1. Answer ONLY from the provided context
 2. If context doesn't contain the answer, say so clearly
-3. Cite sources using [filename] or [filename, p. N] format
+3. Cite sources using inline markers `^[1]`, `^[2]` after claims
 4. Use markdown formatting for readability
 5. Be concise but complete
 
@@ -575,10 +592,10 @@ def format_context_with_sources(nodes: list) -> str:
     formatted_parts = []
     for i, node in enumerate(nodes, 1):
         source = node.node.metadata.get('file_name', 'Unknown')
-        page = node.node.metadata.get('page_label', '')
+        page = node.node.metadata.get('page_label') or node.node.metadata.get('page', '')
         content = node.node.get_content()
         
-        source_label = f"[{source}]" if not page else f"[{source}, p. {page}]"
-        formatted_parts.append(f"**Source {i}** {source_label}:\n{content}\n")
+        source_label = f"FILENAME: {source}" if not page else f"FILENAME: {source}, PAGE: {page}"
+        formatted_parts.append(f"**Source {i}** ({source_label}):\n{content}\n")
     
     return "\n---\n".join(formatted_parts)

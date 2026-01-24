@@ -25,6 +25,7 @@ from private_gpt.components.node_store.node_store_component import NodeStoreComp
 from private_gpt.components.nodeparser.SentenceChunkNodeParser import SentenceChunkWindowNodeParser
 from private_gpt.components.nodeparser.PageByPageNodeParser import PageByPageNodeParser
 from private_gpt.components.nodeparser.LateChunkNodeParser import LateChunkNodeParser
+from private_gpt.components.nodeparser.PageMetadataBackfiller import PageMetadataBackfiller
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
@@ -69,6 +70,58 @@ class IngestService:
         self.embedding_model = embedding_component.embedding_model
         self.settings = settings()
         
+    def _validate_file_name(self, file_name: str) -> None:
+        """Validate file name for security and correctness."""
+        if not file_name or not file_name.strip():
+            raise ValueError("file_name cannot be empty")
+        if len(file_name) > 255:
+            raise ValueError("file_name too long (max 255 chars)")
+        # Check for path traversal attempts
+        if any(c in file_name for c in ['/', '\\', '\0']):
+            raise ValueError("file_name contains invalid characters")
+        if file_name.startswith('..'):
+            raise ValueError("file_name cannot start with '..'")
+    
+    async def health_check(self) -> dict[str, Any]:
+        """Check health of ingestion system components."""
+        health = {
+            "status": "healthy",
+            "checks": {}
+        }
+        
+        try:
+            # Check vector store
+            health["checks"]["vector_store"] = {
+                "status": "ok" if self.storage_context.vector_store else "error",
+                "type": type(self.storage_context.vector_store).__name__
+            }
+        except Exception as e:
+            health["checks"]["vector_store"] = {"status": "error", "error": str(e)}
+            health["status"] = "degraded"
+        
+        try:
+            # Check docstore
+            doc_count = len(self.storage_context.docstore.docs)
+            health["checks"]["docstore"] = {
+                "status": "ok",
+                "document_count": doc_count
+            }
+        except Exception as e:
+            health["checks"]["docstore"] = {"status": "error", "error": str(e)}
+            health["status"] = "degraded"
+        
+        try:
+            # Check embedding model
+            health["checks"]["embedding_model"] = {
+                "status": "ok" if self.embedding_model else "error",
+                "model": type(self.embedding_model).__name__
+            }
+        except Exception as e:
+            health["checks"]["embedding_model"] = {"status": "error", "error": str(e)}
+            health["status"] = "degraded"
+        
+        return health
+        
     def _get_node_parser(
         self, 
         strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
@@ -112,6 +165,8 @@ class IngestService:
         return HierarchicalNodeParser.from_defaults(
             chunk_sizes=[1024, 512],  # 2 levels of granularity
             chunk_overlap=50,               # Overlap between chunks
+            include_metadata=True,
+            include_prev_next_rel=True
         )
 
     def _get_ingest_component_with_parser(self, node_parser):
@@ -121,6 +176,7 @@ class IngestService:
             embed_model=self.embedding_model,
             transformations=[
                 node_parser,
+                PageMetadataBackfiller(),
                 self.embedding_model,
             ],
             settings=self.settings,
@@ -188,9 +244,22 @@ class IngestService:
         file_data: Path,
         file_metadata: dict[str, str] | None = None,
         strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL,
+        idempotent: bool = True,
     ) -> list[IngestedDoc]:
-        logger.info("Ingesting file_name=%s with strategy=%s", 
-                   file_name, strategy.value)
+        """Ingest a file with optional idempotent behavior."""
+        # Validate file name
+        self._validate_file_name(file_name)
+        
+        logger.info("Ingesting file_name=%s with strategy=%s, idempotent=%s", 
+                   file_name, strategy.value, idempotent)
+        
+        # Check if file already exists (idempotent mode)
+        if idempotent:
+            existing_docs = self.get_doc_ids_by_filename(file_name)
+            if existing_docs:
+                logger.info(f"File {file_name} already ingested, skipping (found {len(existing_docs)} docs)")
+                return [IngestedDoc(object="ingest.document", doc_id=doc_id) for doc_id in existing_docs]
+        
         try:
             node_parser = self._get_node_parser(strategy)
             ingest_component = self._get_ingest_component_with_parser(node_parser)
@@ -198,18 +267,28 @@ class IngestService:
             # Ensure file_path and document_path are in metadata
             file_metadata = file_metadata or {}
             abs_path = str(file_data.resolve())
-            if "file_path" not in file_metadata:
-                file_metadata["file_path"] = abs_path
             
-            # Normalize document_path to be relative to 'documents' folder
+            # Store both absolute and relative paths with clear naming
+            file_metadata["file_path_absolute"] = abs_path
+            
+            # Normalize document_path to be relative to 'media' folder (UPLOAD_DIR)
             try:
-                documents_dir = (Path(UPLOAD_DIR) / "documents").resolve()
-                rel_path = file_data.resolve().relative_to(documents_dir)
-                file_metadata["document_path"] = str(rel_path)
+                base_dir = Path(UPLOAD_DIR).resolve()
+                rel_path = file_data.resolve().relative_to(base_dir)
+                file_metadata["file_path_relative"] = str(rel_path)
             except ValueError:
-                # Fallback to absolute path or existing value if not in documents folder
-                if "document_path" not in file_metadata:
-                    file_metadata["document_path"] = abs_path
+                # Fallback: if not in media folder, use filename only
+                file_metadata["file_path_relative"] = file_name
+            
+            # Keep legacy keys for backward compatibility and add file_name for frontend
+            file_metadata["file_path"] = abs_path
+            file_metadata["document_path"] = file_metadata["file_path_relative"]
+            file_metadata["file_name"] = file_name
+            file_metadata["filename"] = file_name
+            
+            # Ensure it's in the extra_info for LlamaParseReader
+            file_metadata["file_name"] = file_name
+            file_metadata["filename"] = file_name
 
             documents = await ingest_component.ingest(file_name, file_data, file_metadata)
             logger.info("Finished ingestion file_name=%s", file_name)
@@ -288,7 +367,7 @@ class IngestService:
 
     async def delete_docs(
         self, 
-        doc_ids: [str], 
+        doc_ids: list[str], 
         strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL,
     ) -> None:
         logger.info(

@@ -162,14 +162,67 @@ class AgentStreamHandler(BaseCallbackHandler):
         elif event_type == CBEventType.FUNCTION_CALL or (hasattr(CBEventType, 'TOOL') and event_type == CBEventType.TOOL):
             if payload:
                 response = payload.get("response") or payload.get("output")
-                # tool_name = self._current_tool or "tool"
+                tool_name = self._current_tool or payload.get("tool_name") or "tool"
                 
-                # Truncate long responses for streaming
+                # Truncate long responses for streaming thought
                 response_preview = str(response)[:500] if response else "completed"
                 
                 self._put_event({
                     "observation": response_preview
                 })
+
+                # --- Source Extraction for Web/Tool Results ---
+                # check if this is a search tool or provides URL-like content
+                if any(x in tool_name.lower() for x in ["search", "google", "web", "serp"]):
+                    try:
+                        import re
+                        from private_gpt.server.chunks.chunks_service import Chunk
+                        from private_gpt.server.ingest.model import IngestedDoc
+                        
+                        # Find potential URL patterns and titles
+                        # Format in serper_tool: "N. Title\nURL\nSnippet"
+                        url_pattern = r"(https?://\S+)"
+                        text_response = str(response)
+                        urls = re.findall(url_pattern, text_response)
+                        
+                        if urls:
+                            found_sources = []
+                            # Try to extract titles (text before the URL)
+                            sections = re.split(url_pattern, text_response)
+                            for i in range(0, len(sections) - 1, 2):
+                                title_text = sections[i].strip().split('\n')[-1].strip()
+                                # Clean up number prefix like "1. "
+                                title_text = re.sub(r"^\d+\.\s*", "", title_text)
+                                url = sections[i+1].strip()
+                                
+                                # Limit to first 10 sources to prevent SSE overflow
+                                if len(found_sources) >= 10:
+                                    break
+                                    
+                                chunk = Chunk(
+                                    object="context.chunk",
+                                    score=1.0, # Tool results are highly relevant
+                                    document=IngestedDoc(
+                                        object="ingest.document",
+                                        doc_id=f"web-{hash(url)}",
+                                        doc_metadata={
+                                            "file_name": title_text or url,
+                                            "url": url,
+                                            "source_type": "web_search",
+                                            "domain": url.split('/')[2] if '/' in url else url
+                                        }
+                                    ),
+                                    text=sections[i+2].strip()[:1000] if i+2 < len(sections) else title_text # snippet
+                                )
+                                found_sources.append(chunk)
+
+                            if found_sources:
+                                self._put_event({
+                                    "sources": found_sources
+                                })
+                    except Exception as e:
+                        logger.warning(f"Failed to extract web sources from tool output: {e}")
+                
                 self._current_tool = None
         
         # Handle errors
@@ -482,11 +535,11 @@ class AgenticRAGEngine(BaseChatEngine):
             "2.  **Structured Formatting**: Use professional Markdown for readability. Organize your answer with clear, informative main headers (`##`), sub-headers (`###`), and bullet points (`-` or `*`) as needed.\n"
             "3.  **Synthesis and Deconstruction**: Decompose complex topics into logical, easy-to-understand sections. When multiple sources discuss the same point, synthesize the information and highlight any agreements or discrepancies between them.\n"
             "4.  **Precise Inline Citations**: Your credibility depends on accurate citations. Follow these rules without exception:\n"
-            "    - **Format**: Use the format `[Page X](filename.pdf)` for documents with a page number, or `[filename.pdf]` if the page number is not available in the metadata.\n"
-            "    - **Placement**: Place citations inline, immediately following the information they support.\n"
-            "        - For a specific fact, phrase, or sentence, place the citation at the end of that sentence.\n"
-            "        - If an entire paragraph is synthesized from a single page of a single source, a single citation at the end of the paragraph is sufficient.\n"
-            "    - **Prohibited Formats**: NEVER use generic numeric citations (e.g., `[1]`, `[2]`) or internal tool names (e.g., `[document_retriever]`).\n"
+            "    - **Format**: Use the superscript format `^[N]` where N refers to **Source N** in the provided context (e.g., `^[1]`).\n"
+            "    - **Balanced Density**: DO NOT cite every sentence. If an entire paragraph or list item comes from Source 1, place `^[1]` at the end of that paragraph/item only. Cite mid-paragraph only if the source changes.\n"
+            "    - **Multiple Sources**: Group sources like `^[1, 2]` if a claim relies on both.\n"
+            "    - **Placement**: Place markers immediately after the relevant sentence, claim, or paragraph.\n"
+            "    - **Prohibited Formats**: NEVER use verbose formats like `[Page X](filename.pdf)` or internal tool names.\n"
             "5.  **Address Gaps**: If the context does not contain enough information to fully answer the query, explicitly state what is missing in a dedicated section at the end titled `## Limitations and Gaps`.\n"
             "6.  **Professional Tone**: Maintain a formal, objective, and neutral tone. Report the facts from the context without adding speculative or subjective commentary.\n"
             "7.  **Include Key Details**: If the context mentions key metadata like document titles, authors, version numbers, or publication dates, integrate them into your answer where relevant.\n"

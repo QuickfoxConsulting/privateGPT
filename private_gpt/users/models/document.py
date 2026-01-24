@@ -2,7 +2,7 @@ from datetime import datetime
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum, Boolean, UniqueConstraint, and_, select, func
 
 from private_gpt.users.db.base_class import Base
 from private_gpt.users.models.enums import MakerCheckerActionType, MakerCheckerStatus, DocumentStatus
@@ -48,13 +48,18 @@ class Document(Base):
     verified_at = Column(DateTime, nullable=True)
     verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-    current_version_id = Column(Integer, ForeignKey("document_versions.id"))
+
+    # current_version_id = Column(Integer, ForeignKey("document_versions.id"))
     
     current_version = relationship(
         "DocumentVersion",
-        foreign_keys=[current_version_id],
-        primaryjoin="Document.current_version_id == DocumentVersion.id",
-        post_update=True
+        foreign_keys=[DocumentVersion.document_id],
+        primaryjoin="and_(Document.id == DocumentVersion.document_id, "
+                    "DocumentVersion.version_number == (select(func.max(DocumentVersion.version_number))."
+                    "where(DocumentVersion.document_id == Document.id).scalar_subquery()))",
+        viewonly=True,
+        uselist=False,
+        overlaps="versions"
     )
 
     versions = relationship(
