@@ -196,16 +196,16 @@ class DocsTool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.create_document,
                 name="docs_create",
-                description="Create a new Google Doc. Requires title. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Create a new Google Doc. Input parameters: title (string), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             ),
             FunctionTool.from_defaults(
                 fn=self.read_document,
                 name="docs_read",
-                description="Read content of a Google Doc given its document ID. (No approval needed for reading)"
+                description="Read content of a Google Doc given its document ID. (No approval needed for reading). Input parameter: document_id (string) - the Google Doc ID."
             ),
             FunctionTool.from_defaults(
                 fn=self.append_text,
                 name="docs_append",
-                description="Append text to the end of a Google Doc. Requires document_id and text. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Append text to the end of a Google Doc. Input parameters: document_id (string), text (string), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             )
         ]

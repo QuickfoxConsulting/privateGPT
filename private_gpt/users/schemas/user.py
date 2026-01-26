@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, root_validator
 from private_gpt.users.schemas.user_role import UserRole
 from private_gpt.users.schemas.company import Company
 
@@ -46,6 +46,15 @@ class UserSchema(UserBaseSchema):
 	created_at: datetime
 	updated_at: datetime
 	is_active: bool = Field(default=False)
+	department_name: Optional[str] = None  # Add department name
+
+	@root_validator(pre=True)
+	def extract_department_name(cls, values):
+		"""Extract department name from ORM model if available."""
+		# If values is an ORM model instance (not a dict)
+		if hasattr(values, 'department') and values.department:
+			values.department_name = values.department.name
+		return values
 
 	class Config:
 		orm_mode = True
@@ -69,12 +78,18 @@ class DeleteUser(BaseModel):
 class UserAdminUpdate(BaseModel):
 	id: int
 	username: Optional[str] = None
+	email: Optional[EmailStr] = None
 	role: Optional[str] = None
 	department_id: Optional[int] = None
+	company_id: Optional[int] = None
+	checker: Optional[bool] = None
 
 class UserDepartmentUpdate(BaseModel):
 	username: Optional[str] = None
+	email: Optional[EmailStr] = None
 	department_id: Optional[int] = None
+	company_id: Optional[int] = None
+	checker: Optional[bool] = None
 
 	class Config:
 		orm_mode = True

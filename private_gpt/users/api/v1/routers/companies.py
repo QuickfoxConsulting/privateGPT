@@ -3,8 +3,9 @@ from typing import Any, List
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import paginate
 from fastapi import APIRouter, Depends, HTTPException, status, Security
-from fastapi_pagination import Page, paginate
 
 from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
@@ -52,20 +53,6 @@ def create_company(
         },
     )
 
-
-@router.get("", response_model=Page[schemas.Company])
-def list_companies(
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Security(
-        deps.get_current_user,
-        scopes=[Role.SUPER_ADMIN["name"]],
-    ),
-) -> Page[schemas.Company]:
-    """
-    Retrieve a list of companies with pagination support.
-    """
-    companies = crud.company.get_multi(db)
-    return paginate(companies)
 
 @router.get("/{company_id}", response_model=schemas.Company)
 def read_company(

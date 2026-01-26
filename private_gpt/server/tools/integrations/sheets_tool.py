@@ -171,16 +171,16 @@ class SheetsTool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.get_values,
                 name="sheets_read",
-                description="Read data from a Google Sheet range (e.g. 'Sheet1!A1:B5'). Returns list of rows."
+                description="Read data from a Google Sheet range (e.g. 'Sheet1!A1:B5'). Returns list of rows. Input parameters: spreadsheet_id (string), range_name (string) - the range to read."
             ),
             FunctionTool.from_defaults(
                 fn=self.update_values,
                 name="sheets_write",
-                description="Write data to a Google Sheet range. Values must be a list of lists. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Write data to a Google Sheet range. Values must be a list of lists. Input parameters: spreadsheet_id (string), range_name (string), values (list of lists), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             ),
             FunctionTool.from_defaults(
                 fn=self.create_spreadsheet,
                 name="sheets_create",
-                description="Create a new empty Google Sheet. Requires title. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Create a new empty Google Sheet. Input parameters: title (string), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             )
         ]

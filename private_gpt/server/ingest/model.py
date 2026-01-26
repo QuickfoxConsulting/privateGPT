@@ -9,6 +9,7 @@ class IngestedDoc(BaseModel):
     object: Literal["ingest.document"]
     doc_id: str = Field(examples=["c202d5e6-7b69-4869-81cc-dd574ee8ee11"])
     doc_metadata: dict[str, Any] | None = Field(
+        default=None,
         examples=[
             {
                 "page_label": "2",

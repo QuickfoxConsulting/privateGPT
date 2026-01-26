@@ -198,36 +198,58 @@ class ChatService:
         self.node_store = node_store_component
         
     def _get_qa_template(self, db: Session, user_id: int | None, mode: str) -> str:
-        """Custom QA template with better context integration."""
+        """Document-grounded QA template with strict context usage and markdown citations."""
         if db and user_id:
             qa_prompt = prompt_service.get_resolved_prompt(db, user_id, mode, "qa")
             if qa_prompt:
                 return qa_prompt
 
-        return """Context information is below:
+        return """
+            You are a document-grounded assistant. Answer the query using **only** the information
+            contained in the provided context. Do not rely on prior knowledge.
+
+            CONTEXT:
             ---------------------
             {context_str}
             ---------------------
 
-            Given the context documents and not prior knowledge:
-            1. Answer the query based ONLY on the provided context.
-            2. If the context does not contain the answer, state clearly "I cannot find information about this in the provided documents."
-            3. Be concise and do not add information not present in the context.
-            4. Quote relevant passages directly using quotation marks when possible.
-            5. **Citations (STRICT FORMAT)**: Use inline markdown links in the format `[page X](filename)` immediately after relevant claims.
-               - X is the page number and filename is the document name.
-               - **NEVER** write text like `^[1]` or `(Source 1)`.
-               - Example: "Revenue grew 20% [page 12](report.pdf). Market share increased [page 5](stats.pdf)."
-               - Multiple sources: "[page 5](doc1.pdf) [page 8](doc2.pdf)"
+            INSTRUCTIONS:
+            1. **Strict Grounding**: Base your answer exclusively on the provided context documents.
+            Do NOT add assumptions, interpretations, or external information.
 
+            2. **Answer Scope**:
+            - If the answer is present, respond clearly and concisely.
+            - If the context does NOT contain sufficient information, state exactly:
+                "I cannot find information about this in the provided documents."
 
+            3. **Accuracy**:
+            - Preserve original wording when quoting.
+            - Maintain exact numerical values, units, and dates.
+            - Do not paraphrase if precision would be lost.
 
-            Query: {query_str}
+            4. **Quotations**:
+            - Quote relevant passages directly using quotation marks when appropriate.
+            - Place citations immediately after the quoted or referenced content.
 
-            Answer in the same language as the query. Maintain original numerical values and dates. Use markdown formatting where appropriate.
-            ---
-            Sources:
+            5. **Citations (MANDATORY - STRICT FORMAT)**:
+            - Use inline markdown citations in the form `[page X](filename.pdf)`.
+            - Place citations at the end of the sentence, paragraph, or list they support.
+            - Group citations when multiple claims share the same source.
+            - Multiple sources must be listed sequentially:
+                `[page 5](doc1.pdf) [page 8](doc2.pdf)`
+            - **NEVER** use formats such as `^[1]`, `(Source 1)`, tool names, or fabricated page numbers.
+
+            6. **Formatting and Tone**:
+            - Use Markdown where it improves clarity.
+            - Maintain a neutral, professional, and factual tone.
+            - Be concise and avoid redundancy.
+
+            QUERY:
+            {query_str}
+
+            Answer in the same language as the query.
             """
+
 
     def _check_faq_cache(self, cache_service: CacheService, question: str) -> dict | None:
         """Check if the question matches a frequently asked question in cache using vector similarity.
@@ -345,6 +367,7 @@ class ChatService:
 
             # Use HierarchicalAgentEngine instead of raw AgenticRAGEngine
             tool_registry = ToolRegistry(db)
+            # Pass UNRESOLVED system prompt - let AgenticRAGEngine resolve it with tool descriptions
             return HierarchicalAgentEngine(
                 llm=self.llm_component.llm,
                 tool_registry=tool_registry,
@@ -354,7 +377,7 @@ class ChatService:
                 node_store_component=self.node_store,
                 node_postprocessors=node_postprocessors,
                 document_files=file_list,
-                system_prompt=resolve_system_prompt(resolved_system_prompt or AGENTIC_SYSTEM_PROMPT),
+                system_prompt=resolved_system_prompt or AGENTIC_SYSTEM_PROMPT,  # Pass unresolved
                 qa_template_str=resolved_qa_template,
                 max_iterations=20,
                 verbose=True,

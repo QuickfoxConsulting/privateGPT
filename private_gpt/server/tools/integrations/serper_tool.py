@@ -134,17 +134,17 @@ class SerperTool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.web_search,
                 name="serper_web_search",
-                description="Perform a web search using Serper API. Returns web search results with titles, links, and snippets."
+                description="Perform a web search using Serper API. Returns web search results with titles, links, and snippets. Input parameter: query (string) - the search query."
             ),
             FunctionTool.from_defaults(
                 fn=self.instant_search,
                 name="serper_instant_search",
-                description="Get instant answers and knowledge graph information from Serper API."
+                description="Get instant answers and knowledge graph information from Serper API. Input parameter: query (string) - the search query."
             ),
             FunctionTool.from_defaults(
                 fn=self.news_search,
                 name="serper_news_search",
-                description="Search for recent news articles using Serper API."
+                description="Search for recent news articles using Serper API. Input parameter: query (string) - the search query."
             )
         ]
 

@@ -116,13 +116,39 @@ class VectorStoreComponent:
                         "Qdrant dependencies not found, install with `poetry install --extras vector-stores-qdrant`"
                     ) from e
 
-                # if settings.qdrant is None:
-                #     logger.info(
-                #         "Qdrant config not found. Using default settings."
-                #         "Trying to connect to Qdrant at localhost:6333."
-                #     )
-                client = QdrantClient(url="http://qdrant:6333")
-                aclient = AsyncQdrantClient(url="http://qdrant:6333")
+                # Qdrant connection configuration with performance optimizations
+                qdrant_url = "http://qdrant:6333"
+                qdrant_grpc_port = 6334
+                qdrant_timeout = 60  # Timeout for operations in seconds
+                
+                # Connection pool settings
+                # Qdrant uses HTTP/gRPC with built-in connection pooling
+                # grpc_options can control connection behavior
+                grpc_options = {
+                    "grpc.max_send_message_length": 100 * 1024 * 1024,  # 100MB
+                    "grpc.max_receive_message_length": 100 * 1024 * 1024,  # 100MB
+                    "grpc.keepalive_time_ms": 30000,  # Send keepalive ping every 30s
+                    "grpc.keepalive_timeout_ms": 10000,  # Wait 10s for keepalive response
+                    "grpc.http2.max_pings_without_data": 0,  # No limit on pings
+                    "grpc.keepalive_permit_without_calls": 1,  # Allow keepalive without active calls
+                }
+                
+                client = QdrantClient(
+                    url=qdrant_url,
+                    grpc_port=qdrant_grpc_port,
+                    prefer_grpc=True,  # Use gRPC for better performance
+                    timeout=qdrant_timeout,
+                    grpc_options=grpc_options,
+                )
+                
+                aclient = AsyncQdrantClient(
+                    url=qdrant_url,
+                    grpc_port=qdrant_grpc_port,
+                    prefer_grpc=True,
+                    timeout=qdrant_timeout,
+                    grpc_options=grpc_options,
+                )
+                
                 self.vector_store = typing.cast(
                     VectorStore,
                     QdrantVectorStore(

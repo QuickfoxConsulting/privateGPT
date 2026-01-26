@@ -1,11 +1,15 @@
+import logging
 import traceback
 from typing import Any, List
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from fastapi_pagination import Page, paginate
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import paginate
 from fastapi import APIRouter, Body, Depends, HTTPException, Security, status, Path, Request
 
 from private_gpt.users.api import deps
@@ -65,7 +69,7 @@ def read_users(
             models.User.email.ilike(f"%{filter}%")
         )
 
-    return paginate(users_query.all())
+    return paginate(users_query)
 
 @router.get("/company/{company_id}", response_model=Page[schemas.User])
 def read_users_by_company(
@@ -225,6 +229,11 @@ def read_user_by_id(
     if user_id is None:
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"message": "User id is not given."})
     user = crud.user.get(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with ID {user_id} not found",
+        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"message": "User retrieved successfully", "user": jsonable_encoder(user)},
@@ -292,7 +301,20 @@ def delete_user(
     user_id = delete_user.id
     user = crud.user.get(db, id=user_id)
 
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+    
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own account."
+        )
+
     details = {
+        'id': user.id,
         'email': user.email,
         'username': user.username,
         'department_id': user.department_id,
@@ -300,8 +322,6 @@ def delete_user(
 
     log_audit_user(request, db, current_user, 'delete', details)
 
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
     crud.user.remove(db, id=user_id)
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -324,7 +344,7 @@ def admin_update_user(
     Uses a database transaction to ensure atomicity.
     """
     try:
-        print(f"Received update request for user {user_update.id} with data: {user_update.dict()}")
+        logger.info(f"Received update request for user {user_update.id} with data: {user_update.dict()}")
         
         existing_user = crud.user.get_by_id(db, id=user_update.id)
         if not existing_user:
@@ -333,15 +353,18 @@ def admin_update_user(
                 detail=f"User not found with id: {user_update.id}",
             )
 
-        print(f"Found existing user: {existing_user.username}, current department: {existing_user.department_id}")
+        logger.info(f"Found existing user: {existing_user.username}, current department: {existing_user.department_id}")
 
         old_detail = {
             'username': existing_user.username,
+            'email': existing_user.email,
             'role': existing_user.user_role.role.name if existing_user.user_role else None,
-            'department': existing_user.department_id
+            'department': existing_user.department_id,
+            'company': existing_user.company_id,
+            'checker': existing_user.checker
         }
 
-        if user_update.username and existing_user.username != user_update.username:
+        if user_update.username is not None and existing_user.username != user_update.username:
             username_exists = crud.user.get_by_name(db, name=user_update.username)
             if username_exists:
                 raise HTTPException(
@@ -349,7 +372,15 @@ def admin_update_user(
                     detail="The user with this username already exists!",
                 )
 
-        if user_update.role:
+        if user_update.email is not None and existing_user.email != user_update.email:
+            email_exists = crud.user.get_by_email(db, email=user_update.email)
+            if email_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The user with this email already exists!",
+                )
+
+        if user_update.role is not None:
             role = crud.role.get_by_name(db, name=user_update.role)
             if not role:
                 raise HTTPException(
@@ -366,25 +397,34 @@ def admin_update_user(
 
         # Update User Details
         update_data = {}
-        if user_update.username:
+        if user_update.username is not None:
             update_data["username"] = user_update.username
-        if user_update.department_id:
+        if user_update.email is not None:
+            update_data["email"] = user_update.email
+        if user_update.department_id is not None:
             update_data["department_id"] = user_update.department_id
-            print(f"Adding department_id {user_update.department_id} to update_data")
+            logger.info(f"Adding department_id {user_update.department_id} to update_data")
+        if user_update.company_id is not None:
+            update_data["company_id"] = user_update.company_id
+        if user_update.checker is not None:
+            update_data["checker"] = user_update.checker
 
         if update_data:
-            print(f"Update data before creating schema: {update_data}")
+            logger.info(f"Update data before creating schema: {update_data}")
             user_in = schemas.UserDepartmentUpdate(
                 **update_data
             )
-            print(f"Created update schema with data: {user_in.model_dump()}")
+            logger.info(f"Created update schema with data: {user_in.model_dump()}")
             updated_user = crud.user.update(db, db_obj=existing_user, obj_in=user_in)
-            print(f"User after update - username: {updated_user.username}, department: {updated_user.department_id}")
+            logger.info(f"User after update - username: {updated_user.username}, department: {updated_user.department_id}")
 
         new_detail = {
-            'username': user_update.username or existing_user.username,
+            'username': user_update.username if user_update.username is not None else existing_user.username,
+            'email': user_update.email if user_update.email is not None else existing_user.email,
             'role': user_update.role or old_detail['role'],
-            'department': user_update.department_id or old_detail['department']
+            'department': user_update.department_id if user_update.department_id is not None else old_detail['department'],
+            'company': user_update.company_id if user_update.company_id is not None else old_detail['company'],
+            'checker': user_update.checker if user_update.checker is not None else old_detail['checker']
         }
         details = {
             'before': old_detail,

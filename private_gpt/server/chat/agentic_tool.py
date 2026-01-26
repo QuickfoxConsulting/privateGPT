@@ -340,7 +340,27 @@ class AgenticRAGEngine(BaseChatEngine):
         """Create the ReAct agent with all tools and configuration."""
         tools = self._build_tools()
         
-        system_prompt_str = system_prompt or self._get_default_system_prompt()
+        # Generate tool descriptions for the system prompt
+        tool_descriptions = self._format_tool_descriptions(tools)
+        logger.info(f"AgenticRAGEngine: Created {len(tools)} tools, descriptions length: {len(tool_descriptions)}")
+        logger.debug(f"Tool descriptions preview: {tool_descriptions[:200]}...")
+        
+        # Resolve system prompt with tool descriptions
+        from private_gpt.server.chat.prompts import resolve_system_prompt
+        if system_prompt:
+            logger.info(f"Using provided system prompt (length: {len(system_prompt)})")
+            system_prompt_str = resolve_system_prompt(system_prompt, tool_desc=tool_descriptions)
+        else:
+            logger.info("Using default AGENTIC_SYSTEM_PROMPT")
+            system_prompt_str = resolve_system_prompt(self._get_default_system_prompt(), tool_desc=tool_descriptions)
+        
+        logger.info(f"Resolved system prompt length: {len(system_prompt_str)}")
+        # Check if tool_desc was actually replaced
+        if "## Available Tools\n\n\n---" in system_prompt_str:
+            logger.error("WARNING: Tool descriptions are EMPTY in resolved prompt!")
+        elif tool_descriptions in system_prompt_str:
+            logger.info("✓ Tool descriptions successfully injected into prompt")
+        
         chat_formatter = ReActChatFormatter.from_defaults(system_header=system_prompt_str)
         return ReActAgent.from_tools(
             tools=tools,
@@ -377,10 +397,6 @@ class AgenticRAGEngine(BaseChatEngine):
         # # Summary tools
         summary_tools = self._create_summary_tools()
         tools.extend(summary_tools)
-        
-        # # Web search tools
-        web_tools = self._create_web_tools()
-        tools.extend(web_tools)
         
         # Add time tool
         time_tool = TimeTool()
@@ -498,15 +514,6 @@ class AgenticRAGEngine(BaseChatEngine):
                 
         return tools
 
-    def _create_web_tools(self) -> List[BaseTool]:
-        """Create web search and crawling tools.
-        
-        NOTE: Web tools are now handled as external tools or integrations.
-        This method is kept empty or minimal to avoid breaking calls, 
-        or we assume they come via self._external_tools.
-        """
-        return []
-
     def _validate_tools(self, tools: List[BaseTool]) -> List[BaseTool]:
         """Validate tools for name uniqueness and proper configuration."""
         seen_names = set()
@@ -526,39 +533,77 @@ class AgenticRAGEngine(BaseChatEngine):
             valid_tools.append(tool)
         return valid_tools
 
+    def _format_tool_descriptions(self, tools: List[BaseTool]) -> str:
+        """Format tool descriptions for inclusion in the system prompt."""
+        if not tools:
+            return "No tools available."
+        
+        descriptions = []
+        for i, tool in enumerate(tools, 1):
+            name = tool.metadata.name
+            desc = tool.metadata.description or "No description available"
+            descriptions.append(f"{i}. **{name}**: {desc}")
+        
+        return "\n".join(descriptions)
+
     def _get_qa_template(self) -> PromptTemplate:
-        """Get the enhanced summarization template for high-quality synthesis with citations and structured reasoning."""
+        """Document-grounded QA template with structured synthesis and grouped markdown citations."""
         template_str = (
-            "You are a specialized document-grounded assistant. Your primary function is to generate a clear, structured, and meticulously sourced answer based *exclusively* on the provided context. The context may consist of research papers, technical manuals, reports, or other documents.\n\n"
+            "You are a specialized document-grounded assistant. Your task is to produce a clear, structured, and "
+            "accurately sourced answer based **exclusively** on the provided context. The context may include research "
+            "papers, technical documentation, reports, or internal records.\n\n"
+
             "INSTRUCTIONS:\n"
-            "1.  **Strict Grounding**: Base your entire answer on the provided context. Do not introduce any external knowledge or make assumptions beyond what is stated in the documents.\n"
-            "2.  **Structured Formatting**: Use professional Markdown for readability. Organize your answer with clear, informative main headers (`##`), sub-headers (`###`), and bullet points (`-` or `*`) as needed.\n"
-            "3.  **Synthesis and Deconstruction**: Decompose complex topics into logical, easy-to-understand sections. When multiple sources discuss the same point, synthesize the information and highlight any agreements or discrepancies between them.\n"
-            "4.  **Precise Inline Citations**: Your credibility depends on accurate citations. Follow these rules without exception:\n"
-            "    - **Format**: Use the superscript format `^[N]` where N refers to **Source N** in the provided context (e.g., `^[1]`).\n"
-            "    - **Balanced Density**: DO NOT cite every sentence. If an entire paragraph or list item comes from Source 1, place `^[1]` at the end of that paragraph/item only. Cite mid-paragraph only if the source changes.\n"
-            "    - **Multiple Sources**: Group sources like `^[1, 2]` if a claim relies on both.\n"
-            "    - **Placement**: Place markers immediately after the relevant sentence, claim, or paragraph.\n"
-            "    - **Prohibited Formats**: NEVER use verbose formats like `[Page X](filename.pdf)` or internal tool names.\n"
-            "5.  **Address Gaps**: If the context does not contain enough information to fully answer the query, explicitly state what is missing in a dedicated section at the end titled `## Limitations and Gaps`.\n"
-            "6.  **Professional Tone**: Maintain a formal, objective, and neutral tone. Report the facts from the context without adding speculative or subjective commentary.\n"
-            "7.  **Include Key Details**: If the context mentions key metadata like document titles, authors, version numbers, or publication dates, integrate them into your answer where relevant.\n"
-            "8.  **Final Sources List**: Conclude your entire response with a `## Sources` section, providing a clean, bulleted list of all documents referenced in your answer.\n\n"
+            "1. **Strict Grounding**: Use only the information explicitly present in the provided context. "
+            "Do NOT rely on external knowledge, assumptions, or prior training data.\n\n"
+
+            "2. **Structured Presentation**: Use professional Markdown formatting. Organize your response with:\n"
+            "   - Clear section headers (`##`, `###`)\n"
+            "   - Bullet points where appropriate\n"
+            "   - Logical flow from overview to details\n\n"
+
+            "3. **Synthesis Over Copying**: When multiple documents discuss the same topic, synthesize them into a "
+            "coherent explanation. Explicitly note agreements or contradictions when they exist.\n\n"
+
+            "4. **Citation Rules (MANDATORY)**:\n"
+            "   - **Format**: Use markdown link citations in the form `[page X](filename.pdf)` or "
+            "`[page X](filename.pdf),[page Y](filename.pdf)`.\n"
+            "   - **Grouped Citations**: If multiple items share the same source, place a single citation at the end "
+            "of the paragraph or list.\n"
+            "   - **Multiple Sources**: When a claim relies on more than one document, include multiple citations, "
+            "for example: `[page 4](doc1.pdf),[page 7](doc2.pdf)`.\n"
+            "   - **Placement**: Citations must appear at the end of the paragraph, list, or section they support.\n"
+            "   - **Density**: Do NOT cite every sentence. Avoid over-citation.\n"
+            "   - **Prohibited**: NEVER use superscript citations (e.g., `^[1]`), internal tool names, or fabricated "
+            "page numbers.\n\n"
+
+            "5. **Handling Gaps**: If the context is insufficient to fully answer the query, add a final section titled "
+            "`## Limitations and Gaps` that clearly explains what information is missing and why the answer is incomplete.\n\n"
+
+            "6. **Tone and Objectivity**: Maintain a professional, neutral, and factual tone. Do not speculate or add "
+            "interpretive commentary beyond what the documents support.\n\n"
+
+            "7. **Key Metadata**: When available in the context, incorporate relevant metadata such as document titles, "
+            "authors, versions, and publication dates into the narrative.\n\n"
+
+            "8. **No Fabrication Rule**: If a detail (page number, date, author, metric) is not explicitly present in the "
+            "context, do not invent it.\n\n"
 
             "QUERY:\n"
             "{query_str}\n\n"
-
 
             "CONTEXT:\n"
             "---------------------\n"
             "{context_str}\n"
             "---------------------\n\n"
+
             "BEGIN YOUR RESPONSE:"
         )
+
         if self._qa_template_str:
             return PromptTemplate(self._qa_template_str)
-        return PromptTemplate(template_str)
 
+        return PromptTemplate(template_str)
 
     def _get_default_system_prompt(self) -> str:
         """Generate a comprehensive system prompt that follows ReAct format with RAG capabilities."""

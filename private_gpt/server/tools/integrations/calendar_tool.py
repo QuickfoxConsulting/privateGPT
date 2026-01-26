@@ -215,16 +215,16 @@ class CalendarTool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.list_upcoming_events,
                 name="calendar_list_upcoming",
-                description="List upcoming events from Google Calendar."
+                description="List upcoming events from Google Calendar. Input parameter: max_results (int, optional, default=10) - maximum number of events to return."
             ),
             FunctionTool.from_defaults(
                 fn=self.create_event,
                 name="calendar_create_event",
-                description="Create a new event in Google Calendar. Requires summary, start_time, and end_time (ISO format). Optional location, description, attendees. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Create a new event in Google Calendar. Input parameters: summary (string), start_time (string, ISO format), end_time (string, ISO format), location (string, optional), description (string, optional), attendees (list, optional), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             ),
             FunctionTool.from_defaults(
                 fn=self.delete_event,
                 name="calendar_delete_event",
-                description="Delete an event from Google Calendar given its event ID. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Delete an event from Google Calendar given its event ID. Input parameters: event_id (string), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             )
         ]

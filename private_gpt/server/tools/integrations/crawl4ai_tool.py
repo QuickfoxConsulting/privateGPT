@@ -147,6 +147,6 @@ class Crawl4AITool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.crawl_url,
                 name="crawl4ai_scraper",
-                description="Extract readable content from a webpage using its URL."
+                description="Extract readable content from a webpage using its URL. Input parameter: url (string) - the webpage URL to scrape."
             )
         ]

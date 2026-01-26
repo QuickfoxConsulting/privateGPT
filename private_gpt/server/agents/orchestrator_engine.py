@@ -41,6 +41,7 @@ class HierarchicalAgentEngine(BaseChatEngine):
         document_files: Optional[List[str]] = None,
         callback_manager: Optional[CallbackManager] = None,
         verbose: bool = False,
+        system_prompt: Optional[str] = None,
         **kwargs
     ):
         self._llm = llm
@@ -59,6 +60,7 @@ class HierarchicalAgentEngine(BaseChatEngine):
         self._node_postprocessors = node_postprocessors
         self._document_files = document_files
         self._verbose = verbose
+        self._system_prompt = system_prompt
         self._kwargs = kwargs
         
         # We'll initialize engines lazily if needed, but ReACT is the heavy lifter
@@ -129,7 +131,7 @@ class HierarchicalAgentEngine(BaseChatEngine):
         
         # Filter tools if the router suggested specific ones (optional optimization)
         
-        # Initialize ReACT engine
+        # Initialize ReACT engine with system prompt
         engine = AgenticRAGEngine(
             llm=self._llm,
             index=self._index,
@@ -138,6 +140,7 @@ class HierarchicalAgentEngine(BaseChatEngine):
             node_postprocessors=self._node_postprocessors,
             document_files=self._document_files,
             external_tools=tool_instances,
+            system_prompt=self._system_prompt,
             verbose=self._verbose,
             **self._kwargs
         )
@@ -161,6 +164,7 @@ class HierarchicalAgentEngine(BaseChatEngine):
             node_postprocessors=self._node_postprocessors,
             document_files=self._document_files,
             external_tools=tool_instances,
+            system_prompt=self._system_prompt,
             verbose=self._verbose,
             **self._kwargs
         )

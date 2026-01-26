@@ -353,26 +353,26 @@ class GmailTool(BaseMCPTool):
             FunctionTool.from_defaults(
                 fn=self.search_emails,
                 name="gmail_search",
-                description="Search for emails in Gmail. Query format: 'from:alice', 'subject:report', etc. (No approval needed for reading)"
+                description="Search for emails in Gmail. Query format: 'from:alice', 'subject:report', etc. (No approval needed for reading). Input parameters: query (string) - search query, max_results (int, optional, default=10)."
             ),
             FunctionTool.from_defaults(
                 fn=self.get_email,
                 name="gmail_read",
-                description="Read full content of an email given its message ID. (No approval needed for reading)"
+                description="Read full content of an email given its message ID. (No approval needed for reading). Input parameter: message_id (string) - the email message ID."
             ),
             FunctionTool.from_defaults(
                 fn=self.create_draft,
                 name="gmail_draft",
-                description="Create a draft email. Requires 'to', 'subject', and 'body'. Optional 'cc', 'bcc'. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Create a draft email. Input parameters: to (string), subject (string), body (string), cc (string, optional), bcc (string, optional), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             ),
             FunctionTool.from_defaults(
                 fn=self.send_email,
                 name="gmail_send",
-                description="Send an email immediately. Requires 'to', 'subject', and 'body'. Optional 'cc', 'bcc'. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Send an email immediately. Input parameters: to (string), subject (string), body (string), cc (string, optional), bcc (string, optional), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             ),
             FunctionTool.from_defaults(
                 fn=self.reply_email,
                 name="gmail_reply",
-                description="Reply to an existing email. Requires 'message_id' and 'body'. **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
+                description="Reply to an existing email. Input parameters: message_id (string), body (string), confirm (bool, default=False). **IMPORTANT: First call WITHOUT confirm to get approval, then call WITH confirm=True ONLY after user explicitly approves.**"
             )
         ]

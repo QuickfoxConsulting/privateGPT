@@ -258,7 +258,26 @@ class IngestService:
             existing_docs = self.get_doc_ids_by_filename(file_name)
             if existing_docs:
                 logger.info(f"File {file_name} already ingested, skipping (found {len(existing_docs)} docs)")
-                return [IngestedDoc(object="ingest.document", doc_id=doc_id) for doc_id in existing_docs]
+                
+                # Try to populate metadata from the first found doc
+                doc_metadata = None
+                try:
+                    docstore = self.storage_context.docstore
+                    first_doc_id = existing_docs[0]
+                    if first_doc_id in docstore.docs:
+                        node = docstore.docs[first_doc_id]
+                        if node.metadata:
+                            doc_metadata = IngestedDoc.curate_metadata(node.metadata)
+                except Exception:
+                    logger.warning("Failed to retrieve metadata for existing document", exc_info=True)
+
+                return [
+                    IngestedDoc(
+                        object="ingest.document", 
+                        doc_id=doc_id,
+                        doc_metadata=doc_metadata # May be None, but model allows it now
+                    ) for doc_id in existing_docs
+                ]
         
         try:
             node_parser = self._get_node_parser(strategy)
