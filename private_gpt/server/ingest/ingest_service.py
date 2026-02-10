@@ -164,7 +164,7 @@ class IngestService:
         # )
         return HierarchicalNodeParser.from_defaults(
             chunk_sizes=[1024, 512],  # 2 levels of granularity
-            chunk_overlap=50,               # Overlap between chunks
+            chunk_overlap=128,              # Increased from 50 for better boundary coverage
             include_metadata=True,
             include_prev_next_rel=True
         )
@@ -282,32 +282,9 @@ class IngestService:
         try:
             node_parser = self._get_node_parser(strategy)
             ingest_component = self._get_ingest_component_with_parser(node_parser)
-            
-            # Ensure file_path and document_path are in metadata
             file_metadata = file_metadata or {}
-            abs_path = str(file_data.resolve())
-            
-            # Store both absolute and relative paths with clear naming
-            file_metadata["file_path_absolute"] = abs_path
-            
-            # Normalize document_path to be relative to 'media' folder (UPLOAD_DIR)
-            try:
-                base_dir = Path(UPLOAD_DIR).resolve()
-                rel_path = file_data.resolve().relative_to(base_dir)
-                file_metadata["file_path_relative"] = str(rel_path)
-            except ValueError:
-                # Fallback: if not in media folder, use filename only
-                file_metadata["file_path_relative"] = file_name
-            
-            # Keep legacy keys for backward compatibility and add file_name for frontend
+            abs_path = str(file_data.resolve())            
             file_metadata["file_path"] = abs_path
-            file_metadata["document_path"] = file_metadata["file_path_relative"]
-            file_metadata["file_name"] = file_name
-            file_metadata["filename"] = file_name
-            
-            # Ensure it's in the extra_info for LlamaParseReader
-            file_metadata["file_name"] = file_name
-            file_metadata["filename"] = file_name
 
             documents = await ingest_component.ingest(file_name, file_data, file_metadata)
             logger.info("Finished ingestion file_name=%s", file_name)
@@ -416,10 +393,10 @@ class IngestService:
             docstore = self.storage_context.docstore
             for node in docstore.docs.values():
                 if node.metadata is not None and node.metadata.get("file_name") == filename:
-                    # Check both ref_doc_id (for nodes) and id_ (for document objects)
-                    id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
-                    if id_to_add:
-                        doc_ids.add(id_to_add)
+                            # Check both ref_doc_id (for nodes) and id_ (for document objects)
+                            id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
+                            if id_to_add:
+                                doc_ids.add(id_to_add)
 
         except ValueError:
             logger.warning("Got an exception when getting doc_ids by filename", exc_info=True)
@@ -448,10 +425,10 @@ class IngestService:
                     node.metadata.get("file_name") is not None and 
                     pattern in node.metadata["file_name"]):
                     
-                    # Check both ref_doc_id (for nodes) and id_ (for document objects)
-                    id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
-                    if id_to_add:
-                        doc_ids.add(id_to_add)
+                            # Check both ref_doc_id (for nodes) and id_ (for document objects)
+                            id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
+                            if id_to_add:
+                                doc_ids.add(id_to_add)
         except ValueError:
             logger.warning(
                 "Got an exception when getting doc_ids by filename pattern",

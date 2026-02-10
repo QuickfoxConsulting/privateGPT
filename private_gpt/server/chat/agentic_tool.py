@@ -39,6 +39,7 @@ from private_gpt.server.tools.summary_tool import DocumentSummaryTool
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from llama_index.core.agent.react.formatter import ReActChatFormatter
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
+from private_gpt.server.chat.query_tool import EnhancedRetrievalTool
 
 # Import enhanced prompts and configuration for consistency
 from private_gpt.server.chat.prompts import (
@@ -416,19 +417,15 @@ class AgenticRAGEngine(BaseChatEngine):
         
         return validated_tools
 
-    def _create_primary_rag_tool(self) -> QueryEngineTool:
-        """Create the primary document retrieval tool."""
+    def _create_primary_rag_tool(self) -> BaseTool:
+        """Create the primary document retrieval tool with query enhancement."""        
         query_engine = self._create_query_engine()
         
-        return QueryEngineTool.from_defaults(
+        return EnhancedRetrievalTool(
             query_engine=query_engine,
-            name="document_retriever",
-            description=(
-                "A comprehensive search tool for the entire knowledge base. "
-                "Use this tool for ALL queries to check for relevant information in the uploaded documents, "
-                "regardless of whether the query seems 'internal' or general. "
-                "Always verify if the answer exists in the documents before using other tools or external knowledge."
-            )
+            llm=self._llm,
+            enable_query_expansion=True,
+            verbose=self._verbose,
         )
 
     def _create_query_engine(self) -> RetrieverQueryEngine:
@@ -589,6 +586,11 @@ class AgenticRAGEngine(BaseChatEngine):
             "8. **No Fabrication Rule**: If a detail (page number, date, author, metric) is not explicitly present in the "
             "context, do not invent it.\n\n"
 
+            "9. **Content Strategy**:\n"
+            "   - For follow-up questions: BUILD UPON previous answers, don't repeat facts already stated\n"
+            "   - Avoid redundancy: If you've already mentioned a fact, don't repeat it unless directly asked\n"
+            "   - Focus on NEW information or different aspects when answering related questions\n\n"
+
             "QUERY:\n"
             "{query_str}\n\n"
 
@@ -608,6 +610,53 @@ class AgenticRAGEngine(BaseChatEngine):
     def _get_default_system_prompt(self) -> str:
         """Generate a comprehensive system prompt that follows ReAct format with RAG capabilities."""
         return AGENTIC_SYSTEM_PROMPT
+    
+    def _detect_detail_level(self, query: str) -> str:
+        """Detect if user wants brief, normal, or detailed response."""
+        query_lower = query.lower()
+        
+        brief_indicators = ['brief', 'summary', 'short', 'quick', 'tldr', 'in short', 'concise']
+        detailed_indicators = [
+            'detailed', 'deep', 'full', 'comprehensive', 'elaborate', 
+            'in depth', 'explain more', 'more detail', 'thorough', 'complete'
+        ]
+        
+        if any(ind in query_lower for ind in brief_indicators):
+            return "brief"
+        elif any(ind in query_lower for ind in detailed_indicators):
+            return "detailed"
+        return "normal"
+    
+    def _get_detail_instruction(self, detail_level: str) -> str:
+        """Get instruction based on detail level to inject into QA template."""
+        if detail_level == "brief":
+            return (
+                "\n\n**RESPONSE LENGTH**: Provide a BRIEF response (2-3 sentences maximum). "
+                "High-level overview only. Do NOT include unnecessary details."
+            )
+        elif detail_level == "detailed":
+            return (
+                "\n\n**RESPONSE LENGTH**: Provide a COMPREHENSIVE, DETAILED response. "
+                "Include technical specifics, examples, architecture details, and thorough explanations. "
+                "Use hierarchical formatting with headings and bullet points."
+            )
+        return ""  # Normal - no special instruction
+    
+    def _get_qa_template_with_detail_level(self, detail_level: str) -> PromptTemplate:
+        """Get QA template with detail-level instructions injected."""
+        base_template = self._get_qa_template()
+        detail_instruction = self._get_detail_instruction(detail_level)
+        
+        if detail_instruction:
+            # Inject detail instruction before "BEGIN YOUR RESPONSE:"
+            template_str = base_template.template
+            template_str = template_str.replace(
+                "BEGIN YOUR RESPONSE:",
+                f"{detail_instruction}\n\nBEGIN YOUR RESPONSE:"
+            )
+            return PromptTemplate(template_str)
+        
+        return base_template
 
     def _sync_memory(self, chat_history: Optional[List[ChatMessage]]) -> None:
         """Synchronize memory with provided chat history."""

@@ -55,6 +55,9 @@ from private_gpt.server.chat.prompts import (
     AGENTIC_SYSTEM_PROMPT,
     resolve_system_prompt,
 )
+from private_gpt.server.utils.notifications import NotificationService
+import re
+
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +109,36 @@ Voice: clear, confident, and helpful — like a domain expert who communicates w
 
 """
 
+# CONDENSE_PROMPT_TEMPLATE = """
+# You transform conversational follow-up questions into comprehensive, standalone queries optimized for document retrieval.
+
+# **Chat History:**  
+# {chat_history}
+
+# **Follow-Up Question:**  
+# {question}
+
+# **Transformation Guidelines:**
+# 1. Create a complete, self-contained question that incorporates all necessary context from the chat history
+# 2. Replace all pronouns (it, they, these, etc.) with their explicit referents
+# 3. Preserve all entities, dates, time periods, specific terminology, and contextual details
+# 4. Include implied constraints or parameters from earlier conversation
+# 5. Maintain the original intent while optimizing for accurate document retrieval
+# 6. Write as a natural, fluent question — not as keywords or a search query
+
+# **Output Instructions:**
+# - Return ONLY the rewritten standalone question without explanation or commentary
+# - If the original question is already standalone or if chat history is empty, optimize only for clarity and specificity
+# - Ensure the output is clean and ready for direct use in retrieval
+
+# The ideal rewritten question should retrieve all relevant document passages without requiring prior chat context.
+
+# Standalone question:
+# """
+
 CONDENSE_PROMPT_TEMPLATE = """
-You transform conversational follow-up questions into comprehensive, standalone queries optimized for document retrieval.
+You transform conversational follow-up questions into comprehensive, standalone questions optimized for high-recall document retrieval.  
+You may internally leverage Hypothetical Document Expansion (HyDE): reason about what an ideal answer would likely contain, and use that reasoning to enrich the rewritten question with missing but implied context. Do NOT output a hypothetical answer.
 
 **Chat History:**  
 {chat_history}
@@ -116,22 +147,23 @@ You transform conversational follow-up questions into comprehensive, standalone 
 {question}
 
 **Transformation Guidelines:**
-1. Create a complete, self-contained question that incorporates all necessary context from the chat history
-2. Replace all pronouns (it, they, these, etc.) with their explicit referents
-3. Preserve all entities, dates, time periods, specific terminology, and contextual details
-4. Include implied constraints or parameters from earlier conversation
-5. Maintain the original intent while optimizing for accurate document retrieval
-6. Write as a natural, fluent question — not as keywords or a search query
+1. Produce a single, fully self-contained natural-language question that requires no prior chat context
+2. Resolve all pronouns and vague references by replacing them with explicit entities or concepts
+3. Preserve and restate all relevant entities, systems, technologies, dates, constraints, and assumptions from the chat history
+4. Infer and include implicit context, scope, or constraints that an expert answer would reasonably address (HyDE principle)
+5. Expand underspecified questions to reflect the full informational intent, without introducing new facts
+6. Optimize the question to maximize retrieval of all relevant document passages, not just a narrow answer
+7. Maintain the original user intent and tone, while improving clarity, specificity, and completeness
 
 **Output Instructions:**
-- Return ONLY the rewritten standalone question without explanation or commentary
-- If the original question is already standalone or if chat history is empty, optimize only for clarity and specificity
-- Ensure the output is clean and ready for direct use in retrieval
-
-The ideal rewritten question should retrieve all relevant document passages without requiring prior chat context.
+- Output ONLY the rewritten standalone question
+- Do NOT include explanations, analysis, or hypothetical answers
+- If the question is already standalone or chat history is empty, refine only for clarity and retrieval specificity
+- Ensure the result is fluent, precise, and suitable for direct use in a retrieval pipeline
 
 Standalone question:
 """
+
 
 @dataclass
 class ChatEngineInput:
@@ -196,6 +228,28 @@ class ChatService:
             show_progress=True,
         )
         self.node_store = node_store_component
+
+    def _should_trigger_notification(self, sources: list[Chunk] | None, response_text: str) -> bool:
+        """
+        Check if the system failed to retrieve info AND the LLM confirmed it.
+        
+        Using Hybrid Logic:
+        1. Sources Check: If sources exist, we found info -> No Email.
+        2. Text Check: If sources are empty (could be greeting or failure), 
+           verify the LLM is explicitly stating that info is missing.
+        """
+        if sources:
+            return False
+            
+        # If no sources, check if it's a "failure" response (not just a greeting)
+        patterns = [
+            r"following question detail is not provided in docs",
+            r"provided documents do not contain information",
+            r"cannot find information about this in the provided documents",
+            r"context does not contain",
+            r"answer is not in the context provided"
+        ]
+        return any(re.search(p, response_text, re.IGNORECASE) for p in patterns)
         
     def _get_qa_template(self, db: Session, user_id: int | None, mode: str) -> str:
         """Document-grounded QA template with strict context usage and markdown citations."""
@@ -421,27 +475,27 @@ class ChatService:
                 streaming=True  # Enable streaming for better responsiveness
             )
             
-            return CondensePlusContextChatEngine.from_defaults(
-                retriever=vector_index_retriever,
-                llm=self.llm_component.llm,
-                node_postprocessors=node_postprocessors,
-                system_prompt=resolve_system_prompt(resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT),
-                condense_prompt=resolved_condense_prompt,
-                context_prompt=resolved_context_prompt,
-                streaming=True,
-                verbose=True,
-            )
-            # return AgenticCondenseChatEngine.from_defaults(
+            # return CondensePlusContextChatEngine.from_defaults(
             #     retriever=vector_index_retriever,
-            #     llm=self.llm_component.llm, 
+            #     llm=self.llm_component.llm,
             #     node_postprocessors=node_postprocessors,
+            #     system_prompt=resolve_system_prompt(resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT),
             #     condense_prompt=resolved_condense_prompt,
-            #     decompose_prompt=resolved_decompose_prompt,
             #     context_prompt=resolved_context_prompt,
-            #     system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
-            #     skip_condense=True,
+            #     streaming=True,
             #     verbose=True,
             # )
+            return AgenticCondenseChatEngine.from_defaults(
+                retriever=vector_index_retriever,
+                llm=self.llm_component.llm, 
+                node_postprocessors=node_postprocessors,
+                condense_prompt=resolved_condense_prompt,
+                decompose_prompt=resolved_decompose_prompt,
+                context_prompt=resolved_context_prompt,
+                system_prompt=resolved_system_prompt,
+                skip_condense=True,
+                verbose=True,
+            )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=resolve_system_prompt(resolved_system_prompt or DEFAULT_SYSTEM_PROMPT),
@@ -542,6 +596,7 @@ class ChatService:
         
         # Wrap generator to log chunks and handle errors
         async def logged_gen():
+            full_response = ""
             first_chunk = True
             chunk_count = 0
             
@@ -594,6 +649,10 @@ class ChatService:
                             logger.info(f"First chunk type: {type(chunk)}, preview: {preview}")
                             first_chunk = False
                         yield chunk
+                        if hasattr(chunk, 'delta'):
+                            full_response += str(chunk.delta)
+                        else:
+                            full_response += str(chunk)
                     
                     logger.info(f"Streaming completed with {chunk_count} chunks via {generator_name}")
                 else:
@@ -604,6 +663,14 @@ class ChatService:
             except Exception as e:
                 logger.error(f"Error during streaming: {e}", exc_info=True)
                 yield f"Error during streaming: {str(e)}"
+
+            if self._should_trigger_notification(initial_sources, full_response):
+                logger.info("Triggering vendor notification: No sources + Refusal detected")
+                try:
+                    NotificationService.send_vendor_notification_email(last_message, full_response)
+                except Exception as e:
+                    logger.error(f"Error triggering notification: {e}")
+        
         
         completion_gen = CompletionGen(
             response=logged_gen(), sources=initial_sources
@@ -645,6 +712,14 @@ class ChatService:
         )
         sources = [Chunk.from_node(node) for node in wrapped_response.source_nodes]
         completion = Completion(response=wrapped_response.response, sources=sources, cache_id=None)
+        if self._should_trigger_notification(completion.sources, completion.response):
+                    logger.info("Triggering vendor notification: No sources + Refusal detected")
+                    try:
+                        NotificationService.send_vendor_notification_email(last_message, completion.response)
+                    except Exception as e:
+                        logger.error(f"Error triggering notification: {e}")
+
+
         return completion
 
     async def generate_title(

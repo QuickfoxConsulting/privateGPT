@@ -321,7 +321,7 @@ async def verify_document_background(
     current_user_id: int,
     doc_manager: DocumentManager,
     request: Request,
-    strategy: ChunkingStrategy = ChunkingStrategy.LATE_CHUNKING
+    strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
 ):
     """Background task to handle document verification with fresh DB session."""
     db = SessionLocal()
@@ -369,7 +369,7 @@ async def verify_document_background(
                 "tags": document.doc_metadata.get("tags", []),
                 "departments": document.doc_metadata.get("departments", []),
                 "category": document.doc_metadata.get("category", None),
-                "document_path": str(final_path),
+                "document_path": str(final_path.relative_to(UPLOAD_DIR)),
                 "strategy": strategy.value
             }
             checker = schemas.DocumentCheckerUpdate(

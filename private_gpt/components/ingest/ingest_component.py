@@ -232,7 +232,17 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
         with self._index_thread_lock:
             try:
                 logger.info("Inserting count=%s nodes in the index", len(nodes))
-                self._index.insert_nodes(nodes, show_progress=True)
+                # Process nodes in smaller batches to manage memory usage
+                batch_size = 10  # Process nodes in batches to reduce memory usage
+                for i in range(0, len(nodes), batch_size):
+                    batch = nodes[i:i + batch_size]
+                    logger.debug(f"Inserting batch {i//batch_size + 1}/{(len(nodes)-1)//batch_size + 1} with {len(batch)} nodes")
+                    self._index.insert_nodes(batch, show_progress=False)  # Disable progress for batches
+                    
+                # Show overall progress once at the end
+                if self.show_progress:
+                    print(f"Processed {len(nodes)} nodes in batches of {batch_size}")
+                    
                 for document in documents:
                     # Ensure document has a doc_id before setting hash
                     if not hasattr(document, 'doc_id') or not document.doc_id:
@@ -243,7 +253,7 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
                             document.metadata = {}
                         document.metadata["doc_id"] = document.doc_id
                         document.metadata["document_id"] = document.doc_id
-                        
+                            
                     # Note: We don't set ref_doc_id on Document objects as that's a property of TextNode objects
                     # The ref_doc_id will be set by the node parser when creating nodes from documents
                         
@@ -329,7 +339,17 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
         # Locking the index to avoid concurrent writes
         with self._index_thread_lock:
             logger.info("Inserting count=%s nodes in the index", len(nodes))
-            self._index.insert_nodes(nodes, show_progress=True)
+            # Process nodes in smaller batches to manage memory usage
+            batch_size = 20  # Process nodes in batches to reduce memory usage
+            for i in range(0, len(nodes), batch_size):
+                batch = nodes[i:i + batch_size]
+                logger.debug(f"Inserting batch {i//batch_size + 1}/{(len(nodes)-1)//batch_size + 1} with {len(batch)} nodes")
+                self._index.insert_nodes(batch, show_progress=False)  # Disable progress for batches
+            
+            # Show overall progress once at the end
+            if self.show_progress:
+                print(f"Processed {len(nodes)} nodes in batches of {batch_size}")
+                
             for document in documents:
                 self._index.docstore.set_document_hash(
                     document.get_doc_id(), document.hash
@@ -427,7 +447,17 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
         # Locking the index to avoid concurrent writes
         with self._index_thread_lock:
             logger.info("Inserting count=%s nodes in the index", len(nodes))
-            self._index.insert_nodes(nodes, show_progress=True)
+            # Process nodes in smaller batches to manage memory usage
+            batch_size = 20  # Process nodes in batches to reduce memory usage
+            for i in range(0, len(nodes), batch_size):
+                batch = nodes[i:i + batch_size]
+                logger.debug(f"Inserting batch {i//batch_size + 1}/{(len(nodes)-1)//batch_size + 1} with {len(batch)} nodes")
+                self._index.insert_nodes(batch, show_progress=False)  # Disable progress for batches
+            
+            # Show overall progress once at the end
+            if self.show_progress:
+                print(f"Processed {len(nodes)} nodes in batches of {batch_size}")
+                
             for document in documents:
                 self._index.docstore.set_document_hash(
                     document.get_doc_id(), document.hash

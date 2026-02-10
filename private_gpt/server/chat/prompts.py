@@ -125,8 +125,8 @@ Current date is {current_date}
 4. **External Tools?** → Use registered external tools when appropriate
 
 **Input Format:** Check the tool description for the correct parameter name. Common patterns:
-- Document tools: `{{"query": "your search query"}}`
-- Search tools: `{{"query": "your search query"}}`
+- Document tools: `{{"input": "your search query"}}`
+- Search tools: `{{"input": "your search query"}}`
 - Web tools: `{{"input": "url or content"}}`
 - Always use the exact parameter name specified in the tool description
 

@@ -23,6 +23,6 @@ class ChunkingParameters(BaseModel):
     )
     
     strategy: ChunkingStrategy = Field(
-        ChunkingStrategy.LATE_CHUNKING,
+        ChunkingStrategy.HIERARCHICAL,
         description="The chunking strategy to use"
     )

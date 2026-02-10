@@ -1,14 +1,15 @@
 import os
 import uuid
 import logging
+import re
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 from llama_parse import LlamaParse
 from llama_index.core.schema import Document
 from llama_index.core.readers.base import BaseReader
 from private_gpt.users.core.config import settings  # Assuming this is correctly imported
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +17,9 @@ logger = logging.getLogger(__name__)
 class TextBlock:
     doc_id: str  
     text: str
-    page_num: int
+    page_num: Union[int, str]
     block_index: int
-    metadata: Dict = None  
+    metadata: Dict = field(default_factory=dict)
 
 class LlamaParseReader(BaseReader):
     """
@@ -36,7 +37,7 @@ class LlamaParseReader(BaseReader):
     
     def __init__(
         self,
-        num_workers: int = 2,
+        num_workers: int = 4,
         result_type: str = "markdown",
         verbose: bool = True,
         page_prefix: str = "START OF PAGE: {pageNumber}\n",
@@ -47,7 +48,7 @@ class LlamaParseReader(BaseReader):
         merge_tables_across_pages_in_markdown: bool = True,
         presentation_out_of_bounds_content: bool = True,
         output_tables_as_HTML: bool = True,
-        join_pages: bool = True,
+        join_pages: bool = False,
     ):
         """
         Initialize the LlamaParseReader with customizable parsing options.
@@ -95,7 +96,7 @@ class LlamaParseReader(BaseReader):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        retry=retry_if_exception((ConnectionError, TimeoutError)),
         reraise=True
     )
     async def _call_llama_parse_async(self, file_path: str) -> List[Document]:
@@ -106,7 +107,7 @@ class LlamaParseReader(BaseReader):
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        retry=retry_if_exception((ConnectionError, TimeoutError)),
         reraise=True
     )
     def _call_llama_parse_sync(self, file_path: str) -> List[Document]:
@@ -114,17 +115,41 @@ class LlamaParseReader(BaseReader):
         logger.debug(f"Calling LlamaParse API for {file_path}")
         return self.parser.load_data(file_path)
 
+    def _extract_page_number_from_text(self, text: str, fallback_idx: int) -> Union[int, str]:
+        """
+        Extract page number from text markers like 'START OF PAGE: 1' or 'END OF PAGE: 1'.
+        Falls back to index if no marker found.
+        """
+        # Look for page markers in the text
+        # Pattern matches: START OF PAGE: <page> or END OF PAGE: <page>
+        # Supports both numeric (1, 2, 3) and non-numeric (i, ii, iii) page numbers
+        matches = re.findall(r"(?:START|END) OF PAGE:\s*(\S+)", text)
+        
+        if matches:
+            # Take the first match (they should all be the same page)
+            page_str = matches[0]
+            # Try to convert to int if it's numeric
+            try:
+                return int(page_str)
+            except ValueError:
+                # Keep as string for Roman numerals or other formats
+                return page_str
+        
+        # Fallback to index-based numbering
+        return fallback_idx
+
     def _extract_text_blocks(self, llama_docs: List[Document]) -> List[TextBlock]:
         """
         Extract TextBlock objects from parsed Llama documents.
         """
         text_blocks = []
         for idx, doc in enumerate(llama_docs):
-            page_label = doc.metadata.get("page_label", idx + 1)
-            try:
-                page_num = int(page_label)
-            except (ValueError, TypeError):
-                page_num = idx + 1
+            # Try to get page_label from metadata first
+            page_num = doc.metadata.get("page_label") if doc.metadata else None
+            
+            # If page_label is not available, extract from text markers
+            if page_num is None:
+                page_num = self._extract_page_number_from_text(doc.text, idx + 1)
             
             doc_id = doc.id_ if doc.id_ else str(uuid.uuid4())
             
@@ -150,11 +175,10 @@ class LlamaParseReader(BaseReader):
             char_offset = 0
             
             for idx, doc in enumerate(llama_docs):
-                page_label = doc.metadata.get("page_label", idx + 1)
-                try:
-                    page_num = int(page_label)
-                except (ValueError, TypeError):
-                    page_num = idx + 1
+                # Extract page number from metadata or text
+                page_num = doc.metadata.get("page_label") if doc.metadata else None
+                if page_num is None:
+                    page_num = self._extract_page_number_from_text(doc.text, idx + 1)
                 
                 page_text = doc.text
                 if idx > 0:
@@ -177,8 +201,8 @@ class LlamaParseReader(BaseReader):
                 text=combined_text,
                 id_=str(uuid.uuid4()),
                 metadata={
-                    "filename": filename,
-                    "file_name": filename, # Add for frontend compatibility
+                    "file_name": filename,
+                    "file_path": filename,
                     "total_pages": len(llama_docs),
                     "page_map": page_map,
                     "joined_pages": True
@@ -204,8 +228,8 @@ class LlamaParseReader(BaseReader):
             next_doc_id = text_blocks[idx + 1].doc_id if idx < len(text_blocks) - 1 else None
             
             doc.metadata.update({
-                "filename": filename,
-                "file_name": filename, # Add for frontend compatibility
+                "file_name": filename,
+                "file_path": filename,
                 "page": block.page_num,
                 "document_id": current_doc_id,
                 "total_pages": len(llama_docs),

@@ -232,7 +232,7 @@ class DocumentUpload:
         self,
         doc_metadata: str = Form(None),  # Made this optional by changing from Form(...) to Form(None)
         file: UploadFile = File(...),
-        strategy: ChunkingStrategy = Form(ChunkingStrategy.LATE_CHUNKING)
+        strategy: ChunkingStrategy = Form(ChunkingStrategy.HIERARCHICAL)
     ):
         self.file = file
         self.metadata_raw = doc_metadata

@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     SMTP_SENDER_EMAIL: str
     SMTP_USERNAME: str
     SMTP_PASSWORD: str
+    VENDOR_NOTIFICATION_EMAIL: Optional[str] = None
+
 
     LDAP_SERVER: str
     LDAP_ENABLE: bool

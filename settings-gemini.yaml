@@ -29,7 +29,7 @@ embedding:
 
 gemini:
   api_key: ${GEMINI_API_KEY}
-  model: models/gemini-2.0-flash
+  model: models/gemini-flash-lite-latest
   embedding_model: models/gemini-embedding-001
 
 # huggingface:
