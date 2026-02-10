@@ -108,7 +108,7 @@ vectorstore:
   database: qdrant
 
 nodestore:
-  database: simple
+  database: postgres
 
 # milvus:
 #   uri: http://standalone:19530

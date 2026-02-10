@@ -50,10 +50,8 @@ class DocumentManager:
         return filename.replace(" ", "_")
 
     def _generate_version_path(self, document_id: int, version: int, original_filename: str) -> Path:
-        """Generate path using directory structure instead of filename suffixes."""
-        doc_dir = self.final_dir / str(document_id) / f"v{version}"
-        doc_dir.mkdir(parents=True, exist_ok=True)
-        return doc_dir / original_filename
+        """Generate path storing files directly in the documents directory without version folders."""
+        return self.final_dir / original_filename
 
     async def _save_file(self, file: UploadFile, destination: Path) -> bool:
         """Save uploaded file with chunked reading."""
@@ -96,9 +94,9 @@ class DocumentManager:
         version: int,
         original_filename: str  # Pass original filename explicitly
     ) -> Path:
-        """Move approved document to final location with directory-based versioning."""
+        """Move approved document to final location in the documents directory only."""
         try:
-            # Create directory structure: documents/document_id/v{version}/filename
+            # Generate path directly in the documents directory without versioning
             final_path = self._generate_version_path(document_id, version, original_filename)
             
             # Move file to final location

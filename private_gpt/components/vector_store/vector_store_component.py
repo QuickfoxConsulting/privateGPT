@@ -270,7 +270,7 @@ class VectorStoreComponent:
                 index=index,
                 context_filter=context_filter,
                 similarity_top_k=similarity_top_k * 2,  # Retrieve more leaf chunks
-                simple_ratio_thresh=0.5,
+                simple_ratio_thresh=0.4,  # Lowered from 0.5 to prefer broader context
             )
         
         # Standard retriever for non-hierarchical chunks
@@ -358,7 +358,7 @@ class VectorStoreComponent:
         index: VectorStoreIndex,
         context_filter: ContextFilter | None = None,
         similarity_top_k: int = 12,
-        simple_ratio_thresh: float = 0.5,
+        simple_ratio_thresh: float = 0.4,
     ) -> AutoMergingRetriever:
         """Create AutoMergingRetriever for hierarchical chunk merging.
         

@@ -69,13 +69,16 @@ def smart_citation_replacement(response: str, nodes: List[NodeWithScore]) -> str
                 node = nodes[idx]
                 metadata = node.node.metadata or {}
                 
-                # Check for file metadata
-                file_name = metadata.get("file_name") or metadata.get("filename")
-                document_path = metadata.get("document_path") or metadata.get("file_path")
-                page_label = metadata.get("page_label")
+                # Get file_name (or extract from file_path as fallback)
+                file_name = metadata.get("file_name")
+                if not file_name:
+                    file_path = metadata.get("file_path")
+                    file_name = Path(file_path).name if file_path else None
                 
-                # Normalize document_path
-                document_path = normalize_path(document_path)
+                # Use file_path for document_path, normalize it
+                document_path = metadata.get("file_path")
+                document_path = normalize_path(document_path) if document_path else None
+                page_label = metadata.get("page_label")
                 
                 # Check for web metadata
                 url = metadata.get("url")

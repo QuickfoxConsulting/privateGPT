@@ -1,32 +1,24 @@
 from typing import Any, List, Sequence
 from llama_index.core.schema import BaseNode, TransformComponent
+import re
+
 
 class PageMetadataBackfiller(TransformComponent):
     """
     A transformation that backfills page metadata for nodes.
-    
     It uses a `page_map` found in the node's metadata (passed down from the Document)
     and the node's `start_char_idx` to determine the correct page number.
     """
 
     def __call__(self, nodes: Sequence[BaseNode], **kwargs: Any) -> Sequence[BaseNode]:
         """Process nodes and backfill page metadata."""
-        import re
-        
         for node in nodes:
-            # Check if we have the page_map and character indices
             page_map = node.metadata.get("page_map")
-            
-            # If this is a child node, it might not have the page_map directly
-            # but it has a parent relationship. However, in LlamaIndex transformations,
-            # nodes usually keep the original metadata unless stripped.
-            
             start_char_idx = getattr(node, "start_char_idx", None)
             end_char_idx = getattr(node, "end_char_idx", None)
-            
+
+            # Strategy 1: Use page_map if available (for joined documents with join_pages=True)
             if page_map and start_char_idx is not None:
-                # Find the range of pages from the map
-                # The page_map is a list of dicts: {"page": int, "start_char_idx": int, "end_char_idx": int}
                 found_pages = set()
                 end_idx = end_char_idx if end_char_idx is not None else start_char_idx + len(node.get_content())
                 
@@ -38,25 +30,63 @@ class PageMetadataBackfiller(TransformComponent):
                         found_pages.add(entry["page"])
                 
                 if found_pages:
-                    sorted_pages = sorted(list(found_pages))
+                    # Sort pages, handling mixed types (int and str)
+                    sorted_pages = sorted(list(found_pages), key=lambda x: (isinstance(x, str), x))
+                    
                     if len(sorted_pages) > 1:
-                        # Store as a list or a range string for the frontend/LLM
+                        # Node spans multiple pages
                         node.metadata["page"] = sorted_pages
-                        # node.metadata["page_label"] = f"{sorted_pages[0]}-{sorted_pages[-1]}"
                     else:
+                        # Node is on a single page
                         node.metadata["page"] = sorted_pages[0]
                 
-                # Clean up the page_map from metadata to avoid bloat and size issues
-                # node.metadata.pop("page_map", None)
+                # Clean up page_map to avoid bloat
+                node.metadata.pop("page_map", None)
             
-            # --- Fallback: Extract from text markers if metadata fails ---
-            if not node.metadata.get("page") or node.metadata.get("page") == 1:
-                markers = re.findall(r"(?:START|END) OF PAGE: (\d+)", node.get_content())
+            # Strategy 2: Page already set correctly (non-joined mode or already processed)
+            # DO NOT overwrite existing valid page metadata
+            elif "page" in node.metadata and node.metadata["page"] is not None:
+                # Page is already set correctly from LlamaParseReader
+                # Just clean up page_map if it exists
+                node.metadata.pop("page_map", None)
+            
+            # Strategy 3: ONLY as last resort, extract from text markers
+            # This happens when page_map doesn't exist AND page is not set
+            else:
+                content = node.get_content()
+                # Try to find page markers in the content
+                # Pattern: START OF PAGE: <page> or END OF PAGE: <page>
+                markers = re.findall(r"(?:START|END) OF PAGE:\s*(\S+)", content)
+                
                 if markers:
-                    found_pages = sorted(list(set(map(int, markers))))
+                    # Deduplicate while preserving order
+                    unique_markers = list(dict.fromkeys(markers))
+                    
+                    # Try to convert to int for numeric pages
+                    found_pages = []
+                    for marker in unique_markers:
+                        try:
+                            found_pages.append(int(marker))
+                        except ValueError:
+                            # Keep as string for Roman numerals or other formats
+                            found_pages.append(marker)
+                    
                     if len(found_pages) > 1:
                         node.metadata["page"] = found_pages
-                    else:
+                    elif len(found_pages) == 1:
                         node.metadata["page"] = found_pages[0]
-                    
+
+            # Clean up duplicate and unnecessary metadata keys
+            keys_to_remove = [
+                "filename",           # Duplicate of file_name
+                "document_path",      # Duplicate of file_path
+                "file_path_absolute", # Duplicate of file_path
+                "file_path_relative", # Not needed
+                "strategy",           # Internal processing detail
+                "document_id",        # You might want to keep this - remove from list if needed
+            ]
+            
+            for key in keys_to_remove:
+                node.metadata.pop(key, None)
+
         return nodes

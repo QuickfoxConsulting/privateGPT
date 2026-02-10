@@ -103,7 +103,6 @@ You are a document-grounded assistant. Use ONLY the context below to answer the 
 - Be concise, informative, and natural — no apologies unless truly warranted
 Voice: clear, confident, and helpful — like a domain expert who communicates well.
 
-
 """
 
 CONDENSE_PROMPT_TEMPLATE = """
@@ -421,27 +420,28 @@ class ChatService:
                 streaming=True  # Enable streaming for better responsiveness
             )
             
-            return CondensePlusContextChatEngine.from_defaults(
-                retriever=vector_index_retriever,
-                llm=self.llm_component.llm,
-                node_postprocessors=node_postprocessors,
-                system_prompt=resolve_system_prompt(resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT),
-                condense_prompt=resolved_condense_prompt,
-                context_prompt=resolved_context_prompt,
-                streaming=True,
-                verbose=True,
-            )
-            # return AgenticCondenseChatEngine.from_defaults(
+            # return CondensePlusContextChatEngine.from_defaults(
             #     retriever=vector_index_retriever,
-            #     llm=self.llm_component.llm, 
+            #     llm=self.llm_component.llm,
             #     node_postprocessors=node_postprocessors,
+            #     system_prompt=resolve_system_prompt(resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT),
             #     condense_prompt=resolved_condense_prompt,
-            #     decompose_prompt=resolved_decompose_prompt,
             #     context_prompt=resolved_context_prompt,
-            #     system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
-            #     skip_condense=True,
+            #     streaming=True,
             #     verbose=True,
             # )
+            return AgenticCondenseChatEngine.from_defaults(
+                retriever=vector_index_retriever,
+                llm=self.llm_component.llm, 
+                chat_history=chat_history,
+                node_postprocessors=node_postprocessors,
+                condense_prompt=resolved_condense_prompt,
+                decompose_prompt=resolved_decompose_prompt,
+                context_prompt=resolved_context_prompt,
+                system_prompt=resolved_system_prompt or RETRIEVAL_SYSTEM_PROMPT,
+                skip_condense=False,
+                verbose=True,
+            )
         else:
             return SimpleChatEngine.from_defaults(
                 system_prompt=resolve_system_prompt(resolved_system_prompt or DEFAULT_SYSTEM_PROMPT),

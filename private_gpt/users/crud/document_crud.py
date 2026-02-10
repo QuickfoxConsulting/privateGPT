@@ -14,8 +14,8 @@ from private_gpt.users.models.enums import MakerCheckerStatus, MakerCheckerActio
 from sqlalchemy import and_
 
 def get_versioned_filename_pattern(file_name: str) -> str:
-    """Generate versioned filename pattern - deprecated as we now use directory-based versioning."""
-    # Deprecated: We now use directory-based versioning that preserves original filenames
+    """Generate versioned filename pattern - deprecated as we now store files directly in documents directory."""
+    # Deprecated: We now store files directly in the documents directory without version folders
     name, ext = os.path.splitext(file_name)
     return f"{name}_v%{ext}" 
 

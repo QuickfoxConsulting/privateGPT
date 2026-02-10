@@ -33,8 +33,6 @@ class IngestedDoc(BaseModel):
             doc_id = document.doc_id
         elif document.metadata and 'doc_id' in document.metadata and document.metadata['doc_id']:
             doc_id = document.metadata['doc_id']
-        elif document.metadata and 'document_id' in document.metadata and document.metadata['document_id']:
-            doc_id = document.metadata['document_id']
         
         # Generate a new doc_id if one doesn't exist
         if not doc_id:
@@ -45,9 +43,7 @@ class IngestedDoc(BaseModel):
         document.doc_id = doc_id
         if not document.metadata:
             document.metadata = {}
-        document.metadata["doc_id"] = doc_id
-        document.metadata["document_id"] = doc_id
-        
+        document.metadata["doc_id"] = doc_id        
         # Note: Document objects don't have ref_doc_id field - that's for TextNode objects
         # The ref_doc_id is handled by the node parser when creating nodes from documents
         

@@ -77,6 +77,9 @@ class ChunksService:
     def _get_sibling_nodes_text(
         self, node_with_score: NodeWithScore, related_number: int, forward: bool = True
     ) -> list[str]:
+        import logging
+        logger = logging.getLogger(__name__)
+        
         explored_nodes_texts = []
         current_node = node_with_score.node
         for _ in range(related_number):
@@ -86,12 +89,16 @@ class ChunksService:
             if explored_node_info is None:
                 break
 
-            explored_node = self.storage_context.docstore.get_node(
-                explored_node_info.node_id
-            )
-
-            explored_nodes_texts.append(explored_node.get_content())
-            current_node = explored_node
+            try:
+                explored_node = self.storage_context.docstore.get_node(
+                    explored_node_info.node_id
+                )
+                explored_nodes_texts.append(explored_node.get_content())
+                current_node = explored_node
+            except Exception as e:
+                logger.error(f"Async retrieval error: doc_id {explored_node_info.node_id} not found.")
+                # Stop traversing siblings if we hit a missing node
+                break
 
         return explored_nodes_texts
     
@@ -99,6 +106,9 @@ class ChunksService:
         """
         Retrieve text from other nodes with the same document ID
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         current_node = node_with_score.node
         current_doc_id = current_node.metadata.get('doc_id')
         
@@ -110,22 +120,33 @@ class ChunksService:
         for node_id, node_data in self.storage_context.docstore.docs.items():
             if (node_data.metadata.get('doc_id') == current_doc_id and 
                 node_id != current_node.node_id):
-                same_doc_node = self.storage_context.docstore.get_node(node_id)
-                same_doc_nodes.append(same_doc_node.get_content())
+                try:
+                    same_doc_node = self.storage_context.docstore.get_node(node_id)
+                    same_doc_nodes.append(same_doc_node.get_content())
+                except Exception as e:
+                    logger.warning(f"Node {node_id} not found in docstore, skipping")
+                    continue
         
         return same_doc_nodes
     
     def _process_retrieved_nodes(self, nodes: list[NodeWithScore], prev_next_chunks: int) -> list[Chunk]:
         """Shared logic to process retrieved nodes into Chunks."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
         retrieved_nodes = []
         for node in nodes:
-            chunk = Chunk.from_node(node)
-            chunk.previous_texts = self._get_sibling_nodes_text(
-                node, prev_next_chunks, False
-            )
-            chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
-            retrieved_nodes.append(chunk)
+            try:
+                chunk = Chunk.from_node(node)
+                chunk.previous_texts = self._get_sibling_nodes_text(
+                    node, prev_next_chunks, False
+                )
+                chunk.next_texts = self._get_sibling_nodes_text(node, prev_next_chunks)
+                retrieved_nodes.append(chunk)
+            except Exception as e:
+                logger.error(f"Failed to process node {node.node.node_id}: {e}. Skipping this node.")
+                continue
         return retrieved_nodes
 
     def retrieve_relevant_sync(

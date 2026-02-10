@@ -44,6 +44,8 @@ class NodeStoreComponent:
                     from llama_index.core.storage.index_store.postgres_index_store import (
                         PostgresIndexStore,
                     )
+                    from llama_index.core.storage.kvstore.postgres_kvstore import PostgresKVStore
+                    from typing import Any
                 except ImportError:
                     raise ImportError(
                         "Postgres dependencies not found, install with `poetry install --extras storage-nodestore-postgres`"
@@ -52,12 +54,43 @@ class NodeStoreComponent:
                 if settings.postgres is None:
                     raise ValueError("Postgres index/doc store settings not found.")
 
-                self.index_store = PostgresIndexStore.from_params(
-                    **settings.postgres.model_dump(exclude_none=True)
+                # Define custom KVStore with connection pooling
+                class PooledPostgresKVStore(PostgresKVStore):
+                    def _connect(self) -> Any:
+                        from sqlalchemy import create_engine
+                        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+                        from sqlalchemy.orm import sessionmaker
+
+                        # Add pooling configuration
+                        self._engine = create_engine(
+                            self.connection_string,
+                            echo=self.debug,
+                            pool_size=20,     # Increased pool size
+                            max_overflow=10    # Allow extra burst connections
+                        )
+                        self._session = sessionmaker(self._engine)
+
+                        self._async_engine = create_async_engine(
+                            self.async_connection_string,
+                            pool_size=20,
+                            max_overflow=10
+                        )
+                        self._async_session = sessionmaker(self._async_engine, class_=AsyncSession)
+
+                # Initialize pools with custom KVStore
+                # 1. Index Store
+                index_kv_store = PooledPostgresKVStore.from_params(
+                    **settings.postgres.model_dump(exclude_none=True),
+                    table_name="indexstore"
                 )
-                self.doc_store = PostgresDocumentStore.from_params(
-                    **settings.postgres.model_dump(exclude_none=True)
+                self.index_store = PostgresIndexStore(index_kv_store)
+
+                # 2. Document Store
+                doc_kv_store = PooledPostgresKVStore.from_params(
+                    **settings.postgres.model_dump(exclude_none=True),
+                    table_name="docstore"
                 )
+                self.doc_store = PostgresDocumentStore(doc_kv_store)
 
             case _:
                 # Should be unreachable

@@ -642,9 +642,18 @@ class WebsiteCrawlService(BaseIntegration):
                     result = await crawler.arun(url=page.url, config=run_config)
                     
                     if result.success and result.markdown:
+                        # Sanitize filename from URL
+                        import re
+                        safe_filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', page.url)
+                        # Ensure it doesn't start with '..'
+                        if safe_filename.startswith('..'):
+                            safe_filename = '_' + safe_filename
+                        if len(safe_filename) > 255:
+                            safe_filename = safe_filename[-255:]
+
                         # Ingest content
                         await ingest_service.ingest_text(
-                            file_name=page.url,
+                            file_name=safe_filename,
                             text=result.markdown,
                             metadata={
                                 "type": "website",

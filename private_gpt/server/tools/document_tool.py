@@ -156,16 +156,16 @@ class DocumentSpecificTool(BaseTool):
                     logger.error(f"[FAIL] Final failure on '{self.file_name}' - {e}", exc_info=self.verbose)
                     return f"Error retrieving answer from '{self.file_name}': {str(e)}"
 
-    def __call__(self, query: str) -> ToolOutput:
+    def __call__(self, input: str) -> ToolOutput:
         """Run a query with retry logic and fallback."""
         try:
-            result = self._run_query(query, is_async=False)
+            result = self._run_query(input, is_async=False)
             if not isinstance(result, str):
                 result = str(result)
             return ToolOutput(
                 content=result,
                 tool_name=self._name,
-                raw_input={"query": query},
+                raw_input={"input": input},
                 raw_output=result,
                 is_error=False
             )
@@ -175,21 +175,21 @@ class DocumentSpecificTool(BaseTool):
             return ToolOutput(
                 content=error_msg,
                 tool_name=self._name,
-                raw_input={"query": query},
+                raw_input={"input": input},
                 raw_output=str(e),
                 is_error=True
             )
 
-    async def acall(self, query: str) -> ToolOutput:
+    async def acall(self, input: str) -> ToolOutput:
         """Run a query asynchronously with retry logic."""
         try:
-            result = await self._run_query(query, is_async=True)
+            result = await self._run_query(input, is_async=True)
             if not isinstance(result, str):
                 result = str(result)
             return ToolOutput(
                 content=result,
                 tool_name=self._name,
-                raw_input={"query": query},
+                raw_input={"input": input},
                 raw_output=result,
                 is_error=False
             )
@@ -199,7 +199,7 @@ class DocumentSpecificTool(BaseTool):
             return ToolOutput(
                 content=error_msg,
                 tool_name=self._name,
-                raw_input={"query": query},
+                raw_input={"input": input},
                 raw_output=str(e),
                 is_error=True
             )
