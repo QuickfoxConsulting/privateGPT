@@ -12,6 +12,8 @@ from private_gpt.components.node_store.node_store_component import NodeStoreComp
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
+from private_gpt.components.entity.entity_component import EntityComponent
+
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
 from private_gpt.server.ingest.model import IngestedDoc
 
@@ -64,10 +66,13 @@ class ChunksService:
         vector_store_component: VectorStoreComponent,
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
+        entity_component: EntityComponent,
     ) -> None:
         self.vector_store_component = vector_store_component
         self.llm_component = llm_component
         self.embedding_component = embedding_component
+        self.entity_component = entity_component
+
         self.storage_context = StorageContext.from_defaults(
             vector_store=vector_store_component.vector_store,
             docstore=node_store_component.doc_store,
@@ -149,6 +154,60 @@ class ChunksService:
                 continue
         return retrieved_nodes
 
+    def _retrieve_by_entities(self, text: str, limit: int = 5) -> list[NodeWithScore]:
+        """Search for nodes linked to entities extracted from the query text."""
+        if not self.entity_component.enabled:
+            return []
+            
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Extract entities from query
+        entities = self.entity_component.extract_entities(text)
+        if not entities:
+            return []
+            
+        entity_names = list(set([ent["text"] for ent in entities]))
+        logger.info("-> ENTITY RETRIEVAL: Found entities in query: %s", entity_names)
+        
+        from private_gpt.users.db.session import SessionLocal
+        from private_gpt.users.models.entity import Entity, NodeEntity
+        
+        node_ids = []
+        try:
+            with SessionLocal() as session:
+                # Find matching Entity IDs in DB
+                db_entities = session.query(Entity.id).filter(Entity.name.in_(entity_names)).all()
+                entity_ids = [e[0] for e in db_entities]
+                
+                if not entity_ids:
+                    logger.info("-> ENTITY RETRIEVAL: No matching entities found in database.")
+                    return []
+                    
+                # Find Node IDs linked to these entities
+                # We limit results to avoid overwhelming the context
+                links = session.query(NodeEntity.node_id).filter(
+                    NodeEntity.entity_id.in_(entity_ids)
+                ).limit(limit).all()
+                node_ids = list(set([link[0] for link in links]))
+        except Exception as e:
+            logger.error("Database search for entities failed: %s", str(e))
+            return []
+            
+        # Retrieve actual nodes from docstore
+        nodes = []
+        for nid in node_ids:
+            try:
+                node = self.storage_context.docstore.get_node(nid)
+                # Score 1.0 to ensure these appear at the top or are highly relevant
+                nodes.append(NodeWithScore(node=node, score=1.0))
+            except Exception:
+                continue
+        
+        logger.info("-> ENTITY RETRIEVAL: Successfully retrieved %d nodes. Node IDs: %s", len(nodes), node_ids)
+        return nodes
+
+
     def retrieve_relevant_sync(
         self,
         text: str,
@@ -167,7 +226,18 @@ class ChunksService:
             index=index, context_filter=context_filter, similarity_top_k=limit
         )
         nodes = vector_index_retriever.retrieve(text)
+        
+        # --- EXPERT RETRIEVAL: Entity Boost ---
+        entity_nodes = self._retrieve_by_entities(text, limit=min(5, limit))
+        if entity_nodes:
+            # Combine and deduplicate
+            existing_node_ids = {n.node.node_id for n in nodes}
+            for en in entity_nodes:
+                if en.node.node_id not in existing_node_ids:
+                    nodes.append(en)
+        
         return self._process_retrieved_nodes(nodes, prev_next_chunks)
+
 
     async def retrieve_relevant(
         self,
@@ -187,4 +257,17 @@ class ChunksService:
             index=index, context_filter=context_filter, similarity_top_k=limit
         )
         nodes = await vector_index_retriever.aretrieve(text)
+
+        # --- EXPERT RETRIEVAL: Entity Boost ---
+        # Run DB search in thread pool to avoid blocking async loop
+        import asyncio
+        entity_nodes = await asyncio.to_thread(self._retrieve_by_entities, text, min(5, limit))
+        if entity_nodes:
+            # Combine and deduplicate
+            existing_node_ids = {n.node.node_id for n in nodes}
+            for en in entity_nodes:
+                if en.node.node_id not in existing_node_ids:
+                    nodes.append(en)
+
         return self._process_retrieved_nodes(nodes, prev_next_chunks)
+

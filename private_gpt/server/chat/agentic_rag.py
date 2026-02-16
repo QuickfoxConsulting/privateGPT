@@ -971,3 +971,26 @@ class AgenticCondenseChatEngine(BaseChatEngine):
     @property
     def chat_history(self) -> List[ChatMessage]:
         return self._memory.get_all()
+
+class ExpertRAGEngine(AgenticCondenseChatEngine):
+    """
+    Expert RAG Engine that leverages Entity-based knowledge.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from private_gpt.components.expert.expert_orchestrator import ExpertOrchestrator
+        self._expert_orchestrator = global_injector.get(ExpertOrchestrator)
+
+    async def _aretrieve_and_process_nodes(self, sub_queries: List[str]) -> Tuple[str, List[NodeWithScore]]:
+        # 1. Standard retrieval
+        context_str, nodes = await super()._aretrieve_and_process_nodes(sub_queries)
+        
+        # 2. Entity-based extension
+        from private_gpt.server.chat.rag_config import RAG_CONFIG
+        if RAG_CONFIG.expert.enabled:
+            # We use the primary query (first sub-query) for entity search
+            entity_context = self._expert_orchestrator.get_expert_context_extension(sub_queries[0])
+            if entity_context:
+                context_str = entity_context + "\n\n**VECTOR SEARCH RESULTS**\n" + context_str
+                
+        return context_str, nodes
