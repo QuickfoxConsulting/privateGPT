@@ -60,6 +60,67 @@ class BaseIngestComponent(abc.ABC):
     ) -> list[Document]:
         pass
 
+    def _save_entities(self, nodes: list[BaseNode]) -> None:
+        """Save extracted entities from nodes to the relational database."""
+        from private_gpt.users.db.session import SessionLocal
+        from private_gpt.users.models.entity import Entity, NodeEntity
+        
+        logger.info("-> DB: Saving extracted entities from %d nodes to database...", len(nodes))
+        if len(nodes) > 0:
+            logger.info("-> DB: First node metadata keys: %s", list(nodes[0].metadata.keys()))
+            if "entity_details" in nodes[0].metadata:
+                logger.info("-> DB: Found entity_details in first node!")
+            else:
+                logger.warning("-> DB: entity_details MISSING from first node metadata.")
+        
+        link_count = 0
+        try:
+            with SessionLocal() as session:
+                for i, node in enumerate(nodes):
+                    entities_data = node.metadata.get("entity_details", [])
+                    if not entities_data:
+                        continue
+                        
+                    if (i + 1) % 20 == 0:
+                        logger.info("-> DB: Syncing entities for node %d/%d...", i + 1, len(nodes))
+                    
+                    for ent_data in entities_data:
+                        # Get or create Entity
+                        entity = session.query(Entity).filter_by(
+                            name=ent_data["text"], 
+                            type=ent_data["label"]
+                        ).first()
+                        if not entity:
+                            entity = Entity(name=ent_data["text"], type=ent_data["label"])
+                            session.add(entity)
+                            session.flush() # To get the id
+                        
+                        # Create NodeEntity link
+                        doc_id = node.ref_doc_id or node.metadata.get("doc_id", "unknown")
+                        
+                        # Check if link already exists to avoid duplicates
+                        exists = session.query(NodeEntity).filter_by(
+                            entity_id=entity.id,
+                            node_id=node.node_id
+                        ).first()
+                        
+                        if not exists:
+                            node_entity = NodeEntity(
+                                entity_id=entity.id,
+                                node_id=node.node_id,
+                                doc_id=doc_id
+                            )
+                            session.add(node_entity)
+                            link_count += 1
+                session.commit()
+                logger.info("-> DB: Successfully persisted %d entity links.", link_count)
+        except Exception as e:
+            logger.error("-> DB: Failed to save entities: %s", str(e))
+
+            # We don't raise here to ensure RAG ingestion continues even if entities fail
+            # As per "safe upgrade" requirement
+
+
     @abc.abstractmethod
     async def bulk_ingest(self, files: list[tuple[str, Path]]) -> list[Document]:
         pass
@@ -228,7 +289,9 @@ class SimpleIngestComponent(BaseIngestComponentWithIndex):
             self.transformations,
             show_progress=self.show_progress,
         )
+        self._save_entities(nodes)
         # Locking the index to avoid concurrent writes
+
         with self._index_thread_lock:
             try:
                 logger.info("Inserting count=%s nodes in the index", len(nodes))
@@ -336,8 +399,10 @@ class BatchIngestComponent(BaseIngestComponentWithIndex):
             self.transformations,
             show_progress=self.show_progress,
         )
+        self._save_entities(nodes)
         # Locking the index to avoid concurrent writes
         with self._index_thread_lock:
+
             logger.info("Inserting count=%s nodes in the index", len(nodes))
             # Process nodes in smaller batches to manage memory usage
             batch_size = 20  # Process nodes in batches to reduce memory usage
@@ -444,8 +509,10 @@ class ParallelizedIngestComponent(BaseIngestComponentWithIndex):
             self.transformations,
             show_progress=self.show_progress,
         )
+        self._save_entities(nodes)
         # Locking the index to avoid concurrent writes
         with self._index_thread_lock:
+
             logger.info("Inserting count=%s nodes in the index", len(nodes))
             # Process nodes in smaller batches to manage memory usage
             batch_size = 20  # Process nodes in batches to reduce memory usage
@@ -594,7 +661,9 @@ class PipelineIngestComponent(BaseIngestComponentWithIndex):
                 self.transformations,
                 show_progress=self.show_progress,
             )
+            self._save_entities(nodes)
             self.node_q.put(("process", file_name, documents, nodes))
+
         finally:
             self.doc_semaphore.release()
             self.doc_q.task_done()  # unblock Q joins

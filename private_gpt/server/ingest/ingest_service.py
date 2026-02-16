@@ -29,6 +29,8 @@ from private_gpt.components.nodeparser.PageMetadataBackfiller import PageMetadat
 from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
+from private_gpt.components.entity.entity_component import EntityComponent
+
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.constants import UPLOAD_DIR
 from private_gpt.settings.settings import settings
@@ -48,7 +50,8 @@ class ChunkingStrategy(str, Enum):
     SENTENCE_WINDOW = "sentence_window"
     SEMANTIC = "semantic"
     HIERARCHICAL = "hierarchical"
-    # PAGE_BY_PAGE = "page_by_page"
+    BASIC = "basic"
+    UNIFIED_CONTEXT = "unified_context"
 
 @singleton
 class IngestService:
@@ -59,9 +62,10 @@ class IngestService:
         vector_store_component: VectorStoreComponent,
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
+        entity_component: EntityComponent,
     ) -> None:
         self.llm_service = llm_component
-        self.embedding_component = embedding_component
+        self.embedding_model = embedding_model = embedding_component.embedding_model
         self.storage_context = StorageContext.from_defaults(
             vector_store=vector_store_component.vector_store,
             docstore=node_store_component.doc_store,
@@ -69,6 +73,8 @@ class IngestService:
         )      
         self.embedding_model = embedding_component.embedding_model
         self.settings = settings()
+        self.entity_component = entity_component
+
         
     def _validate_file_name(self, file_name: str) -> None:
         """Validate file name for security and correctness."""
@@ -124,61 +130,81 @@ class IngestService:
         
     def _get_node_parser(
         self, 
-        strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
+        strategy: ChunkingStrategy = None
     ):
         """Create node parser based on dynamic parameters."""
-        # if strategy == ChunkingStrategy.LATE_CHUNKING:
-        #     return LateChunkNodeParser.from_defaults(
-        #         chunk_size=DEFAULT_CHUNK_SIZE,
-        #         window_size=DEFAULT_WINDOW_SIZE,
-        #     )
-        # elif strategy == ChunkingStrategy.SENTENCE_WINDOW:
-        #     return SentenceChunkWindowNodeParser.from_defaults(
-        #         chunk_size=DEFAULT_CHUNK_WINDOW,
-        #         window_size=DEFAULT_WINDOW_SIZE,  
-        #         window_metadata_key="window",
-        #         original_text_metadata_key="original_text",
-        #         include_metadata=True,
-        #         include_prev_next_rel=True
-        #     )
-        # elif strategy == ChunkingStrategy.SEMANTIC:
-        #     return SemanticSplitterNodeParser.from_defaults(
-        #         buffer_size=2, # Contextual buffer (number of sentences) around split points
-        #         breakpoint_percentile_threshold=75, # Sensitivity to semantic shifts
-        #         embed_model=self.embedding_model 
-        #     )
-        # elif strategy == ChunkingStrategy.HIERARCHICAL:
-        #     # Create hierarchical chunks: Large (2048) -> Medium (512) -> Small (128)
-        #     # This creates parent-child relationships for better context retrieval
-        #     return HierarchicalNodeParser.from_defaults(
-        #         chunk_sizes=[2048, 512, 128],  # 3 levels of granularity
-        #         chunk_overlap=20,               # Overlap between chunks
-        #     )
-        # else:
-        # return SentenceWindowNodeParser.from_defaults(
-        #     window_size=10, 
-        #     window_metadata_key="window",
-        #     original_text_metadata_key="original_text",
-        #     include_metadata=True,
-        #     include_prev_next_rel=True
-        # )
-        return HierarchicalNodeParser.from_defaults(
-            chunk_sizes=[1024, 512],  # 2 levels of granularity
-            chunk_overlap=128,              # Increased from 50 for better boundary coverage
-            include_metadata=True,
-            include_prev_next_rel=True
-        )
+        # Use strategy from settings if not provided
+        if strategy is None:
+            strategy = ChunkingStrategy(self.settings.chunking.strategy)
+
+        if strategy == ChunkingStrategy.LATE_CHUNKING:
+            return LateChunkNodeParser.from_defaults(
+                chunk_size=self.settings.chunking.chunk_size,
+                window_size=DEFAULT_WINDOW_SIZE,
+            )
+        elif strategy == ChunkingStrategy.SENTENCE_WINDOW:
+            return SentenceChunkWindowNodeParser.from_defaults(
+                chunk_size=self.settings.chunking.chunk_size,
+                window_size=DEFAULT_WINDOW_SIZE,  
+                window_metadata_key="window",
+                original_text_metadata_key="original_text",
+                include_metadata=True,
+                include_prev_next_rel=True
+            )
+        elif strategy == ChunkingStrategy.SEMANTIC:
+            return SemanticSplitterNodeParser.from_defaults(
+                buffer_size=2, # Contextual buffer (number of sentences) around split points
+                breakpoint_percentile_threshold=75, # Sensitivity to semantic shifts
+                embed_model=self.embedding_model 
+            )
+        elif strategy == ChunkingStrategy.HIERARCHICAL:
+            # Create hierarchical chunks based on settings
+            return HierarchicalNodeParser.from_defaults(
+                chunk_sizes=self.settings.chunking.hierarchical_chunk_sizes,
+                chunk_overlap=self.settings.chunking.hierarchical_chunk_overlap,
+                include_metadata=True,
+                include_prev_next_rel=True
+            )
+        elif strategy == ChunkingStrategy.BASIC:
+            # --- ADVANCED BASIC STRATEGY ---
+            # This is an upgraded version of RecursiveCharacterTextSplitter.
+            # It intelligently splits on paragraph/sentence boundaries to avoid cutting thoughts.
+            return SentenceSplitter(
+                chunk_size=self.settings.chunking.chunk_size,
+                chunk_overlap=self.settings.chunking.chunk_overlap,
+                # Intelligently split on these markers in order (Advanced)
+                separator=" ",
+                paragraph_separator="\n\n\n",
+                secondary_chunking_regex="[^,.;。？！]+[,.;。？！]?",
+                include_metadata=True,
+                include_prev_next_rel=True
+            )
+        elif strategy == ChunkingStrategy.UNIFIED_CONTEXT:
+            from private_gpt.components.nodeparser.UnifiedContextNodeParser import UnifiedContextNodeParser
+            return UnifiedContextNodeParser.from_defaults(
+                chunk_sizes=self.settings.chunking.hierarchical_chunk_sizes,
+                chunk_overlap=self.settings.chunking.hierarchical_chunk_overlap,
+            )
+        else:
+            # Fallback to SentenceSplitter
+            return SentenceSplitter(
+                chunk_size=self.settings.chunking.chunk_size,
+                chunk_overlap=self.settings.chunking.chunk_overlap,
+            )
 
     def _get_ingest_component_with_parser(self, node_parser):
         """Create ingestion component with specific node parser."""
+        # We add PageMetadataBackfiller to ensure every chunk knows its Page/File context.
         return get_ingestion_component(
             self.storage_context,
             embed_model=self.embedding_model,
             transformations=[
                 node_parser,
-                PageMetadataBackfiller(),
+                PageMetadataBackfiller(), # <--- This makes 'Basic' better by adding context back in
+                self.entity_component,
                 self.embedding_model,
             ],
+
             settings=self.settings,
         )
 
