@@ -13,7 +13,9 @@ services:
       - ./root/.cache:/root/.cache
       - ./private_gpt/:/app/private_gpt
       - ./alembic/:/app/alembic
-      - ./startup.sh:/app/startup.sh
+      - ./settings.yaml:/app/settings.yaml
+      - ./settings-gemini.yaml:/app/settings-gemini.yaml
+
     ports:
       - "8000:8000"
     depends_on:
@@ -25,15 +27,16 @@ services:
       #   condition: service_healthy
     environment:
       PORT: 8000
-      PGPT_PROFILES: ollama
-      PGPT_MODE: ollama
+      PGPT_PROFILES: gemini
+      PGPT_MODE: gemini
+
       DATABASE_URL: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
       QDRANT_URL: http://qdrant:6333
       TIKTOKEN_CACHE_DIR: /app/models/tiktoken
       # OLLAMA_URL: http://ollama:11434
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -63,7 +66,7 @@ services:
     ports:
       - "5434:5434"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -81,7 +84,7 @@ services:
       - source: qdrant_config
         target: /qdrant/config/production.yaml
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333"]
+      test: [ "CMD", "curl", "-f", "http://localhost:6333" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -94,12 +97,12 @@ services:
       - redis-data:/data
 
     healthcheck:
-      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      test: [ "CMD", "redis-cli", "-h", "localhost", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 20s
-          
+
 #   ollama:
 #     image: ollama/ollama:latest
 #     ports:
@@ -131,7 +134,7 @@ volumes:
     name: pgpt-private-gpt-data
   redis-data:
     name: pgpt-redis-data
-  
+
 configs:
   qdrant_config:
     content: |
