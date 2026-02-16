@@ -9,3 +9,5 @@ from private_gpt.users.models.subscription import Subscription
 
 from private_gpt.users.models.integration import GoogleDriveAuth, GoogleDriveFile, WebsiteCrawlConfig, WebsiteCrawlPage, Integration
 from private_gpt.users.models.tool import ToolCategory, ToolDefinition, UserToolInstallation, ToolExecutionLog
+from private_gpt.users.models.entity import Entity, NodeEntity
+

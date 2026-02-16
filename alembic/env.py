@@ -23,6 +23,8 @@ from private_gpt.users.models.chat import ChatItem, ChatHistory
 from private_gpt.users.models.audit import Audit
 from private_gpt.users.models.integration import GoogleDriveAuth, WebsiteCrawlConfig, WebsiteCrawlPage, Integration
 from private_gpt.users.models.faq import FAQ
+from private_gpt.users.models.entity import Entity, NodeEntity
+
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
