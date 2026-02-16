@@ -93,9 +93,16 @@ embedding:
 # Chunking strategy for document ingestion
 # Options: late_chunking, sentence_window, semantic, hierarchical
 chunking:
-  strategy: hierarchical  # Use hierarchical for multi-level chunks with auto-merging
+  strategy: unified_context  # Options: late_chunking, sentence_window, semantic, hierarchical, basic, unified_context
   # Hierarchical creates 3 levels: 2048 tokens (parent) -> 512 tokens (child) -> 128 tokens (leaf)
   # AutoMergingRetriever will merge child chunks into parents when >50% children are retrieved
+  
+  # RecursiveCharacterTextSplitter equivalent (Basic)
+  # - processes each page
+  # - Chunk size: 1000 characters
+  # - Chunk overlap: 100 characters
+  chunk_size: 512
+  chunk_overlap: 120
 
 huggingface:
   embedding_hf_model_name: Qwen/Qwen3-Embedding-0.6B
@@ -169,3 +176,11 @@ redis:
 
 faq:
   enabled: ${ENABLE_FAQS:false}
+
+ner:
+  enabled: false # Default to false in main settings
+  model_name: urchade/gliner_small-v2.1
+  labels: ["person", "organization", "location", "date", "event", "product", "technology", "job title", "amount", "regulation", "brand", "method"]
+
+
+

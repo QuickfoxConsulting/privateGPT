@@ -32,6 +32,14 @@ gemini:
   model: models/gemini-flash-lite-latest
   embedding_model: models/gemini-embedding-001
 
+ner:
+  enabled: true
+  model_name: urchade/gliner_small-v2.1
+  labels: ["person", "organization", "location", "date", "event", "product", "technology", "job title", "amount", "regulation", "brand", "method"]
+
+
+
+
 # huggingface:
 #   embedding_hf_model_name: Qwen/Qwen3-Embedding-0.6B
 #   access_token: ${HF_TOKEN}

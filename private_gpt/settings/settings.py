@@ -624,6 +624,12 @@ class FAQSettings(BaseModel):
 
 class ChunkingSettings(BaseModel):
     """Configuration for text chunking strategies."""
+
+    strategy: Literal["late_chunking", "sentence_window", "semantic", "hierarchical", "basic", "unified_context"] = Field(
+        default="hierarchical",
+        description="The chunking strategy to use.",
+    )
+
     # Hierarchical splitting (Parent -> Child -> Leaf)
     hierarchical_chunk_sizes: list[int] = Field(
         default=[1024, 512, 256],
@@ -633,7 +639,7 @@ class ChunkingSettings(BaseModel):
         default=50,
         description="Overlap between chunks in hierarchical splitting.",
     )
-    # Global/fallback settings
+    # Global/fallback settings (also used for 'basic' strategy)
     chunk_size: int = Field(
         default=512,
         description="Default chunk size for non-hierarchical strategies.",
@@ -642,6 +648,24 @@ class ChunkingSettings(BaseModel):
         default=100,
         description="Default chunk overlap.",
     )
+
+
+class NERSettings(BaseModel):
+    """Configuration for Named Entity Recognition (NER)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Flag indicating if NER is enabled or not.",
+    )
+    model_name: str = Field(
+        default="urchade/gliner_base",
+        description="The GLiNER model to use for entity extraction.",
+    )
+    labels: list[str] = Field(
+        default=["person", "organization", "location", "date", "event"],
+        description="The labels to extract during NER.",
+    )
+
 
 
 class Settings(BaseModel):
@@ -677,6 +701,11 @@ class Settings(BaseModel):
         default_factory=lambda: ChunkingSettings(),
         description="Chunking configuration"
     )
+    ner: NERSettings = Field(
+        default_factory=lambda: NERSettings(),
+        description="NER configuration"
+    )
+
 
 
 """
