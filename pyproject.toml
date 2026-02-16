@@ -89,6 +89,8 @@ nest-asyncio = "^1.6.0"
 rich = "^14.0.0"
 redis = "^6.4.0"
 hf-xet = "^1.1.10"
+gliner = "^0.2.13"
+
 
 # Google Drive integration
 google-auth = "^2.23.0"
