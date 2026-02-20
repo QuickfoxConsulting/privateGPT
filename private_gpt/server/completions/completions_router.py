@@ -5,6 +5,7 @@ import logging
 import traceback
 import itertools
 import time
+import re
 from pathlib import Path
 
 
@@ -87,6 +88,33 @@ class CompletionsBody(BaseModel):
         }
     }
 
+REFUSAL_PATTERNS = [
+    r"following question detail is not provided in docs",
+    r"provided documents do not contain information",
+    r"cannot find information about this in the provided documents",
+    r"context does not contain",
+    r"answer is not in the context provided"
+]
+
+def check_is_answered(response_text: str, source_count: int, mode: str) -> bool:
+    """
+    Smart logic to determine if a question was answered.
+    Greetings (0 sources) are considered 'Answered'.
+    RAG Refusals (0 sources + Refusal Pattern) are 'Unanswered'.
+    """
+    # If sources were found, it's always answered
+    if source_count > 0:
+        return True
+    
+    # If not in a retrieval mode, 0 sources is normal (it's a chat)
+    # RAG, Search, and Agentic are retrieval-based
+    if mode.upper() not in ["RAG", "SEARCH", "AGENTIC"]:
+        return True
+        
+    # Check for refusal patterns
+    is_refusal = any(re.search(p, response_text, re.IGNORECASE) for p in REFUSAL_PATTERNS)
+    return not is_refusal
+
 class ChatContentCreate(BaseModel):
     content: Dict[str, Any]
 
@@ -168,15 +196,18 @@ async def save_response_to_db(full_response, unique_sources, conversation_id, or
         log_audit_entry(
             db_session,
             model="Chat",
-            action="completion_success_streamed",
+            action="chat_completion_success" if len(final_sources) > 0 else "chat_completion_unanswered",
             details={
                 "query": original_prompt,
                 "user": current_user.username,
                 "response_length": len(full_response),
-                "source_count": len(final_sources)
+                "source_count": len(final_sources),
+                "is_answered": len(final_sources) > 0,
+                "is_streamed": True
             },
             user_id=current_user.id,
             username=current_user.username,
+            resource_id=str(conversation_id),
             severity="INFO"
         )
         
@@ -263,8 +294,23 @@ async def stream_with_persistence(response_gen, conversation_id, original_prompt
                         
         except Exception as e:
             logger.error(f"Error during stream processing: {e}", exc_info=True)
-            # Re-raise to ensure client knows something went wrong, 
-            # though SSE might already have sent headers
+            
+            # Log failure for the stream
+            log_audit_entry(
+                SessionLocal(), # New session for immediate log
+                model="Chat",
+                action="chat_completion_failure",
+                details={
+                    "query": original_prompt,
+                    "user": current_user.username,
+                    "error": str(e),
+                    "is_streamed": True
+                },
+                user_id=current_user.id,
+                username=current_user.username,
+                resource_id=str(conversation_id),
+                severity="ERROR"
+            )
             raise
         finally:
             await save_response_to_db(
@@ -310,17 +356,18 @@ async def prompt_completion(
         # Log the chat completion attempt
         log_audit(
             model="Chat",
-            action="completion_attempt",
+            action="chat_completion_attempt",
             details={
                 "query": original_prompt,
                 "user": current_user.username,
                 "use_context": original_use_context,
                 "stream": body.stream,
-                "conversation_id": body.conversation_id,
+                "conversation_id": str(body.conversation_id),
                 "category_id": body.category_id
             },
             user_id=current_user.id,
             username=current_user.username,
+            resource_id=str(body.conversation_id),
             severity="INFO"
         )
         
@@ -338,6 +385,7 @@ async def prompt_completion(
                 },
                 user_id=current_user.id,
                 username=current_user.username,
+                resource_id=str(body.conversation_id),
                 severity="WARNING"
             )
             raise HTTPException(
@@ -398,6 +446,7 @@ async def prompt_completion(
                     },
                     user_id=current_user.id,
                     username=current_user.username,
+                    resource_id=str(body.conversation_id),
                     severity="INFO"
                 )
             else:
@@ -446,14 +495,18 @@ async def prompt_completion(
                 # Log no valid versions
                 log_audit(
                     model="Chat",
-                    action="no_valid_versions",
+                    action="no_valid_docs",
                     details={
                         "query": original_prompt,
                         "user": current_user.username,
-                        "department_id": department.id
+                        "department_id": department.id,
+                        "reason": "no_valid_document_versions",
+                        "source_count": 0,
+                        "is_answered": False
                     },
                     user_id=current_user.id,
                     username=current_user.username,
+                    resource_id=str(body.conversation_id),
                     severity="WARNING"
                 )
             else:
@@ -515,6 +568,7 @@ async def prompt_completion(
             details=audit_details,
             user_id=current_user.id,
             username=current_user.username,
+            resource_id=str(body.conversation_id),
             severity="INFO"
         )        
         chat_response = await chat_completion(
@@ -546,9 +600,15 @@ async def prompt_completion(
             ai_response,
             body.conversation_id
         )
+        # Prepare data for storage and audit
+        choice = ai_response["choices"][0] if ai_response.get("choices") else None
+        message = choice.get("message") if choice else None
+        response_content = message.get("content") if message else ""
+        response_sources = (choice.get("sources") or []) if choice else []
+
         cache_response = {
-            "content": ai_response["choices"][0]["message"]["content"],
-            "sources": ai_response["choices"][0]["sources"]
+            "content": response_content,
+            "sources": response_sources
         }
             
         if settings().faq.enabled:
@@ -582,24 +642,49 @@ async def prompt_completion(
     
         response = ChatResponse(id=chat.id, response=chat_response)
         
-        # Log successful completion
+        # Determine if it was actually answered or a refusal
+        is_actually_answered = check_is_answered(
+            response_content,
+            len(response_sources),
+            body.use_context
+        )
+        
+        # Log outcome
         log_audit(
             model="Chat",
-            action="completion_success",
+            action="chat_completion_success" if is_actually_answered else "chat_completion_unanswered",
             details={
                 "query": original_prompt,
                 "user": current_user.username,
-                "response_length": len(ai_response["choices"][0]["message"]["content"]) if ai_response["choices"] and ai_response["choices"][0]["message"] and ai_response["choices"][0]["message"]["content"] else 0,
+                "response_length": len(response_content),
                 "document_status": document_status,
+                "source_count": len(response_sources),
+                "is_answered": is_actually_answered
             },
             user_id=current_user.id,
             username=current_user.username,
+            resource_id=str(body.conversation_id),
             severity="INFO"
         )
         
         return response
 
-    except HTTPException:
+    except HTTPException as e:
+        # Log completion failure for known HTTP errors (like 404 Chat Not Found)
+        log_audit(
+            model="Chat",
+            action="chat_completion_failure",
+            details={
+                "query": body.prompt if 'body' in locals() and hasattr(body, 'prompt') else "Unknown",
+                "user": current_user.username if 'current_user' in locals() else "Unknown",
+                "status_code": e.status_code,
+                "error": e.detail
+            },
+            user_id=current_user.id if 'current_user' in locals() else None,
+            username=current_user.username if 'current_user' in locals() else None,
+            resource_id=str(body.conversation_id) if 'body' in locals() and hasattr(body, 'conversation_id') else None,
+            severity="ERROR"
+        )
         raise
     except Exception as e:
         logger.error(f"Error in prompt completion: {str(e)}\n{traceback.format_exc()}")
@@ -607,7 +692,7 @@ async def prompt_completion(
         # Log completion failure
         log_audit(
             model="Chat",
-            action="completion_failure",
+            action="chat_completion_failure",
             details={
                 "query": body.prompt if 'body' in locals() and hasattr(body, 'prompt') else "Unknown",
                 "user": current_user.username if 'current_user' in locals() else "Unknown",
@@ -615,6 +700,7 @@ async def prompt_completion(
             },
             user_id=current_user.id if 'current_user' in locals() else None,
             username=current_user.username if 'current_user' in locals() else None,
+            resource_id=str(body.conversation_id) if 'body' in locals() and hasattr(body, 'conversation_id') else None,
             severity="ERROR"
         )
         

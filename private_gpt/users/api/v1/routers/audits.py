@@ -7,6 +7,9 @@ from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 from private_gpt.users.utils.export import generate_audit_log_report
 
+from private_gpt.users.services.audit_service import audit_service
+from enum import Enum
+
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
 def get_fullname(db: Session, id: int) -> str:
@@ -87,3 +90,30 @@ def get_auditlog(
 ):
     logs = crud.audit.get_by_id(db, id=audit.id)
     return convert_audit_logs(db, [logs])[0]
+
+@router.get("/chat/{conversation_id}/metrics")
+async def get_chat_metrics(
+    conversation_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    Get performance metrics for a specific chat.
+    Available to all authenticated users for transparency.
+    """
+    return audit_service.get_chat_metrics(db, conversation_id)
+
+@router.get("/admin/dashboard")
+async def get_admin_dashboard(
+    days: int = 7,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.SUPER_ADMIN["name"]],
+    ),
+) -> Any:
+    """
+    Get overall system workload and health metrics.
+    Restricted to SUPER_ADMIN.
+    """
+    return audit_service.get_admin_dashboard_stats(db, days)
