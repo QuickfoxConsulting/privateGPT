@@ -12,6 +12,17 @@ huggingface:
   embedding_hf_model_name: BAAI/bge-small-en-v1.5
 
 openai:
-  api_base: http://localhost:8000/v1
+  api_base: http://localhost:7860/v1
   api_key: EMPTY
-  model: facebook/opt-125m
+  model: LightOnOCR-2-1B
+
+vlm_ocr:
+  enabled: true
+  base_url: http://localhost:7860/v1
+  model: LightOnOCR-2-1B
+  api_key: EMPTY
+
+ner:
+  enabled: true
+  model_name: urchade/gliner_small-v2.1
+  labels: ["person", "organization", "location", "date", "national id", "form number"]

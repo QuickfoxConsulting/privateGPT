@@ -1,6 +1,7 @@
 version: "3.9"
 services:
   private-gpt:
+    image: incri07/private-gpt:latest
     build:
       context: .
       dockerfile: Dockerfile.new
@@ -35,12 +36,12 @@ services:
       TIKTOKEN_CACHE_DIR: /app/models/tiktoken
       # OLLAMA_URL: http://ollama:11434
     restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+    # healthcheck:
+    # test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+    # interval: 30s
+    # timeout: 10s
+    # retries: 3
+    # start_period: 20s
     # deploy:
     #   resources:
     #     reservations:

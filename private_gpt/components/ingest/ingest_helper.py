@@ -31,19 +31,21 @@ def _try_loading_included_file_formats() -> dict[str, type[BaseReader]]:
         )
         from llama_index.readers.file.tabular import PandasExcelReader
         from private_gpt.components.reader.LlamaParseReader import LlamaParseReader
+        from private_gpt.components.reader.VisionPDFReader import VisionPDFReader
+        from private_gpt.components.reader.VisionImageReader import VisionImageReader
     except ImportError as e:
         raise ImportError("`llama-index-readers-file` package not found") from e
 
     default_file_reader_cls: dict[str, type[BaseReader]] = {
         ".hwp": HWPReader,
-        ".pdf": LlamaParseReader,
+        ".pdf": VisionPDFReader, # <--- The Optical Eye Reconstructed
         ".docx": LlamaParseReader,
         ".pptx": LlamaParseReader,
         ".ppt": LlamaParseReader,
         ".pptm": PptxReader,
-        ".jpg": ImageReader,
-        ".png": ImageReader,
-        ".jpeg": ImageReader,
+        ".jpg": VisionImageReader,
+        ".png": VisionImageReader,
+        ".jpeg": VisionImageReader,
         ".mp3": VideoAudioReader,
         ".mp4": VideoAudioReader,
         ".csv": PandasCSVReader,

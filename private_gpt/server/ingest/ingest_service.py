@@ -30,6 +30,7 @@ from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
 from private_gpt.components.entity.entity_component import EntityComponent
+from private_gpt.components.ocr_components.document_reconstructor import DocumentReconstructor
 
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.constants import UPLOAD_DIR
@@ -63,6 +64,7 @@ class IngestService:
         embedding_component: EmbeddingComponent,
         node_store_component: NodeStoreComponent,
         entity_component: EntityComponent,
+        reconstructor: DocumentReconstructor,
     ) -> None:
         self.llm_service = llm_component
         self.embedding_model = embedding_model = embedding_component.embedding_model
@@ -74,6 +76,7 @@ class IngestService:
         self.embedding_model = embedding_component.embedding_model
         self.settings = settings()
         self.entity_component = entity_component
+        self.reconstructor = reconstructor
 
         
     def _validate_file_name(self, file_name: str) -> None:
@@ -313,6 +316,20 @@ class IngestService:
             file_metadata["file_path"] = abs_path
 
             documents = await ingest_component.ingest(file_name, file_data, file_metadata)
+            
+            # --- Vision Pipeline: PDF Reconstruction (The Stamper) ---
+            if file_name.lower().endswith(".pdf"):
+                try:
+                    enhanced_path = self.reconstructor.reconstruct_pdf(file_data, documents)
+                    # Add reference to enhanced version in the metadata of the returning docs
+                    # This allows the UI to know there is a better version available.
+                    for doc in documents:
+                        doc.metadata["enhanced_pdf_path"] = str(enhanced_path)
+                    logger.info("Vision Reconstruction successful for %s -> %s", file_name, enhanced_path)
+                except Exception as rec_e:
+                    logger.warning("PDF Reconstruction failed for %s, but ingestion continued: %s", 
+                                   file_name, str(rec_e))
+
             logger.info("Finished ingestion file_name=%s", file_name)
             return [IngestedDoc.from_document(document) for document in documents]
         except Exception as e:

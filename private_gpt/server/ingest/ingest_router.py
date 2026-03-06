@@ -11,7 +11,7 @@ from private_gpt.users.models.enums import DocumentStatus
 from private_gpt.users.models.document import DocumentVersion, MakerCheckerActionType, MakerCheckerStatus
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status, Security, Body, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from private_gpt.users import crud, models, schemas
@@ -19,6 +19,7 @@ from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 
 from private_gpt.server.ingest.ingest_service import IngestService, ChunkingStrategy
+from private_gpt.components.ocr_components.document_reconstructor import DocumentReconstructor
 from private_gpt.server.ingest.model import IngestedDoc
 from private_gpt.server.utils.auth import authenticated
 from private_gpt.constants import UPLOAD_DIR
@@ -275,6 +276,40 @@ def list_ingested(request: Request) -> IngestResponse:
     service = request.state.injector.get(IngestService)
     ingested_documents = service.list_ingested()
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
+
+
+@ingest_router.get("/ingest/{filename}/enhanced", tags=["Ingestion"])
+async def download_enhanced_pdf(
+    request: Request,
+    filename: str,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(
+        deps.get_current_user,
+        scopes=[Role.ADMIN["name"], Role.SUPER_ADMIN["name"], Role.OPERATOR["name"]],
+    )
+) -> FileResponse:
+    """Download the VLM-Enhanced version of a PDF with searchable OCR.
+    
+    This endpoint returns a version of the original PDF where visual elements
+    have been transcribed by the VLM and 'stamped' back into the document as a 
+    hidden searchable layer.
+    """
+    service = request.state.injector.get(IngestService)
+    # Predict path using the reconstructor helper
+    enhanced_path = DocumentReconstructor.get_enhanced_path_for_original(filename, service.settings)
+    
+    if not enhanced_path.exists():
+        logger.warning("Enhanced document download requested but not found: %s", enhanced_path)
+        raise HTTPException(
+            status_code=404, 
+            detail="Enhanced document not found. Possible causes: Not a PDF, VLM OCR failed, or reconstruction is disabled."
+        )
+    
+    return FileResponse(
+        path=enhanced_path,
+        filename=f"enhanced_{filename}",
+        media_type="application/pdf"
+    )
 
 
 @ingest_router.delete("/ingest/{doc_id}", tags=["Ingestion"])
