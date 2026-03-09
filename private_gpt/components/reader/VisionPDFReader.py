@@ -49,9 +49,12 @@ class VisionPDFReader(BaseReader):
                 }
 
                 # 2. Process Page by Page (The Visual Loop)
-                for page_num, page_img, visual_elements in self._visual_engine.create_visual_summary(file_path):
+                for page_num, page_img, visual_elements, transform, layout_blocks in self._visual_engine.create_visual_summary(file_path):
                     page_index = page_num - 1
                     page_obj = doc[page_index]
+                    
+                    # Store transformation matrix in metadata for the 'Stamper'
+                    transform_list = transform.tolist() if transform is not None else None
                     
                     # High-fidelity text extraction using PyMuPDF blocks
                     blocks = page_obj.get_text("blocks")
@@ -59,9 +62,11 @@ class VisionPDFReader(BaseReader):
                     
                     # 3. Vision Decision Engine (OCR vs Layout)
                     final_visual_elements = []
+                    document_class = "digital"  # Default: pure digital text
                     
-                    # Case A: Scanned Document (No Text Layer)
-                    if not page_text.strip() and visual_elements:
+                    # Case A: Scanned Document or Pure Image (No Text Layer)
+                    if not page_text.strip():
+                        document_class = "scanned"
                         logger.info("Page %d: Scanned content detected. Triggering Full-Page VLM OCR.", page_num)
                         full_transcription = self._vlm_client.transcribe_image(page_img)
                         page_text = full_transcription.text
@@ -87,6 +92,7 @@ class VisionPDFReader(BaseReader):
                     
                     # Case B: Hybrid Document (Text + Images)
                     elif visual_elements:
+                        document_class = "hybrid"
                         logger.info("Page %d: Hybrid content detected. Transcribing %d visual elements.", 
                                     page_num, len(visual_elements))
                         # Describe images to provide context to the RAG
@@ -116,9 +122,15 @@ class VisionPDFReader(BaseReader):
                     metadata = {
                         **doc_metadata,
                         "page": page_num,
+                        "document_class": document_class,
+                        "render_dpi": self._visual_engine.options.dpi,
+                        "page_width_px": page_img.width,
+                        "page_height_px": page_img.height,
                         "has_visuals": len(final_visual_elements) > 0,
                         "visual_element_count": len(final_visual_elements),
-                        "visual_elements": final_visual_elements
+                        "visual_elements": final_visual_elements,
+                        "transformation_matrix": transform_list,
+                        "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else []
                     }
 
                     # Create LlamaIndex Document object
@@ -130,8 +142,8 @@ class VisionPDFReader(BaseReader):
                     
                     # Exclude heavy visual metadata from LLM/Embedding context 
                     # but keep it for retrieval/rendering
-                    llama_doc.excluded_embed_metadata_keys.extend(["visual_elements", "visual_element_count"])
-                    llama_doc.excluded_llm_metadata_keys.extend(["visual_elements", "visual_element_count"])
+                    llama_doc.excluded_embed_metadata_keys.extend(["visual_elements", "visual_element_count", "layout_blocks"])
+                    llama_doc.excluded_llm_metadata_keys.extend(["visual_elements", "visual_element_count", "layout_blocks"])
                     
                     documents.append(llama_doc)
 

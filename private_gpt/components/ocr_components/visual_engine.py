@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
@@ -8,6 +9,14 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 import fitz  # PyMuPDF
 from PIL import Image
 from pydantic import BaseModel, Field
+
+from private_gpt.components.ocr_components.preprocessing.pipeline import PreprocessingPipeline
+from private_gpt.components.ocr_components.preprocessing.steps.grayscale import GrayscaleStep
+from private_gpt.components.ocr_components.preprocessing.steps.deskew import DeskewStep
+from private_gpt.components.ocr_components.preprocessing.steps.enhancer import CLAHEEnhancerStep
+from private_gpt.components.ocr_components.preprocessing.steps.denoise import DenoiseStep
+from private_gpt.components.ocr_components.layout.engine import VisualLayoutEngine
+from private_gpt.components.ocr_components.layout.base import LayoutBlock
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +36,15 @@ class VisualProcessingOptions(BaseModel):
     render_pages: bool = Field(default=True, description="Whether to render full pages as images")
     image_format: str = Field(default="png", description="Format for extracted/rendered images")
     upscale_small_images: bool = Field(default=False, description="Upscale small images for better OCR")
+    
+    # Preprocessing Settings
+    enable_preprocessing: bool = Field(default=True, description="Enable the modular preprocessing pipeline")
+    preprocessing_steps: List[str] = Field(
+        default=["grayscale", "deskew", "clahe", "denoise"],
+        description="Ordered list of preprocessing steps to run"
+    )
+    denoise_h: int = Field(default=10, description="Denoising strength (h parameter)")
+    enable_layout_extraction: bool = Field(default=True, description="Enable mathematical bounding box extraction")
 
 class VisualDocumentEngine:
     """
@@ -42,6 +60,29 @@ class VisualDocumentEngine:
     def __init__(self, options: Optional[VisualProcessingOptions] = None):
         self.options = options or VisualProcessingOptions()
         logger.info("Initializing VisualDocumentEngine with DPI=%d", self.options.dpi)
+        
+        # Initialize Preprocessing Pipeline if enabled
+        self.preprocessing_pipeline = None
+        if self.options.enable_preprocessing:
+            steps = []
+            step_map = {
+                "grayscale": GrayscaleStep(),
+                "deskew": DeskewStep(),
+                "clahe": CLAHEEnhancerStep(),
+                "denoise": DenoiseStep()
+            }
+            for step_name in self.options.preprocessing_steps:
+                if step_name in step_map:
+                    steps.append(step_map[step_name])
+            
+            self.preprocessing_pipeline = PreprocessingPipeline(steps)
+            logger.info("Preprocessing Pipeline initialized with steps: %s", self.options.preprocessing_steps)
+
+        # Initialize Layout Engine if enabled
+        self.layout_engine = None
+        if self.options.enable_layout_extraction:
+            self.layout_engine = VisualLayoutEngine()
+            logger.info("Visual Layout Engine initialized for morphological bounding box extraction.")
 
     def open_document(self, file_path: Union[str, Path]) -> fitz.Document:
         """
@@ -61,9 +102,10 @@ class VisualDocumentEngine:
             logger.error("Failed to open document %s: %s", path_str, str(e))
             raise RuntimeError(f"PyMuPDF failed to process document: {str(e)}")
 
-    def render_page_as_image(self, page: fitz.Page) -> Image.Image:
+    def render_page_as_image(self, page: fitz.Page) -> Tuple[Image.Image, Optional[np.ndarray]]:
         """
-        Renders a specific page to a high-DPI PIL Image.
+        Renders a specific page to a high-DPI PIL Image and applies preprocessing.
+        Returns: (PIL Image, Optional Transformation Matrix)
         """
         zoom = self.options.dpi / 72  # PDF points are 72 dpi
         matrix = fitz.Matrix(zoom, zoom)
@@ -71,9 +113,24 @@ class VisualDocumentEngine:
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         
-        logger.debug("Rendered Page %d at %d DPI (%dx%d)", 
-                     page.number + 1, self.options.dpi, pix.width, pix.height)
-        return img
+        transformation_matrix = None
+        if self.preprocessing_pipeline:
+            logger.debug("Applying preprocessing to page %d", page.number + 1)
+            # Pass options like denoise_h down if needed (pipeline currently uses dict)
+            task = self.preprocessing_pipeline.run(img, {"denoise_h": self.options.denoise_h})
+            # Convert OpenCV back to PIL if needed, or update doc to use CV
+            # For now, let's keep the engine returning PIL for compatibility
+            processed_cv = task.image
+            if len(processed_cv.shape) == 2: # Grayscale
+                img = Image.fromarray(processed_cv)
+            else: # BGR to RGB
+                img = Image.fromarray(processed_cv[:, :, ::-1])
+            
+            transformation_matrix = task.transformation_matrix
+
+        logger.debug("Rendered and Preprocessed Page %d at %d DPI (%dx%d)", 
+                     page.number + 1, self.options.dpi, img.width, img.height)
+        return img, transformation_matrix
 
     def extract_visual_elements(self, doc: fitz.Document) -> List[DocumentVisualElement]:
         """
@@ -125,21 +182,25 @@ class VisualDocumentEngine:
         """
         return page.get_text("dict")
 
-    def create_visual_summary(self, file_path: Union[str, Path]) -> Iterator[Tuple[int, Image.Image, List[DocumentVisualElement]]]:
+    def create_visual_summary(self, file_path: Union[str, Path]) -> Iterator[Tuple[int, Image.Image, List[DocumentVisualElement], Optional[np.ndarray], List[LayoutBlock]]]:
         """
         A high-level generator that processes a document page by page.
-        Yields: (page_number, page_image, list_of_visual_elements_on_page)
+        Yields: (page_number, page_image, list_of_visual_elements_on_page, transformation_matrix, layout_blocks)
         """
         with self.open_document(file_path) as doc:
             all_elements = self.extract_visual_elements(doc)
             
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                page_img = self.render_page_as_image(page)
+                page_img, transform = self.render_page_as_image(page)
                 
                 page_elements = [e for e in all_elements if e.page_number == page_num + 1]
                 
-                yield (page_num + 1, page_img, page_elements)
+                layout_blocks = []
+                if self.layout_engine:
+                    layout_blocks = self.layout_engine.extract_layout(page_img)
+                
+                yield (page_num + 1, page_img, page_elements, transform, layout_blocks)
 
     @staticmethod
     def get_engine_version() -> str:
@@ -155,12 +216,14 @@ def process_document_visually(path: Union[str, Path], dpi: int = 300) -> List[Di
     engine = VisualDocumentEngine(VisualProcessingOptions(dpi=dpi))
     results = []
     
-    for page_num, img, elements in engine.create_visual_summary(path):
+    for page_num, img, elements, transform, layout_blocks in engine.create_visual_summary(path):
         results.append({
             "page": page_num,
             "dimensions": img.size,
             "element_count": len(elements),
-            "elements": [vars(e) for e in elements]
+            "elements": [vars(e) for e in elements],
+            "transformation_matrix": transform.tolist() if transform is not None else None,
+            "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else []
         })
     
     return results

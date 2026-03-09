@@ -31,21 +31,37 @@ class VisionImageReader(BaseReader):
         # Currently, since NuMarkdown (The Brain) isn't plugged in yet, 
         # this acts as a placeholder that captures the image context.
         try:
-            # 1. Capture Image Context using the VLM "Brain"
-            logger.info("VisionImageReader: Transcribing standalone image %s", file_path.name)
-            from PIL import Image as PILImage
-            img = PILImage.open(file_path).convert("RGB")
+            # 1. Process through the Visual Engine (Applies Preprocessing automatically)
+            logger.info("VisionImageReader: Processing standalone image %s", file_path.name)
             
-            transcription = self._vlm_client.transcribe_image(img)
+            # create_visual_summary yields (page_num, image, elements, transform)
+            # For standalone images, there is only one page.
+            summary = list(self._visual_engine.create_visual_summary(file_path))
+            if not summary:
+                raise ValueError("Could not process image through Visual Engine")
+            
+            page_num, processed_img, visual_elements, transform, layout_blocks = summary[0]
+            
+            # 2. Transcribe using the VLM "Brain"
+            transcription = self._vlm_client.transcribe_image(processed_img)
+            
+            # Store transformation matrix for possible coordinate mapping
+            transform_list = transform.tolist() if transform is not None else None
             
             metadata = {
                 "file_name": file_path.name,
                 "document_id": str(uuid.uuid4()),
                 "page": 1,
+                "document_class": "scanned",
+                "render_dpi": self._visual_engine.options.dpi,
+                "page_width_px": processed_img.width,
+                "page_height_px": processed_img.height,
                 "has_visuals": True,
                 "element_type": "standalone_image",
                 "vlm_confidence": transcription.confidence,
                 "vlm_reflection": transcription.reflection,
+                "transformation_matrix": transform_list,
+                "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else [],
                 **(extra_info or {})
             }
 
@@ -55,7 +71,7 @@ class VisionImageReader(BaseReader):
                 id_=f"{metadata['document_id']}_img"
             )
             
-            logger.info("VisionImageReader captured visual context for %s", file_path.name)
+            logger.info("VisionImageReader captured visual context and applied preprocessing for %s", file_path.name)
             return [llama_doc]
 
         except Exception as e:
