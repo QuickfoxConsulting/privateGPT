@@ -14,13 +14,9 @@ huggingface:
 openai:
   api_base: http://localhost:7860/v1
   api_key: EMPTY
-  model: LightOnOCR-2-1B
+  model: meta-llama/Llama-3.1-8B-Instruct
 
-vlm_ocr:
-  enabled: true
-  base_url: http://localhost:7860/v1
-  model: LightOnOCR-2-1B
-  api_key: EMPTY
+
 
 ner:
   enabled: true

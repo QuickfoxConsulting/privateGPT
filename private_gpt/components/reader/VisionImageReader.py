@@ -7,7 +7,6 @@ from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 from private_gpt.di import global_injector
 from private_gpt.components.ocr_components.visual_engine import VisualDocumentEngine
-from private_gpt.components.ocr_components.vlm_client import NuMarkdownClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,21 +14,18 @@ class VisionImageReader(BaseReader):
     """
     Vision-Aware Image Reader.
     
-    Treats a standalone image as a 'one-page document' for the VLM Brain.
+    Treats a standalone image as a 'one-page document'.
     Prepares images for OCR/Transcription with proper visual handling.
     """
 
     def __init__(self, 
-                 visual_engine: Optional[VisualDocumentEngine] = None,
-                 vlm_client: Optional[NuMarkdownClient] = None):
+                 visual_engine: Optional[VisualDocumentEngine] = None):
         self._visual_engine = visual_engine or global_injector.get(VisualDocumentEngine)
-        self._vlm_client = vlm_client or global_injector.get(NuMarkdownClient)
 
     def load_data(self, file_path: Union[str, Path], extra_info: Optional[Dict] = None) -> List[Document]:
         file_path = Path(file_path)
         
-        # Currently, since NuMarkdown (The Brain) isn't plugged in yet, 
-        # this acts as a placeholder that captures the image context.
+        # Captures the image context and metadata.
         try:
             # 1. Process through the Visual Engine (Applies Preprocessing automatically)
             logger.info("VisionImageReader: Processing standalone image %s", file_path.name)
@@ -42,8 +38,8 @@ class VisionImageReader(BaseReader):
             
             page_num, processed_img, visual_elements, transform, layout_blocks = summary[0]
             
-            # 2. Transcribe using the VLM "Brain"
-            transcription = self._vlm_client.transcribe_image(processed_img)
+            # OCR is temporarily disabled
+            transcription_text = ""
             
             # Store transformation matrix for possible coordinate mapping
             transform_list = transform.tolist() if transform is not None else None
@@ -58,15 +54,13 @@ class VisionImageReader(BaseReader):
                 "page_height_px": processed_img.height,
                 "has_visuals": True,
                 "element_type": "standalone_image",
-                "vlm_confidence": transcription.confidence,
-                "vlm_reflection": transcription.reflection,
                 "transformation_matrix": transform_list,
                 "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else [],
                 **(extra_info or {})
             }
 
             llama_doc = Document(
-                text=transcription.text, 
+                text=transcription_text, 
                 metadata=metadata,
                 id_=f"{metadata['document_id']}_img"
             )

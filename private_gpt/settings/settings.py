@@ -668,41 +668,7 @@ class NERSettings(BaseModel):
 
 
 
-class VLMOCRSettings(BaseModel):
-    """Configuration for VLM-based OCR (e.g., NuMarkdown-8B)."""
 
-    enabled: bool = Field(
-        default=True,
-        description="Flag indicating if VLM OCR features are enabled.",
-    )
-    base_url: str = Field(
-        default="http://192.168.1.135:8000/v1",
-        description="vLLM or OpenAI-compatible VLM server base URL.",
-    )
-    api_key: str = Field(
-        default="local-vllm",
-        description="API key for the VLM server.",
-    )
-    model: str = Field(
-        default="numind/NuMarkdown-8B-Thinking",
-        description="The VLM model name.",
-    )
-    max_tokens: int = Field(
-        default=2048,
-        description="Max tokens for VLM response.",
-    )
-    temperature: float = Field(
-        default=0.0,
-        description="Temperature for VLM transcription (0.0 for accuracy).",
-    )
-    enable_reconstruction: bool = Field(
-        default=True,
-        description="Flag indicating if the system should generate a searchable 'Enhanced' PDF.",
-    )
-    reconstructed_folder: str = Field(
-        default="local_data/enhanced_documents",
-        description="Folder where the reconstructed PDFs will be stored.",
-    )
 
 
 class Settings(BaseModel):
@@ -741,10 +707,6 @@ class Settings(BaseModel):
     ner: NERSettings = Field(
         default_factory=lambda: NERSettings(),
         description="NER configuration"
-    )
-    vlm_ocr: VLMOCRSettings = Field(
-        default_factory=lambda: VLMOCRSettings(),
-        description="VLM OCR configuration"
     )
 
 

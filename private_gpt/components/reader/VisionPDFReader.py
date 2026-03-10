@@ -7,7 +7,6 @@ from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 from private_gpt.di import global_injector
 from private_gpt.components.ocr_components.visual_engine import VisualDocumentEngine
-from private_gpt.components.ocr_components.vlm_client import NuMarkdownClient
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +15,15 @@ class VisionPDFReader(BaseReader):
     Vision-Aware PDF Reader.
     
     Uses Physical/Visual Coordinate Mapping via VisualDocumentEngine to 
-    ensure high-fidelity ingestion. This reader is the 'Optical Eye' that 
-    prepares documents for VLM-based OCR (NuMarkdown).
+    extract spatial metadata for layout processing.
     """
 
     def __init__(self, 
-                 visual_engine: Optional[VisualDocumentEngine] = None,
-                 vlm_client: Optional[NuMarkdownClient] = None):
+                 visual_engine: Optional[VisualDocumentEngine] = None):
         """
         Initialize the Vision Ingestion Pipeline.
         """
         self._visual_engine = visual_engine or global_injector.get(VisualDocumentEngine)
-        self._vlm_client = vlm_client or global_injector.get(NuMarkdownClient)
         logger.debug("VisionPDFReader initialized with engine version %s", 
                      self._visual_engine.get_engine_version())
 
@@ -53,7 +49,7 @@ class VisionPDFReader(BaseReader):
                     page_index = page_num - 1
                     page_obj = doc[page_index]
                     
-                    # Store transformation matrix in metadata for the 'Stamper'
+                    # Store transformation matrix in metadata
                     transform_list = transform.tolist() if transform is not None else None
                     
                     # High-fidelity text extraction using PyMuPDF blocks
@@ -61,62 +57,17 @@ class VisionPDFReader(BaseReader):
                     page_text = "\n".join([b[4] for b in blocks if b[4].strip()])
                     
                     # 3. Vision Decision Engine (OCR vs Layout)
-                    final_visual_elements = []
                     document_class = "digital"  # Default: pure digital text
                     
                     # Case A: Scanned Document or Pure Image (No Text Layer)
                     if not page_text.strip():
                         document_class = "scanned"
-                        logger.info("Page %d: Scanned content detected. Triggering Full-Page VLM OCR.", page_num)
-                        full_transcription = self._vlm_client.transcribe_image(page_img)
-                        page_text = full_transcription.text
-                        
-                        # Create a virtual 'full_page_ocr' element to ensure the reconstruction engine
-                        # has a target to stamp the full-page text into.
-                        page_rect = page_obj.rect
-                        virtual_element_bbox = [float(page_rect.x0), float(page_rect.y0), 
-                                                float(page_rect.x1), float(page_rect.y1)]
-                        
-                        final_visual_elements = [{
-                            "type": "full_page_ocr",
-                            "bbox": virtual_element_bbox,
-                            "metadata": {
-                                "transcription": full_transcription.text,
-                                "confidence": full_transcription.confidence,
-                                "reflection": full_transcription.reflection
-                            }
-                        }]
-                        
-                        # Tag confidence for RAG transparency
-                        page_text += f"\n\n[OCR_CONFIDENCE: {full_transcription.confidence:.2f}]"
+                        logger.info("Page %d: Scanned content detected. OCR disabled for now.", page_num)
                     
                     # Case B: Hybrid Document (Text + Images)
                     elif visual_elements:
                         document_class = "hybrid"
-                        logger.info("Page %d: Hybrid content detected. Transcribing %d visual elements.", 
-                                    page_num, len(visual_elements))
-                        # Describe images to provide context to the RAG
-                        element_transcriptions = self._vlm_client.describe_visual_elements(
-                            page_img, 
-                            [{"type": e.element_type, "bbox": e.bbox} for e in visual_elements]
-                        )
-                        visual_context = "\n\n### Visual Context ###\n" + "\n".join(
-                            [f"{t.text} [CONF: {t.confidence:.2f}]" for t in element_transcriptions]
-                        )
-                        page_text += visual_context
-
-                        # Decorate the visual element metadata and prepare for serialization
-                        for i, e in enumerate(visual_elements):
-                            if i < len(element_transcriptions):
-                                e.metadata["transcription"] = element_transcriptions[i].text
-                                e.metadata["confidence"] = element_transcriptions[i].confidence
-                                e.metadata["reflection"] = element_transcriptions[i].reflection
-                                
-                            final_visual_elements.append({
-                                "type": e.element_type,
-                                "bbox": [float(val) for val in e.bbox],
-                                "metadata": e.metadata
-                            })
+                        logger.info("Page %d: Hybrid content detected.", page_num)
                     
                     # 4. Construct the Vision-Aware Metadata
                     metadata = {
@@ -126,9 +77,7 @@ class VisionPDFReader(BaseReader):
                         "render_dpi": self._visual_engine.options.dpi,
                         "page_width_px": page_img.width,
                         "page_height_px": page_img.height,
-                        "has_visuals": len(final_visual_elements) > 0,
-                        "visual_element_count": len(final_visual_elements),
-                        "visual_elements": final_visual_elements,
+                        "has_visuals": len(visual_elements) > 0,
                         "transformation_matrix": transform_list,
                         "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else []
                     }
@@ -142,8 +91,8 @@ class VisionPDFReader(BaseReader):
                     
                     # Exclude heavy visual metadata from LLM/Embedding context 
                     # but keep it for retrieval/rendering
-                    llama_doc.excluded_embed_metadata_keys.extend(["visual_elements", "visual_element_count", "layout_blocks"])
-                    llama_doc.excluded_llm_metadata_keys.extend(["visual_elements", "visual_element_count", "layout_blocks"])
+                    llama_doc.excluded_embed_metadata_keys.extend(["layout_blocks"])
+                    llama_doc.excluded_llm_metadata_keys.extend(["layout_blocks"])
                     
                     documents.append(llama_doc)
 
