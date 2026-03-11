@@ -5,7 +5,7 @@ from injector import inject, singleton
 from private_gpt.settings.settings import Settings
 
 logger = logging.getLogger(__name__)
-logger.info("ENTITY_COMPONENT_FILE_LOADED")
+logger.debug("ENTITY_COMPONENT_FILE_LOADED")
 
 # Device selection for GLiNER
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -69,7 +69,7 @@ class EntityComponent(TransformComponent):
                 logger.debug("-> NER: Extracting from content (len=%d)", len(content))
                 entities = self.extract_entities(content)
                 if entities:
-                    logger.info("-> NER: Found %d entities in chunk %d", len(entities), i + 1)
+                    logger.debug("-> NER: Found %d entities in chunk %d", len(entities), i + 1)
                     # Add to metadata for downstream use (like expert retrieval)
                     # We store just the text list for simple filtering/matching
                     node.metadata["entities"] = list(set([ent["text"] for ent in entities]))
@@ -98,11 +98,20 @@ class EntityComponent(TransformComponent):
         if not self.enabled or not self._model:
             return []
         
+        logger.debug("-> NER: Extracting entities from text (len=%d) using labels: %s", len(text), self.labels)
         try:
             # GLiNER expect a list of labels
-            entities = self._model.predict_entities(text, self.labels, threshold=0.5)
+            entities = self._model.predict_entities(text, self.labels, threshold=0.3) # Lowered threshold slightly to see what's caught
+            
+            if entities:
+                logger.debug("-> NER: GLiNER RAW OUTPUT: Found %d potential entities", len(entities))
+                for ent in entities:
+                    logger.debug("-> NER: RAW Entity: %s (label=%s, score=%.4f)", ent["text"], ent["label"], ent["score"])
+            else:
+                logger.debug("-> NER: GLiNER RAW OUTPUT: No entities found.")
+
             # Standardize output for consistency
-            return [
+            results = [
                 {
                     "text": ent["text"],
                     "label": ent["label"],
@@ -112,8 +121,13 @@ class EntityComponent(TransformComponent):
                 }
                 for ent in entities
             ]
+            
+            logger.debug("-> NER: Final extracted entity count: %d", len(results))
+            return results
         except Exception as e:
-            logger.warning("Error during entity extraction: %s", str(e))
+            logger.error("-> NER: Error during entity extraction: %s", str(e))
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
     def get_unique_entities(self, text: str) -> list[tuple[str, str]]:

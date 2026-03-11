@@ -66,12 +66,18 @@ class BaseIngestComponent(abc.ABC):
         from private_gpt.users.models.entity import Entity, NodeEntity
         
         logger.info("-> DB: Saving extracted entities from %d nodes to database...", len(nodes))
+        
+        total_entities_found = sum(len(node.metadata.get("entity_details", [])) for node in nodes)
+        logger.debug("-> DB: Total entities found across all nodes: %d", total_entities_found)
+        
         if len(nodes) > 0:
-            logger.info("-> DB: First node metadata keys: %s", list(nodes[0].metadata.keys()))
+            first_node_metadata = list(nodes[0].metadata.keys())
+            logger.debug("-> DB: First node metadata keys: %s", first_node_metadata)
             if "entity_details" in nodes[0].metadata:
-                logger.info("-> DB: Found entity_details in first node!")
+                details = nodes[0].metadata["entity_details"]
+                logger.debug("-> DB: Found entity_details in first node! Count: %d", len(details))
             else:
-                logger.warning("-> DB: entity_details MISSING from first node metadata.")
+                logger.debug("-> DB: entity_details MISSING from first node metadata.")
         
         link_count = 0
         try:
@@ -94,6 +100,7 @@ class BaseIngestComponent(abc.ABC):
                             entity = Entity(name=ent_data["text"], type=ent_data["label"])
                             session.add(entity)
                             session.flush() # To get the id
+                            logger.debug("-> DB: Created new entity: %s (%s)", ent_data["text"], ent_data["label"])
                         
                         # Create NodeEntity link
                         doc_id = node.ref_doc_id or node.metadata.get("doc_id", "unknown")
@@ -113,9 +120,11 @@ class BaseIngestComponent(abc.ABC):
                             session.add(node_entity)
                             link_count += 1
                 session.commit()
-                logger.info("-> DB: Successfully persisted %d entity links.", link_count)
+                logger.info("-> DB: Successfully persisted %d entity links to database.", link_count)
         except Exception as e:
             logger.error("-> DB: Failed to save entities: %s", str(e))
+            import traceback
+            logger.error(traceback.format_exc())
 
             # We don't raise here to ensure RAG ingestion continues even if entities fail
             # As per "safe upgrade" requirement

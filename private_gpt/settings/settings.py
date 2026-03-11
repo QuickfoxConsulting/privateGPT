@@ -667,6 +667,39 @@ class NERSettings(BaseModel):
     )
 
 
+class OCRSettings(BaseModel):
+    """Configuration for VLM-based OCR."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Flag indicating if Vision-Aware Ingestion is enabled.",
+    )
+    base_url: str = Field(
+        default="http://host.docker.internal:8000/v1",
+        description="Base URL for the VLM/OpenAI-compatible server.",
+    )
+    model_name: str = Field(
+        default="nanonets/Nanonets-OCR2-3B",
+        description="Model name to use for VLM inference.",
+    )
+    temperature: float = Field(
+        default=0.05,
+        description="Temperature for VLM inference.",
+    )
+    max_tokens: int = Field(
+        default=1536,
+        description="Max tokens for VLM response.",
+    )
+    timeout: int = Field(
+        default=60,
+        description="Timeout in seconds for VLM requests.",
+    )
+    enable_cot: bool = Field(
+        default=True,
+        description="Whether to use Chain-of-Thought prompting for OCR.",
+    )
+
+
 
 
 
@@ -707,6 +740,10 @@ class Settings(BaseModel):
     ner: NERSettings = Field(
         default_factory=lambda: NERSettings(),
         description="NER configuration"
+    )
+    ocr: OCRSettings = Field(
+        default_factory=lambda: OCRSettings(),
+        description="OCR configuration"
     )
 
 

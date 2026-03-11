@@ -10,13 +10,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import logging
 
-logging.basicConfig()
-logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
-logging.getLogger("sqlalchemy.pool").setLevel(logging.DEBUG)
+# logging.basicConfig()
+# logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+# logging.getLogger("sqlalchemy.pool").setLevel(logging.DEBUG)
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URI,
-    echo=True,
+    echo=False,  # Set to True for SQL debugging
     future=True,
     pool_size=POOL_SIZE,
     max_overflow=MAX_OVERFLOW,

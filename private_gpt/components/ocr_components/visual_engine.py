@@ -50,10 +50,13 @@ class VisualDocumentEngine:
             raise RuntimeError(f"PyMuPDF failed: {str(e)}")
 
     def render_page_as_image(self, page: fitz.Page) -> Tuple[Image.Image, Optional[np.ndarray]]:
+        logger.info("-> DISCOVERY: Rendering page %d to image (DPI=%d)...", page.number + 1, self.options.dpi)
         zoom = self.options.dpi / 72
         matrix = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        logger.info("-> DISCOVERY: Page %d rendered successfully (%dx%d px)", 
+                    page.number + 1, img.width, img.height)
         return img, None
 
     def create_visual_summary(self, file_path: Union[str, Path]) -> Iterator[Tuple[int, Image.Image, List[Any], str]]:
@@ -63,14 +66,19 @@ class VisualDocumentEngine:
         """
         from private_gpt.components.ocr_components.inference.prompts import VLM_OCR_COT_PROMPT
         
+        logger.info("-> DISCOVERY: Starting visual summary for %s", file_path)
         with self.open_document(file_path) as doc:
-            for page_num in range(len(doc)):
+            total_pages = len(doc)
+            logger.info("-> DISCOVERY: Document has %d pages", total_pages)
+            for page_num in range(total_pages):
                 page = doc[page_num]
+                logger.info("-> DISCOVERY: Processing page %d/%d", page_num + 1, total_pages)
                 page_img, transform = self.render_page_as_image(page)
                 
                 # Layout Engine is REMOVED. Bypassing granular block detection. 
                 # We send the RAW page to the VLM once.
                 
+                logger.info("-> DISCOVERY: Page %d discovery complete. Yielding vision data.", page_num + 1)
                 yield (page_num + 1, page_img, [], VLM_OCR_COT_PROMPT)
 
     @staticmethod
