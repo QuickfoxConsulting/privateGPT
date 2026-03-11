@@ -7,36 +7,36 @@ from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 from private_gpt.di import global_injector
 from private_gpt.components.ocr_components.visual_engine import VisualDocumentEngine
+from private_gpt.components.ocr_components.inference.vlm_engine import VlmOcrEngine
 
 logger = logging.getLogger(__name__)
 
 class VisionPDFReader(BaseReader):
     """
-    Vision-Aware PDF Reader.
+    Vision-Aware PDF Reader (Discovery & Inference Mode).
     
-    Uses Physical/Visual Coordinate Mapping via VisualDocumentEngine to 
-    extract spatial metadata for layout processing.
+    Uses One-Shot High-Fidelity Rendering and VLM Inference for OCR.
     """
 
     def __init__(self, 
-                 visual_engine: Optional[VisualDocumentEngine] = None):
+                 visual_engine: Optional[VisualDocumentEngine] = None,
+                 vlm_engine: Optional[VlmOcrEngine] = None):
         """
         Initialize the Vision Ingestion Pipeline.
         """
         self._visual_engine = visual_engine or global_injector.get(VisualDocumentEngine)
-        logger.debug("VisionPDFReader initialized with engine version %s", 
-                     self._visual_engine.get_engine_version())
+        self._vlm_engine = vlm_engine or global_injector.get(VlmOcrEngine)
+        logger.debug("VisionPDFReader initialized (Clean Discovery Mode)")
 
     def load_data(self, file_path: Union[str, Path], extra_info: Optional[Dict] = None) -> List[Document]:
         """
-        Synchronously loads and processes a PDF with visual awareness.
+        Synchronously loads and processes a PDF with high-fidelity discovery.
         """
         file_path = Path(file_path)
         documents = []
         
         try:
             with self._visual_engine.open_document(file_path) as doc:
-                # 1. Capture Document-Level Metadata
                 doc_metadata = {
                     "file_name": file_path.name,
                     "total_pages": len(doc),
@@ -44,56 +44,41 @@ class VisionPDFReader(BaseReader):
                     **(extra_info or {})
                 }
 
-                # 2. Process Page by Page (The Visual Loop)
-                for page_num, page_img, visual_elements, transform, layout_blocks in self._visual_engine.create_visual_summary(file_path):
+                # Process Page by Page
+                for page_num, page_image, _, ocr_prompt in self._visual_engine.create_visual_summary(file_path):
                     page_index = page_num - 1
                     page_obj = doc[page_index]
                     
-                    # Store transformation matrix in metadata
-                    transform_list = transform.tolist() if transform is not None else None
-                    
-                    # High-fidelity text extraction using PyMuPDF blocks
+                    # 1. Digital Text Extraction
                     blocks = page_obj.get_text("blocks")
-                    page_text = "\n".join([b[4] for b in blocks if b[4].strip()])
+                    digital_text = "\n".join([b[4] for b in blocks if b[4].strip()])
                     
-                    # 3. Vision Decision Engine (OCR vs Layout)
-                    document_class = "digital"  # Default: pure digital text
+                    # 2. Vision/OCR Discovery
+                    page_text = digital_text
+                    document_class = "digital"
                     
-                    # Case A: Scanned Document or Pure Image (No Text Layer)
-                    if not page_text.strip():
+                    if not digital_text.strip():
+                        # Scanned Page -> Trigger VLM Inference
                         document_class = "scanned"
-                        logger.info("Page %d: Scanned content detected. OCR disabled for now.", page_num)
+                        logger.info("Page %d: Scanned content detected. Running VLM Inference...", page_num)
+                        result = self._vlm_engine.infer_strip(page_image, custom_prompt=ocr_prompt)
+                        page_text = result.raw_text or ""
                     
-                    # Case B: Hybrid Document (Text + Images)
-                    elif visual_elements:
-                        document_class = "hybrid"
-                        logger.info("Page %d: Hybrid content detected.", page_num)
-                    
-                    # 4. Construct the Vision-Aware Metadata
+                    # 3. Construct Metadata
                     metadata = {
                         **doc_metadata,
                         "page": page_num,
                         "document_class": document_class,
                         "render_dpi": self._visual_engine.options.dpi,
-                        "page_width_px": page_img.width,
-                        "page_height_px": page_img.height,
-                        "has_visuals": len(visual_elements) > 0,
-                        "transformation_matrix": transform_list,
-                        "layout_blocks": [vars(b) for b in layout_blocks] if layout_blocks else []
+                        "page_width_px": page_image.width,
+                        "page_height_px": page_image.height,
                     }
 
-                    # Create LlamaIndex Document object
                     llama_doc = Document(
                         text=page_text,
                         metadata=metadata,
                         id_=f"{doc_metadata['document_id']}_p{page_num}"
                     )
-                    
-                    # Exclude heavy visual metadata from LLM/Embedding context 
-                    # but keep it for retrieval/rendering
-                    llama_doc.excluded_embed_metadata_keys.extend(["layout_blocks"])
-                    llama_doc.excluded_llm_metadata_keys.extend(["layout_blocks"])
-                    
                     documents.append(llama_doc)
 
             logger.info("VisionPDFReader completed processing %s (%d pages)", 
