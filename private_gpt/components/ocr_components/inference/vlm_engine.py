@@ -123,8 +123,10 @@ class VlmOcrEngine:
             if not found_marker:
                 logger.info("-> OCR: No markers found. Using raw content (%d chars).", len(raw_text))
 
+            logger.info("-> OCR: Extracting exact text block below:\n" + "="*40 + "\n" + raw_text + "\n" + "="*40)
+
             return OcrResult(
-                raw_text=raw_text,
+                raw_text=raw_text.strip(),
                 analysis=analysis,
                 metadata={
                     "tokens": data.get("usage", {}).get("total_tokens", 0), 

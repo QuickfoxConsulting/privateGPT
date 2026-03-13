@@ -277,6 +277,27 @@ def list_ingested(request: Request) -> IngestResponse:
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
 
+@ingest_router.get("/ingest/{filename}/enhanced", tags=["Ingestion"])
+async def download_enhanced_document(filename: str):
+    """
+    Download the enhanced (searchable) version of a document.
+    """
+    stem = Path(filename).stem
+    # The reconstruction engine saves as {stem}_enhanced.pdf
+    enhanced_filename = f"{stem}_enhanced.pdf"
+    file_path = Path(UPLOAD_DIR) / enhanced_filename
+
+    if not file_path.exists():
+        logger.error(f"Enhanced file not found for {filename} at {file_path}")
+        raise HTTPException(status_code=404, detail=f"Enhanced document not found for {filename}")
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=enhanced_filename
+    )
+
+
 
 @ingest_router.delete("/ingest/{doc_id}", tags=["Ingestion"])
 async def delete_ingested(request: Request, doc_id: str) -> None:
@@ -331,8 +352,16 @@ async def delete_file(
                     upload_path = Path(upload_path)
                     if upload_path.exists():
                         os.remove(upload_path)
+                    
+                    # Also delete the enhanced (searchable) version if it exists
+                    enhanced_filename = f"{upload_path.stem}_enhanced.pdf"
+                    enhanced_path = upload_path.parent / enhanced_filename
+                    if enhanced_path.exists():
+                        os.remove(enhanced_path)
+                        logger.info(f"Deleted enhanced file at: {enhanced_path}")
+                        
                 except Exception as e:
-                    print(f"Error deleting file from static directory: {e}")
+                    logger.error(f"Error deleting file from static directory: {e}")
                         
             db.execute(
                 models.document_department_association.delete().where(

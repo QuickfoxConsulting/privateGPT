@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 import fitz  # PyMuPDF
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
+from private_gpt.components.ocr_components.detection.engine import DetectionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,14 @@ class VisualDocumentEngine:
     This engine now performs pure One-Shot Page Discovery.
     """
 
-    def __init__(self, options: Optional[VisualProcessingOptions] = None):
+    def __init__(self, 
+                 options: Optional[VisualProcessingOptions] = None,
+                 detection_engine: Optional[DetectionEngine] = None):
         self.options = options or VisualProcessingOptions()
+        self.detection_engine = detection_engine
         logger.info("Initializing VisualDocumentEngine (No-Layout Mode) with DPI=%d", self.options.dpi)
+        if self.detection_engine:
+            logger.info("VisualDocumentEngine initialized with DetectonEngine support")
 
     def open_document(self, file_path: Union[str, Path]) -> fitz.Document:
         path_str = str(file_path)
@@ -78,8 +84,19 @@ class VisualDocumentEngine:
                 # Layout Engine is REMOVED. Bypassing granular block detection. 
                 # We send the RAW page to the VLM once.
                 
+                # Discovery: Use CNN Detection to find text boxes if engine is available
+                detected_boxes = []
+                if self.detection_engine:
+                    logger.info("-> DISCOVERY: Running lightweight CNN detection on page %d", page_num + 1)
+                    try:
+                        detection_result = self.detection_engine.detect(page_img)
+                        detected_boxes = detection_result.boxes
+                        logger.info("-> DISCOVERY: Page %d detection found %d boxes", page_num + 1, len(detected_boxes))
+                    except Exception as e:
+                        logger.error("-> DISCOVERY: Detection failed on page %d: %s", page_num + 1, str(e))
+                
                 logger.info("-> DISCOVERY: Page %d discovery complete. Yielding vision data.", page_num + 1)
-                yield (page_num + 1, page_img, [], VLM_OCR_COT_PROMPT)
+                yield (page_num + 1, page_img, detected_boxes, VLM_OCR_COT_PROMPT)
 
     @staticmethod
     def get_engine_version() -> str:
