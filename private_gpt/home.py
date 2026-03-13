@@ -32,6 +32,32 @@ DEFAULT_MODE = MODES[0]
 
 home_router = APIRouter(prefix="/v1", tags=["Chat"])
 
+class Source(BaseModel):
+    file: str
+    page: str
+    text: str
+    page_link: str
+
+    @staticmethod
+    def curate_sources(sources: list[Chunk]) -> list["Source"]:
+        curated_sources = []
+        for chunk in sources:
+            metadata = chunk.document.doc_metadata or {}
+            file_name = str(metadata.get("file_name") or metadata.get("filename") or "Unknown")
+            page = str(metadata.get("page_label") or metadata.get("page") or "-")
+            
+            # Construct a local link for the UI
+            # Note: This is a placeholder for the actual link logic that was missing
+            page_link = f"/media/{file_name}#page={page}"
+            
+            curated_sources.append(Source(
+                file=file_name,
+                page=page,
+                text=chunk.text,
+                page_link=page_link
+            ))
+        return curated_sources
+
 class ListFilesResponse(BaseModel):
     uploaded_files: List[str]
 

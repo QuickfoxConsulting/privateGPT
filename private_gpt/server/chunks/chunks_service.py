@@ -271,3 +271,237 @@ class ChunksService:
 
         return self._process_retrieved_nodes(nodes, prev_next_chunks)
 
+    def get_document_page_chunks(
+        self, document_id: str, page_num: int
+    ) -> list[dict]:
+        """Retrieve all chunks belonging to a specific page of a document.
+
+        Handles both Vector Store UUIDs and SQL Database IDs (integers).
+        If an integer ID is passed, it looks up the filename in the DB
+        and filters chunks by that filename.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # --- Bridge: Resolve SQL ID to Filename if needed ---
+        target_filename: str | None = None
+        if document_id.isdigit():
+            try:
+                from private_gpt.users.db.session import SessionLocal
+                from private_gpt.users.models.document import Document as SQLDocument
+                with SessionLocal() as session:
+                    sql_doc = session.query(SQLDocument).filter_by(id=int(document_id)).first()
+                    if sql_doc:
+                        target_filename = sql_doc.filename
+                        logger.info("Resolved SQL ID %s to filename '%s'", document_id, target_filename)
+            except Exception as e:
+                logger.warning("Could not resolve SQL ID (using literal match instead): %s", str(e))
+
+        matching_chunks: list[dict] = []
+        try:
+            docstore = self.storage_context.docstore
+            if not docstore or not hasattr(docstore, "docs") or not docstore.docs:
+                logger.warning("Docstore is empty or not available.")
+                return []
+
+            for node_id, node in docstore.docs.items():
+                node_meta = node.metadata or {}
+                # Match on document_id (UUID) OR filename (if we resolved one)
+                node_doc_id = node_meta.get("document_id") or node_meta.get("doc_id", "")
+                node_filename = node_meta.get("file_name")
+
+                is_match = False
+                if node_doc_id == document_id:
+                    is_match = True
+                elif target_filename and node_filename == target_filename:
+                    is_match = True
+
+                node_page = node_meta.get("page")
+
+                if is_match and node_page == page_num:
+                    chunk_info = {
+                        "node_id": node.node_id,
+                        "text": node.get_content(),
+                        "page": page_num,
+                        "document_id": node_doc_id, # Return the actual UUID from metadata
+                        "text_locations": node_meta.get("text_locations", []),
+                        "document_class": node_meta.get("document_class", "unknown"),
+                        "entities": node_meta.get("entities", []),
+                    }
+                    matching_chunks.append(chunk_info)
+
+            # Deduplicate: Remove overlapping/redundant chunks (e.g. Hierarchical children)
+            matching_chunks = self._deduplicate_chunks(matching_chunks)
+
+            # Sort by node_id for consistent ordering
+            matching_chunks.sort(key=lambda c: c["node_id"])
+            logger.info(
+                "Found %d unique chunks for document_id=%s (filename='%s') page=%d",
+                len(matching_chunks), document_id, target_filename or "N/A", page_num,
+            )
+        except Exception as e:
+            logger.error("Failed to retrieve page chunks: %s", str(e))
+
+        return matching_chunks
+
+    def _deduplicate_chunks(self, chunks: list[dict]) -> list[dict]:
+        """Filter out redundant chunks that are completely contained within others.
+        
+        This handles the Hierarchical parser behavior where a page might have 
+        a parent chunk and 4 children chunks that contain the exact same text 
+        as the parent.
+        """
+        if not chunks:
+            return []
+            
+        # 1. Sort by text length (descending) so we prefer keeping larger "Parents"
+        sorted_chunks = sorted(chunks, key=lambda x: len(x["text"]), reverse=True)
+        
+        unique_chunks = []
+        for candidate in sorted_chunks:
+            is_redundant = False
+            candidate_text = candidate["text"].strip()
+            
+            for existing in unique_chunks:
+                existing_text = existing["text"].strip()
+                # If candidate text is already inside an existing (larger) chunk...
+                if candidate_text in existing_text:
+                    is_redundant = True
+                    break
+            
+            if not is_redundant:
+                unique_chunks.append(candidate)
+        
+        return unique_chunks
+
+    async def update_chunk(self, node_id: str, new_text: str) -> dict:
+        """Surgically update a single chunk's text, re-embed, and re-extract entities.
+
+        Pipeline:
+        1. Retrieve the existing node from docstore.
+        2. Delete old entity links from Postgres.
+        3. Delete old vectors from Vector Store.
+        4. Update text, re-generate dense embedding, re-run NER.
+        5. Re-insert into Vector Store and Docstore.
+        6. Persist storage to disk.
+        """
+        import logging
+        import asyncio
+        from llama_index.core.schema import TextNode
+        logger = logging.getLogger(__name__)
+
+        # --- Step 1: Retrieve existing node ---
+        try:
+            node = self.storage_context.docstore.get_node(node_id)
+        except Exception as e:
+            raise ValueError(f"Node {node_id} not found in docstore: {e}")
+
+        old_text = node.get_content()
+        logger.info(
+            "CHUNK_EDIT: Updating node %s. Old text length=%d, New text length=%d",
+            node_id, len(old_text), len(new_text),
+        )
+
+        # --- Step 2: Delete old entity links from Postgres ---
+        try:
+            from private_gpt.users.db.session import SessionLocal
+            from private_gpt.users.models.entity import NodeEntity
+
+            with SessionLocal() as session:
+                deleted_count = session.query(NodeEntity).filter_by(
+                    node_id=node_id
+                ).delete()
+                session.commit()
+                logger.info(
+                    "CHUNK_EDIT: Deleted %d old entity links for node %s",
+                    deleted_count, node_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "CHUNK_EDIT: Could not delete old entity links (non-fatal): %s", str(e)
+            )
+
+        # --- Step 3: Delete old vector from Vector Store ---
+        try:
+            index = VectorStoreIndex.from_vector_store(
+                self.vector_store_component.vector_store,
+                storage_context=self.storage_context,
+                embed_model=self.embedding_component.embedding_model,
+            )
+            # Delete the node from vector store by its ID
+            self.vector_store_component.vector_store.delete(node_id)
+            logger.info("CHUNK_EDIT: Deleted old vector for node %s", node_id)
+        except Exception as e:
+            logger.warning(
+                "CHUNK_EDIT: Could not delete old vector (may not exist): %s", str(e)
+            )
+
+        # --- Step 4: Update text and re-embed ---
+        if isinstance(node, TextNode):
+            node.set_content(new_text)
+        else:
+            node.text = new_text
+
+        # Generate new dense embedding
+        new_embedding = await asyncio.to_thread(
+            self.embedding_component.embedding_model.get_text_embedding, new_text
+        )
+        node.embedding = new_embedding
+        logger.info(
+            "CHUNK_EDIT: Generated new dense embedding (dim=%d) for node %s",
+            len(new_embedding), node_id,
+        )
+
+        # --- Step 5: Re-run NER entity extraction ---
+        try:
+            if self.entity_component.enabled:
+                entities = self.entity_component.extract_entities(new_text)
+                node.metadata["entities"] = list(set([ent["text"] for ent in entities]))
+                node.metadata["entity_details"] = entities
+                logger.info(
+                    "CHUNK_EDIT: Re-extracted %d entities for node %s",
+                    len(entities), node_id,
+                )
+
+                # Save new entity links to Postgres
+                from private_gpt.components.ingest.ingest_component import BaseIngestComponent
+                BaseIngestComponent._save_entities(None, [node])
+        except Exception as e:
+            logger.warning(
+                "CHUNK_EDIT: Entity re-extraction failed (non-fatal): %s", str(e)
+            )
+
+        # --- Step 6: Re-insert into Vector Store and Docstore ---
+        try:
+            # Update docstore (overwrite existing node)
+            self.storage_context.docstore.add_documents([node], allow_update=True)
+            logger.info("CHUNK_EDIT: Updated node in docstore.")
+
+            # Re-insert into vector store via the index
+            index = VectorStoreIndex.from_vector_store(
+                self.vector_store_component.vector_store,
+                storage_context=self.storage_context,
+                embed_model=self.embedding_component.embedding_model,
+            )
+            index.insert_nodes([node])
+            logger.info("CHUNK_EDIT: Re-inserted node into vector store.")
+        except Exception as e:
+            logger.error("CHUNK_EDIT: Failed to re-insert node: %s", str(e))
+            raise
+
+        # --- Step 7: Persist to disk ---
+        try:
+            from private_gpt.paths import local_data_path
+            self.storage_context.persist(persist_dir=local_data_path)
+            logger.info("CHUNK_EDIT: Persisted storage context to disk.")
+        except Exception as e:
+            logger.error("CHUNK_EDIT: Failed to persist storage: %s", str(e))
+            raise
+
+        return {
+            "node_id": node_id,
+            "text": new_text,
+            "entities": node.metadata.get("entities", []),
+            "status": "updated",
+        }
+

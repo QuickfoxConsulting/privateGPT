@@ -42,6 +42,52 @@ def get_id(db, username):
     name = crud.user.get_by_name(db=db, name=username)
     return name
 
+@router.get("/{id}", response_model=schemas.DocumentView)
+def get_document(
+    id: int,
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(deps.get_current_user),
+) -> schemas.DocumentView:
+    """Get document details by its database ID."""
+    document = crud.documents.get_by_id(db, id=id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID {id} not found",
+        )
+    
+    return schemas.DocumentView(
+        id=document.id,
+        filename=document.filename,
+        doc_status=document.doc_status,
+        doc_metadata=document.doc_metadata or {},
+        uploaded_by=get_username(db, document.uploaded_by),
+        uploaded_at=document.uploaded_at,
+        is_enabled=document.is_enabled,
+        departments=[
+            schemas.DepartmentList(id=dep.id, name=dep.name)
+            for dep in document.departments
+        ],
+        categories=[
+            schemas.CategoryList(id=cat.id, name=cat.name)
+            for cat in document.categories
+        ],
+        version=(
+            schemas.DocumentVersionOut(
+                id=document.current_version.id,
+                version_number=document.current_version.version_number,
+                status=document.current_version.status,
+                action_type=document.current_version.action_type,
+                changes=document.current_version.changes,
+                file_path=document.current_version.file_path,
+                uploaded_at=document.current_version.uploaded_at,
+                uploaded_by=document.current_version.uploaded_by,
+                reviewed_at=document.current_version.reviewed_at,
+                reviewed_by=document.current_version.reviewed_by
+            ) if document.current_version else None
+        )
+    )
+
 
 @router.get("", response_model=Page[schemas.DocumentView])
 def list_files(
