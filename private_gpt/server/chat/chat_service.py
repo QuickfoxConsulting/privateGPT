@@ -32,7 +32,7 @@ from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
 from private_gpt.open_ai.extensions.context_filter import ContextFilter
-from private_gpt.server.chunks.chunks_service import Chunk
+from private_gpt.server.ingest.model import Chunk
 from private_gpt.settings.settings import Settings
 
 from private_gpt.paths import models_path

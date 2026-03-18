@@ -17,9 +17,8 @@ from llama_index.llms import ChatMessage, ChatResponse, MessageRole
 from private_gpt.di import global_injector
 from private_gpt.settings.settings import settings
 from private_gpt.constants import PROJECT_ROOT_PATH
-from private_gpt.server.ingest.model import IngestedDoc
+from private_gpt.server.ingest.model import IngestedDoc, Chunk
 from private_gpt.server.ingest.ingest_service import IngestService
-from private_gpt.server.chunks.chunks_service import Chunk, ChunksService
 from private_gpt.server.chat.chat_service import ChatService, CompletionGen
 
 logger = logging.getLogger(__name__)
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 THIS_DIRECTORY_RELATIVE = Path(__file__).parent.relative_to(PROJECT_ROOT_PATH)
 SOURCES_SEPARATOR = "\n Sources: \n"
 
-MODES = ["Query Docs", "Search in Docs", "LLM Chat"]
+MODES = ["Query Docs", "LLM Chat"]
 DEFAULT_MODE = MODES[0]
 
 home_router = APIRouter(prefix="/v1", tags=["Chat"])
@@ -74,11 +73,9 @@ class Home:
         self,
         ingest_service: IngestService,
         chat_service: ChatService,
-        chunks_service: ChunksService,
     ) -> None:
         self._ingest_service = ingest_service
         self._chat_service = chat_service
-        self._chunks_service = chunks_service
 
         self.mode = MODES[0]
         self._history = []
@@ -144,18 +141,6 @@ class Home:
                 )
                 yield from yield_deltas(llm_stream)
 
-            case "Search in Docs":
-                response = self._chunks_service.retrieve_relevant(
-                    text=message, limit=4, prev_next_chunks=0
-                )
-
-                sources = Source.curate_sources(response)
-
-                yield "\n".join(
-                    f"{index}. **{source.file} (page {source.page})**\n"
-                    f" (link: [{source.page_link}]({source.page_link}))\n{source.text}"
-                    for index, source in enumerate(sources, start=1)
-                )
 
     def _list_ingested_files(self) -> list[list[str]]:
         files = set()

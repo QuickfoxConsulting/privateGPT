@@ -632,11 +632,11 @@ class ChunkingSettings(BaseModel):
 
     # Hierarchical splitting (Parent -> Child -> Leaf)
     hierarchical_chunk_sizes: list[int] = Field(
-        default=[1024, 512, 256],
+        default=[1024, 512],
         description="Chunk sizes for hierarchical splitting strategy (Parent -> Child -> Leaf).",
     )
     hierarchical_chunk_overlap: int = Field(
-        default=50,
+        default=120,
         description="Overlap between chunks in hierarchical splitting.",
     )
     # Global/fallback settings (also used for 'basic' strategy)

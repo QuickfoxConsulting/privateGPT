@@ -6,7 +6,7 @@ from typing import Literal, Optional, Any, Union, AsyncIterator
 from llama_index.core.llms import ChatResponse, CompletionResponse
 from pydantic import BaseModel, Field
 
-from private_gpt.server.chunks.chunks_service import Chunk
+from private_gpt.server.ingest.model import Chunk
 
 
 class OpenAIDelta(BaseModel):

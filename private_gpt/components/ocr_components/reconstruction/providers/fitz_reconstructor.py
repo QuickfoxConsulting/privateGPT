@@ -88,7 +88,7 @@ class FitzReconstructionProvider(BaseReconstructionProvider):
                             logger.warning("Failed to insert textbox segment on page %d: %s", i + 1, str(text_err))
 
             # Save the final PDF
-            output_path = Path(UPLOAD_DIR) / f"{output_name}_enhanced.pdf"
+            output_path = Path(UPLOAD_DIR) / "documents" / f"{output_name}_enhanced.pdf"
             page_count = len(doc)
             doc.save(str(output_path))
             doc.close()

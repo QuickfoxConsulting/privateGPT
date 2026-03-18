@@ -19,7 +19,7 @@ echo "Loading fixtures"
 poetry run python scripts/fixtures.py
 echo "Seeding prompts"
 poetry run python scripts/seed_prompts.py
-playwright install 
+# playwright install 
 
 # Fix for tiktoken download issues
 if [ -n "$TIKTOKEN_CACHE_DIR" ]; then

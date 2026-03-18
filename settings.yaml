@@ -93,7 +93,7 @@ embedding:
 # Chunking strategy for document ingestion
 # Options: late_chunking, sentence_window, semantic, hierarchical
 chunking:
-  strategy: unified_context  # Options: late_chunking, sentence_window, semantic, hierarchical, basic, unified_context
+  strategy: hierarchical  # Options: late_chunking, sentence_window, semantic, hierarchical, basic, unified_context
   # Hierarchical creates 3 levels: 2048 tokens (parent) -> 512 tokens (child) -> 128 tokens (leaf)
   # AutoMergingRetriever will merge child chunks into parents when >50% children are retrieved
   

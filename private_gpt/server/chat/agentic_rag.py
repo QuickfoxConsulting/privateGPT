@@ -36,7 +36,6 @@ from private_gpt.server.tools.document_tool import DocumentSpecificTool
 from private_gpt.server.tools.summary_tool import DocumentSummaryTool
 from private_gpt.components.vector_store.vector_store_component import VectorStoreComponent
 from private_gpt.components.node_store.node_store_component import NodeStoreComponent
-from private_gpt.server.chunks.chunks_service import ChunksService, Chunk
 from private_gpt.di import global_injector
 
 logger = logging.getLogger(__name__)
@@ -179,8 +178,6 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         self._decompose_timeout = decompose_timeout or RAG_CONFIG.query_processing.decompose_timeout_seconds
         self._retrieval_timeout = retrieval_timeout or RAG_CONFIG.query_processing.retrieval_timeout_seconds
         
-        # Chunks Service
-        self._chunks_service = global_injector.get(ChunksService)
 
     def _get_default_system_prompt(self) -> str:
         """Generate a balanced default system prompt for RAG."""
@@ -468,41 +465,6 @@ class AgenticCondenseChatEngine(BaseChatEngine):
             logger.warning(f"Decomposition failed: {e}. Using original query.")
             return [query]
 
-    def _convert_chunks_to_nodes(self, chunks: List[Chunk]) -> List[NodeWithScore]:
-        """Convert Chunks back to NodeWithScore, adding sibling context."""
-        nodes = []
-        for chunk in chunks:
-            try:
-                # Validate chunk has required data
-                if not chunk.node_id:
-                    logger.warning(f"Chunk missing node_id, using fallback. doc_id: {chunk.document.doc_id}")
-                    node_id = f"fallback_{chunk.document.doc_id}"
-                else:
-                    node_id = chunk.node_id
-                
-                # Construct content with siblings
-                content = chunk.text
-                if chunk.previous_texts:
-                    content = "\n".join(chunk.previous_texts) + "\n" + content
-                if chunk.next_texts:
-                    content = content + "\n" + "\n".join(chunk.next_texts)
-                    
-                # Create node
-                node = NodeWithScore(
-                    node=TextNode(
-                        text=content,
-                        id_=node_id,
-                        metadata=chunk.document.doc_metadata or {},
-                        embedding=None  # Not needed for context
-                    ),
-                    score=chunk.score
-                )
-                nodes.append(node)
-            except Exception as e:
-                logger.error(f"Failed to convert chunk to node: {e}. Chunk doc_id: {chunk.document.doc_id if chunk.document else 'unknown'}")
-                # Continue processing other chunks instead of failing completely
-                continue
-        return nodes
 
     def _retrieve_and_process_nodes(self, sub_queries: List[str]) -> Tuple[str, List[NodeWithScore]]:
         """Retrieve using ChunksService, deduplicate, and post-process nodes."""
@@ -510,9 +472,8 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         
         for sub_q in sub_queries:
             try:
-                # Use ChunksService
-                chunks = self._chunks_service.retrieve_relevant_sync(sub_q, limit=10, prev_next_chunks=1)
-                nodes = self._convert_chunks_to_nodes(chunks)
+                # Use base retriever directly
+                nodes = self._retriever.retrieve(sub_q)
                 
                 for node in nodes:
                     if node.node.node_id not in all_nodes_map:
@@ -630,12 +591,12 @@ class AgenticCondenseChatEngine(BaseChatEngine):
         
         async def retrieve_safe(sq):
             try:
-                # Apply timeout to retrieval
-                chunks = await asyncio.wait_for(
-                    self._chunks_service.retrieve_relevant(sq, limit=10, prev_next_chunks=1),
+                # Use base retriever directly
+                nodes = await asyncio.wait_for(
+                    self._retriever.aretrieve(sq),
                     timeout=self._retrieval_timeout
                 )
-                return self._convert_chunks_to_nodes(chunks)
+                return nodes
             except asyncio.TimeoutError:
                 logger.warning(f"Retrieval for '{sq}' timed out after {self._retrieval_timeout}s.")
                 return []

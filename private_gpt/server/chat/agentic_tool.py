@@ -177,8 +177,7 @@ class AgentStreamHandler(BaseCallbackHandler):
                 if any(x in tool_name.lower() for x in ["search", "google", "web", "serp"]):
                     try:
                         import re
-                        from private_gpt.server.chunks.chunks_service import Chunk
-                        from private_gpt.server.ingest.model import IngestedDoc
+                        from private_gpt.server.ingest.model import IngestedDoc, Chunk
                         
                         # Find potential URL patterns and titles
                         # Format in serper_tool: "N. Title\nURL\nSnippet"

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import logging
 import traceback
 
@@ -153,7 +154,9 @@ async def ingest_file(
     service = request.state.injector.get(IngestService)
     if file.filename is None:
         raise HTTPException(400, "No file name provided")
-    upload_path = Path(f"{UPLOAD_DIR}/{file.filename}")
+    
+    # Save directly to the documents subdirectory so it can be served via /media
+    upload_path = Path(UPLOAD_DIR) / "documents" / file.filename
     try:
         with open(upload_path, "wb") as f:
             f.write(file.file.read())
@@ -232,9 +235,7 @@ async def ingest_file(
         
         raise HTTPException(status_code=500, detail=f"There was an error uploading the file(s): {e}")
     finally:
-        # Clean up the temporary file
-        if upload_path.exists():
-            upload_path.unlink()
+        # We no longer unlink the file here so it can be served via /media
         file.file.close()
     return IngestResponse(object="list", model="private-gpt", data=ingested_documents)
 
@@ -283,9 +284,9 @@ async def download_enhanced_document(filename: str):
     Download the enhanced (searchable) version of a document.
     """
     stem = Path(filename).stem
-    # The reconstruction engine saves as {stem}_enhanced.pdf
+    # Point to the documents subdirectory
     enhanced_filename = f"{stem}_enhanced.pdf"
-    file_path = Path(UPLOAD_DIR) / enhanced_filename
+    file_path = Path(UPLOAD_DIR) / "documents" / enhanced_filename
 
     if not file_path.exists():
         logger.error(f"Enhanced file not found for {filename} at {file_path}")
