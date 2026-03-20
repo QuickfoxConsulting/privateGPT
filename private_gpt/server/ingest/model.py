@@ -1,5 +1,5 @@
-from typing import Any, Literal
-from llama_index.core.schema import Document, NodeWithScore
+from typing import Any, Literal, Optional, List
+from llama_index.core.schema import Document, NodeWithScore, BaseNode
 from pydantic import BaseModel, Field
 from private_gpt.constants import UPLOAD_DIR
 from pathlib import Path
@@ -57,6 +57,36 @@ class IngestedDoc(BaseModel):
         )
 
 
+class RawIngestDoc(BaseModel):
+    object: Literal["ingest.document.raw"]
+    doc_id: str = Field(examples=["c202d5e6-7b69-4869-81cc-dd574ee8ee11"])
+    text: str = Field(examples=["Full page text content..."])
+    doc_metadata: dict[str, Any] | None = Field(
+        default=None,
+        examples=[
+            {
+                "page_label": "2",
+                "file_name": "Sales Report Q3 2023.pdf",
+            }
+        ]
+    )
+
+    @staticmethod
+    def from_document(document: BaseNode) -> "RawIngestDoc":
+        # Extract doc_id safely from various possible fields
+        doc_id = getattr(document, "ref_doc_id", None)
+        if not doc_id:
+            # Fallback to node_id/id_ for Document objects or nodes without ref_doc_id
+            doc_id = getattr(document, "id_", None) or getattr(document, "node_id", None)
+        
+        return RawIngestDoc(
+             object="ingest.document.raw",
+            doc_id=doc_id or "-",
+            text=document.get_content(),
+            doc_metadata=IngestedDoc.curate_metadata(document.metadata.copy() if document.metadata else {}),
+        )
+
+
 class Chunk(BaseModel):
     object: Literal["context.chunk"]
     score: float = Field(examples=[0.023])
@@ -91,4 +121,17 @@ class Chunk(BaseModel):
             text=node.get_content(),
             node_id=node.node.node_id,
         )
+
+class IngestPatchInput(BaseModel):
+    db_id: int = Field(description="The Database ID of the document")
+    page: int = Field(description="The page number to edit", default=1)
+    text: str = Field(description="The new raw text for this page")
+    text_locations: Optional[list[dict[str, Any]]] = Field(
+        None, 
+        description="Optional updated spatial metadata (text locations/bboxes)"
+    )
+
+    @classmethod
+    def from_base_node(cls, node: BaseNode) -> "Chunk":
+        return cls.from_node(NodeWithScore(node=node, score=1.0))
 

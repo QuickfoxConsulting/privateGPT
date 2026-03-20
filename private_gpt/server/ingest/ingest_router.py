@@ -20,9 +20,10 @@ from private_gpt.users.api import deps
 from private_gpt.users.constants.role import Role
 
 from private_gpt.server.ingest.ingest_service import IngestService, ChunkingStrategy
-from private_gpt.server.ingest.model import IngestedDoc
+from private_gpt.server.ingest.model import IngestedDoc, RawIngestDoc, Chunk, IngestPatchInput
 from private_gpt.server.utils.auth import authenticated
 from private_gpt.constants import UPLOAD_DIR
+from private_gpt.components.ocr_components.reconstruction.engine import ReconstructionEngine
 
 ingest_router = APIRouter(prefix="/v1", dependencies=[Depends(authenticated)])
 
@@ -279,28 +280,180 @@ def list_ingested(request: Request) -> IngestResponse:
 
 
 @ingest_router.get("/ingest/{filename}/enhanced", tags=["Ingestion"])
-async def download_enhanced_document(filename: str):
+async def download_enhanced_document(request: Request, filename: str):
     """
     Download the enhanced (searchable) version of a document.
+    Generated on-the-fly to ensure the latest edited data is used.
     """
-    stem = Path(filename).stem
-    # Point to the documents subdirectory
-    enhanced_filename = f"{stem}_enhanced.pdf"
-    file_path = Path(UPLOAD_DIR) / "documents" / enhanced_filename
+    service = request.state.injector.get(IngestService)
+    recon_engine = request.state.injector.get(ReconstructionEngine)
+    
+    # 1. Get the latest spatial metadata from the docstore
+    text_locations = service.get_all_text_locations_by_filename(filename)
+    
+    if not text_locations:
+        logger.error(f"No text locations found for {filename}")
+        raise HTTPException(status_code=404, detail=f"No enrichment data found for {filename}")
 
+    # 2. Identify the original PDF path
+    # Original file is typically in the documents subdirectory
+    original_path = Path(UPLOAD_DIR) / "documents" / filename
+    if not original_path.exists():
+        logger.error(f"Original file not found for {filename} at {original_path}")
+        raise HTTPException(status_code=404, detail=f"Original document not found for {filename}")
+
+    # 3. Trigger Reconstruction on-the-fly
+    # This will overwrite the existing _enhanced.pdf if it exists, or create it fresh
+    stem = original_path.stem
+    try:
+        recon_result = recon_engine.reconstruct(
+            original_images=[], # Empty because we are using original_path (non-destructive)
+            text_locations=text_locations,
+            output_name=stem,
+            original_path=original_path
+        )
+        
+        if not recon_result.success:
+            logger.error(f"Reconstruction failed for {filename}: {recon_result.error}")
+            raise HTTPException(status_code=500, detail=f"Failed to generate enhanced PDF: {recon_result.error}")
+            
+        enhanced_path = recon_result.output_path
+        return FileResponse(
+            path=enhanced_path,
+            media_type="application/pdf",
+            filename=f"{stem}_enhanced.pdf"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error during on-the-fly reconstruction for {filename}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error during PDF generation: {str(e)}")
+
+
+
+@ingest_router.get("/ingest/{db_id}/raw", tags=["Ingestion"])
+def get_raw_ingested(
+    request: Request, 
+    db_id: int, 
+    page: int = 1,
+    db: Session = Depends(deps.get_db)
+) -> RawIngestDoc:
+    """Get the raw content of an ingested page by Database ID and Page Number."""
+    service = request.state.injector.get(IngestService)
+    
+    # 1. Get filename from DB
+    db_doc = crud.documents.get(db, id=db_id)
+    if not db_doc:
+        raise HTTPException(status_code=404, detail=f"Database Document {db_id} not found")
+        
+    # 2. Get the raw page content from the ingestion service
+    document = service.get_raw_page_by_filename_and_page(db_doc.filename, page)
+    
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Raw content for {db_doc.filename} page {page} not found")
+        
+    return RawIngestDoc.from_document(document)
+
+@ingest_router.post("/ingest/raw/patch", tags=["Ingestion"])
+async def patch_raw_ingested(
+    request: Request,
+    patch_input: IngestPatchInput,
+    db: Session = Depends(deps.get_db)
+) -> dict:
+    """Update the raw content and metadata of an ingested page."""
+    service = request.state.injector.get(IngestService)
+    
+    # 1. Get filename from DB
+    db_doc = crud.documents.get(db, id=patch_input.db_id)
+    if not db_doc:
+        raise HTTPException(status_code=404, detail=f"Database Document {patch_input.db_id} not found")
+        
+    # 2. Patch the raw content in the docstore
+    patch_result = await service.patch_raw_page(
+        db_doc.filename, 
+        patch_input.page, 
+        patch_input.text, 
+        patch_input.text_locations
+    )
+    
+    if not patch_result["success"]:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Raw content for {db_doc.filename} page {patch_input.page} not found in docstore"
+        )
+        
+    return {
+        "status": "SUCCESS", 
+        "updated_count": patch_result["count"],
+        "node_ids": patch_result["ids"],
+        "message": f"Raw content updated successfully for {len(patch_result['ids'])} nodes."
+    }
+
+@ingest_router.post("/ingest/{db_id}/reindex", tags=["Ingestion"])
+async def reindex_document(
+    request: Request,
+    db_id: int,
+    db: Session = Depends(deps.get_db)
+) -> dict:
+    """Re-chunk and re-embed a document from its existing raw page data.
+    
+    Use this after editing raw data via /ingest/raw/patch to rebuild
+    the chunks, embeddings, and entities without re-running OCR.
+    """
+    service = request.state.injector.get(IngestService)
+    
+    # 1. Get filename from DB
+    db_doc = crud.documents.get(db, id=db_id)
+    if not db_doc:
+        raise HTTPException(status_code=404, detail=f"Database Document {db_id} not found")
+    
+    # 2. Re-index from raw data
+    result = await service.reindex_from_raw(db_doc.filename)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    
+    return {
+        "status": "SUCCESS",
+        "raw_pages": result["raw_pages"],
+        "nodes_created": result["nodes_created"],
+        "message": result["message"],
+    }
+
+@ingest_router.get("/chunks/document/{db_id}/page/{page_num}", tags=["Ingestion"])
+def get_chunks_by_page(
+    request: Request, 
+    db_id: int, 
+    page_num: int,
+    db: Session = Depends(deps.get_db)
+) -> list[Chunk]:
+    """Get all chunks for a specific document and page."""
+    service = request.state.injector.get(IngestService)
+    db_doc = crud.documents.get(db, id=db_id)
+    if not db_doc:
+        raise HTTPException(status_code=404, detail=f"Database Document {db_id} not found")
+    
+    # We find all nodes for this file and page
+    nodes = service.get_nodes_by_filename_and_page(db_doc.filename, page_num)
+    
+    # Wrap nodes in Chunk model
+    return [Chunk.from_base_node(node) for node in nodes]
+
+@ingest_router.get("/media/{filename}", tags=["Ingestion"])
+async def get_media_file(filename: str):
+    """Serve a file from the documents media directory."""
+    # Security: Ensure we only serve from the documents subdirectory
+    safe_filename = os.path.basename(filename)
+    file_path = Path(UPLOAD_DIR) / "documents" / safe_filename
+    
     if not file_path.exists():
-        logger.error(f"Enhanced file not found for {filename} at {file_path}")
-        raise HTTPException(status_code=404, detail=f"Enhanced document not found for {filename}")
-
+        logger.error(f"Media file not found: {file_path}")
+        raise HTTPException(status_code=404, detail=f"File not found: {safe_filename}")
+        
     return FileResponse(
         path=file_path,
-        media_type="application/pdf",
-        filename=enhanced_filename
+        filename=safe_filename
     )
 
-
-
-@ingest_router.delete("/ingest/{doc_id}", tags=["Ingestion"])
+@ingest_router.get("/ingest/{doc_id}", tags=["Ingestion"])
 async def delete_ingested(request: Request, doc_id: str) -> None:
     """Delete the specified ingested Document.
 

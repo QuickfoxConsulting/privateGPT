@@ -224,14 +224,23 @@ class BaseIngestComponentWithIndex(BaseIngestComponent, abc.ABC):
         with self._index_thread_lock:
             try:
                 for doc_id in doc_ids:
-                    # Collect file names to delete from vector store directly as well
+                    # 1. Delete from vector store by metadata (thorough cleanup)
                     ref_doc_info = self._index.docstore.get_ref_doc_info(doc_id)
                     if ref_doc_info and ref_doc_info.metadata:
-                        file_name = ref_doc_info.metadata.get("file_name")
+                        file_name = ref_doc_info.metadata.get("file_name") or ref_doc_info.metadata.get("filename")
                         if file_name:
                             await self.delete_by_metadata("file_name", file_name)
+                            await self.delete_by_metadata("filename", file_name)
 
-                    self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    # 2. Delete as a reference document (clears index and children)
+                    try:
+                        self._index.delete_ref_doc(doc_id, delete_from_docstore=True)
+                    except Exception:
+                        pass
+                    
+                    # 3. Explicitly purge from docstore by ID (catches orphans/raw docs)
+                    if doc_id in self._index.docstore.docs:
+                        self._index.docstore.delete_document(doc_id)
                 logger.debug(f"Successfully deleted documents with doc_ids={doc_ids}")
 
                 # Save the index

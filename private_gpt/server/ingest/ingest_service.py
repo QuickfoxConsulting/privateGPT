@@ -3,7 +3,7 @@
 import logging
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, AnyStr, BinaryIO, Sequence, Any, List, Optional
+from typing import TYPE_CHECKING, AnyStr, BinaryIO, Sequence, Any, List, Optional, Dict
 from enum import Enum
 
 from injector import inject, singleton
@@ -16,7 +16,7 @@ from llama_index.core.node_parser import (
     get_root_nodes,
 )
 from llama_index.core.storage import StorageContext
-from llama_index.core.schema import BaseNode , ObjectType , TextNode 
+from llama_index.core.schema import BaseNode , ObjectType , TextNode, Document 
 
 from private_gpt.components.embedding.embedding_component import EmbeddingComponent
 from private_gpt.components.ingest.ingest_component import get_ingestion_component
@@ -30,8 +30,9 @@ from private_gpt.components.vector_store.vector_store_component import (
     VectorStoreComponent,
 )
 from private_gpt.components.entity.entity_component import EntityComponent
+from private_gpt.paths import local_data_path
 
-from private_gpt.server.ingest.model import IngestedDoc
+from private_gpt.server.ingest.model import IngestedDoc, IngestPatchInput
 from private_gpt.constants import UPLOAD_DIR
 from private_gpt.settings.settings import settings
 from llama_index.core.extractors import SummaryExtractor
@@ -377,6 +378,284 @@ class IngestService:
         logger.debug("Found count=%s ingested documents", len(ingested_docs))
         return ingested_docs
 
+    def _get_freshest_docstore(self):
+        """Returns the freshest docstore, reloading from disk if using SimpleDocumentStore to sync workers."""
+        docstore = self.storage_context.docstore
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+        from private_gpt.paths import local_data_path
+        
+        if isinstance(docstore, SimpleDocumentStore):
+            try:
+                # Hot-reload from disk to synchronize across multiple uvicorn workers
+                docstore = SimpleDocumentStore.from_persist_dir(persist_dir=str(local_data_path))
+                self.storage_context.docstore = docstore
+            except FileNotFoundError:
+                pass
+        return docstore
+
+    def get_raw_document(self, doc_id: str) -> Optional[Document]:
+        """Get the raw (pre-chunked) document by ID."""
+        docstore = self._get_freshest_docstore()
+        if doc_id in docstore.docs:
+            doc = docstore.get_document(doc_id)
+            if isinstance(doc, Document):
+                return doc
+        return None
+
+    def get_raw_page_by_filename_and_page(self, filename: str, page: int) -> Optional[BaseNode]:
+        """Get the raw document for a specific file and page number."""
+        docstore = self._get_freshest_docstore()
+        
+        # Priority 1: Find a node with text_locations (indicates high-fidelity page data)
+        for node in docstore.docs.values():
+            if not node.metadata:
+                continue
+            
+            # Match filename in either variant
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            # In some readers, page might be stored as 'page_label' or be a string
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            
+            if node_filename == filename and str(node_page) == str(page):
+                if "text_locations" in node.metadata:
+                    return node
+                    
+        # Priority 2: Return anything that matches filename/page
+        for node in docstore.docs.values():
+            if not node.metadata:
+                continue
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            if node_filename == filename and str(node_page) == str(page):
+                return node
+        return None
+
+    def get_nodes_by_filename_and_page(self, filename: str, page: int) -> list[BaseNode]:
+        """Get all nodes (chunks) for a specific file and page number."""
+        docstore = self.storage_context.docstore
+        found_nodes = []
+        for node in docstore.docs.values():
+            if not node.metadata:
+                continue
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            if node_filename == filename and str(node_page) == str(page):
+                found_nodes.append(node)
+                
+        # Sort by their start index if available to maintain reading order
+        found_nodes.sort(key=lambda n: getattr(n, "start_char_idx", 0) or 0)
+        return found_nodes
+
+    async def patch_raw_page(
+        self, 
+        filename: str, 
+        page: int, 
+        text: str, 
+        text_locations: Optional[list[dict[str, Any]]] = None
+    ) -> dict[str, Any]:
+        """Update the raw content of all matching page nodes in the docstore."""
+        docstore = self._get_freshest_docstore()
+        
+        nodes_to_update = []
+        updated_ids = []
+        for node_id, node in docstore.docs.items():
+            if not node.metadata:
+                continue
+            
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            
+            if node_filename == filename and str(node_page) == str(page):
+                logger.info("Patching node ID: %s for file: %s page: %s", node_id, filename, page)
+                
+                # Update content
+                node.text = text
+                if hasattr(node, "set_content"):
+                    node.set_content(text)
+                
+                # Update spatial metadata
+                if text_locations is not None:
+                    node.metadata["text_locations"] = text_locations
+                
+                nodes_to_update.append(node)
+                updated_ids.append(node_id)
+
+        if nodes_to_update:
+            # Save the updated nodes back to the docstore
+            docstore.add_documents(nodes_to_update)
+            
+            # Persist changes to disk (for simple docstore)
+            self.storage_context.persist(persist_dir=str(local_data_path))
+            
+            logger.info("Successfully patched %d raw content nodes for %s page %s", 
+                        len(nodes_to_update), filename, page)
+            return {"success": True, "count": len(updated_ids), "ids": updated_ids}
+            
+        logger.warning("Could not find any raw nodes to patch for %s page %s", filename, page)
+        return {"success": False, "count": 0, "ids": []}
+
+    def _delete_entities_for_file(self, filename: str) -> int:
+        """Delete all NER entity links for nodes belonging to this file."""
+        deleted = 0
+        try:
+            from private_gpt.users.db.session import SessionLocal
+            from private_gpt.users.models.entity import NodeEntity
+            
+            with SessionLocal() as session:
+                # Find all node IDs belonging to this file
+                docstore = self.storage_context.docstore
+                node_ids_for_file = []
+                for node_id, node in docstore.docs.items():
+                    if not node.metadata:
+                        continue
+                    node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+                    if node_filename == filename:
+                        node_ids_for_file.append(node_id)
+                
+                if node_ids_for_file:
+                    deleted = session.query(NodeEntity).filter(
+                        NodeEntity.node_id.in_(node_ids_for_file)
+                    ).delete(synchronize_session="fetch")
+                    session.commit()
+                    logger.info("Deleted %d entity links for file %s", deleted, filename)
+        except Exception as e:
+            logger.error("Failed to delete entities for file %s: %s", filename, str(e))
+        return deleted
+
+    async def reindex_from_raw(
+        self,
+        filename: str,
+        strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL,
+    ) -> dict[str, Any]:
+        """Re-chunk and re-embed a document from its existing raw page data.
+        
+        This skips OCR/PDF extraction and uses the (possibly edited) raw pages 
+        already in the docstore as the source of truth.
+        """
+        logger.info("Starting reindex from raw for file=%s strategy=%s", filename, strategy.value)
+        
+        # Step 1: Collect all raw page nodes from the docstore
+        docstore = self._get_freshest_docstore()
+        raw_pages = []
+        raw_page_ids = set()
+        
+        from llama_index.core.schema import NodeRelationship
+        
+        for node_id, node in docstore.docs.items():
+            if not node.metadata:
+                continue
+            
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            if node_filename != filename:
+                continue
+            
+            # STRENGHTENED HEURISTIC FOR RAW PAGES:
+            # 1. Must have a page number
+            # 2. Must NOT have a PARENT relationship (chunks always point to a parent)
+            # 3. Must have 'text_locations' (only the original OCR reader provides this)
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            has_parent = NodeRelationship.PARENT in node.relationships
+            
+            # The original page document created by Reader won't have a parent 
+            # and will have the OCR text_locations.
+            is_raw = node_page is not None and not has_parent and "text_locations" in node.metadata
+            
+            if is_raw:
+                raw_pages.append(node)
+                raw_page_ids.add(node_id)
+        
+        if not raw_pages:
+            logger.warning("No raw page nodes found for file=%s", filename)
+            return {"success": False, "message": f"No raw pages found for {filename}", "nodes_created": 0}
+        
+        # Sort by page number
+        raw_pages.sort(key=lambda n: int(n.metadata.get("page") or n.metadata.get("page_label") or 0))
+        logger.info("Found %d raw page nodes for file=%s", len(raw_pages), filename)
+        
+        # Step 2: Delete old downstream data (chunks, embeddings, entity links)
+        # but KEEP the raw page nodes
+        
+        # 2a: Delete entity links from Postgres
+        self._delete_entities_for_file(filename)
+        
+        # 2b: Delete embeddings from vector store (Qdrant)
+        node_parser = self._get_node_parser(strategy)
+        ingest_component = self._get_ingest_component_with_parser(node_parser)
+        await ingest_component.delete_by_metadata("file_name", filename)
+        await ingest_component.delete_by_metadata("filename", filename)
+        logger.info("Deleted old embeddings from vector store for file=%s", filename)
+        
+        # 2c: Delete non-raw nodes from docstore (chunk nodes)
+        # and clean up index references
+        nodes_to_delete = []
+        ref_doc_ids = set()
+        for node_id, node in docstore.docs.items():
+            if not node.metadata:
+                continue
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            if node_filename != filename:
+                continue
+            # Keep raw page nodes, delete everything else (chunks)
+            if node_id not in raw_page_ids:
+                nodes_to_delete.append(node_id)
+                ref_id = getattr(node, "ref_doc_id", None)
+                if ref_id:
+                    ref_doc_ids.add(ref_id)
+        
+        # Delete chunk nodes from docstore
+        for node_id in nodes_to_delete:
+            try:
+                docstore.delete_document(node_id)
+            except Exception:
+                pass
+        logger.info("Deleted %d chunk nodes from docstore for file=%s", len(nodes_to_delete), filename)
+        
+        # Clean up index references
+        for ref_id in ref_doc_ids:
+            try:
+                ingest_component._index.delete_ref_doc(ref_id, delete_from_docstore=False)
+            except Exception:
+                pass
+        
+        # Step 3: Convert raw pages into LlamaIndex Documents
+        documents = []
+        # Strict allowlist of metadata keys to avoid 'Metadata length too long' errors
+        # during chunking. We must strip 'entity_details', 'text_locations', etc.
+        METADATA_ALLOWLIST = {
+            "file_name", "filename", "page", "page_label", 
+            "file_path", "total_pages", "document_id",
+            "document_class", "render_dpi"
+        }
+        
+        for raw_node in raw_pages:
+            # Create a fresh Document from the raw page's text and ALLOWED metadata
+            chunk_metadata = {
+                k: v for k, v in raw_node.metadata.items() 
+                if k in METADATA_ALLOWLIST
+            }
+            doc = Document(
+                text=raw_node.get_content(),
+                metadata=chunk_metadata,
+            )
+            documents.append(doc)
+        
+        logger.info("Created %d Documents from raw pages (metadata cleaned) for re-ingestion", len(documents))
+        
+        # Step 4: Run the full _save_docs pipeline
+        # This does: chunking → PageMetadataBackfiller → NER → embedding → index → persist
+        result_docs = await ingest_component._save_docs(documents)
+        
+        # Step 5: Persist the docstore (raw pages are still there)
+        self.storage_context.persist(persist_dir=str(local_data_path))
+        
+        logger.info("Reindex complete for file=%s. Created %d indexed documents.", filename, len(result_docs))
+        return {
+            "success": True,
+            "message": f"Re-indexed {filename} from {len(raw_pages)} raw pages",
+            "raw_pages": len(raw_pages),
+            "nodes_created": len(result_docs),
+        }
+
     async def delete(self, doc_id: str, strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL ) -> None:
         """Delete an ingested document.
 
@@ -419,12 +698,15 @@ class IngestService:
         doc_ids: set[str] = set()
         try:
             docstore = self.storage_context.docstore
-            for node in docstore.docs.values():
-                if node.metadata is not None and node.metadata.get("file_name") == filename:
-                            # Check both ref_doc_id (for nodes) and id_ (for document objects)
-                            id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
-                            if id_to_add:
-                                doc_ids.add(id_to_add)
+            for node_id, node in docstore.docs.items():
+                if node.metadata is not None:
+                    node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+                    if node_filename == filename:
+                        # Capture both the node's individual ID and its reference ID
+                        doc_ids.add(node_id)
+                        ref_id = getattr(node, "ref_doc_id", None) or getattr(node, "doc_id", None)
+                        if ref_id:
+                            doc_ids.add(ref_id)
 
         except ValueError:
             logger.warning("Got an exception when getting doc_ids by filename", exc_info=True)
@@ -433,6 +715,43 @@ class IngestService:
         logger.debug("Found count=%s doc_ids for filename '%s'",
                      len(doc_ids), filename)
         return list(doc_ids)
+
+    def get_all_text_locations_by_filename(self, filename: str) -> List[List[Dict[str, Any]]]:
+        """
+        Collect text_locations from all raw page nodes for the given filename, sorted by page number.
+        """
+        docstore = self._get_freshest_docstore()
+        raw_pages_map: Dict[int, List[Dict[str, Any]]] = {}
+        
+        from llama_index.core.schema import NodeRelationship
+        
+        for node in docstore.docs.values():
+            if not node.metadata:
+                continue
+            
+            node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+            if node_filename != filename:
+                continue
+            
+            # Identify raw page nodes (no parent, has page number)
+            node_page = node.metadata.get("page") or node.metadata.get("page_label")
+            has_parent = NodeRelationship.PARENT in node.relationships
+            
+            if node_page is not None and not has_parent:
+                try:
+                    page_idx = int(node_page)
+                    # We prefer nodes with text_locations as they are the primary source for reconstruction
+                    if "text_locations" in node.metadata:
+                        raw_pages_map[page_idx] = node.metadata["text_locations"]
+                    elif page_idx not in raw_pages_map:
+                        # Fallback for pages without spatial metadata (just empty list for that page)
+                        raw_pages_map[page_idx] = []
+                except (ValueError, TypeError):
+                    continue
+        
+        # Sort by page number and return as a flat list of lists
+        sorted_pages = sorted(raw_pages_map.keys())
+        return [raw_pages_map[p] for p in sorted_pages]
 
     def get_doc_ids_by_filename_pattern(self, pattern: str) -> list[str]:
         """
@@ -449,14 +768,13 @@ class IngestService:
         try:
             docstore = self.storage_context.docstore
             for node in docstore.docs.values():
-                if (node.metadata is not None and 
-                    node.metadata.get("file_name") is not None and 
-                    pattern in node.metadata["file_name"]):
-                    
-                            # Check both ref_doc_id (for nodes) and id_ (for document objects)
-                            id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
-                            if id_to_add:
-                                doc_ids.add(id_to_add)
+                if node.metadata is not None:
+                    node_filename = node.metadata.get("file_name") or node.metadata.get("filename")
+                    if node_filename and pattern in node_filename:
+                        # Check both ref_doc_id (for nodes) and id_ (for document objects)
+                        id_to_add = getattr(node, "ref_doc_id", None) or getattr(node, "id_", None)
+                        if id_to_add:
+                            doc_ids.add(id_to_add)
         except ValueError:
             logger.warning(
                 "Got an exception when getting doc_ids by filename pattern",
