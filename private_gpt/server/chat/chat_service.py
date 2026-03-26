@@ -228,29 +228,6 @@ class ChatService:
             show_progress=True,
         )
         self.node_store = node_store_component
-    
-    def _refresh_if_needed(self) -> None:
-        """Refresh the index and storage context if using local SimpleDocumentStore.
-        
-        This ensures that if new documents were ingested by another uvicorn worker,
-        the current worker's chat engine will be able to retrieve them by reloading
-         relevant stores from disk.
-        """
-        if self.settings.nodestore.database == "simple":
-            logger.debug("Refreshing chat index from disk stores...")
-            self.node_store.refresh()
-            # Update storage context with refreshed stores from NodeStoreComponent
-            self.storage_context.docstore = self.node_store.doc_store
-            self.storage_context.index_store = self.node_store.index_store
-            
-            # Re-initialize index to ensure it points to the new stores
-            self.index = VectorStoreIndex.from_vector_store(
-                self.vector_store_component.vector_store,
-                storage_context=self.storage_context,
-                llm=self.llm_component.llm,
-                embed_model=self.embedding_component.embedding_model,
-                show_progress=False,
-            )
 
     def _should_trigger_notification(self, sources: list[Chunk] | None, response_text: str) -> bool:
         """
@@ -538,9 +515,6 @@ class ChatService:
     ) -> CompletionGen:
         logger.info(f"Starting stream_chat with mode: {use_context}, user_id: {user_id}")
         
-        # Hot-reload in-memory stores to sync with other workers
-        self._refresh_if_needed()
-        
         # Debug logging for message content types
         for i, msg in enumerate(messages):
             logger.info(f"Message {i} ({msg.role}): content type={type(msg.content)}, content_preview={str(msg.content)[:100]}")
@@ -713,9 +687,6 @@ class ChatService:
         user_id: int | None = None,
         db: Session | None = None,
     ) -> Completion:
-        # Hot-reload in-memory stores to sync with other workers
-        self._refresh_if_needed()
-        
         # Check FAQ cache for all user messages in the conversation for general user queries
         chat_engine_input = ChatEngineInput.from_messages(messages)
         last_message = (
