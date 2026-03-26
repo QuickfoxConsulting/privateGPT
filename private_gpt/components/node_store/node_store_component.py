@@ -18,6 +18,7 @@ class NodeStoreComponent:
 
     @inject
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         match settings.nodestore.database:
             case "simple":
                 try:
@@ -59,9 +60,26 @@ class NodeStoreComponent:
                     **settings.postgres.model_dump(exclude_none=True)
                 )
 
+    def refresh(self) -> None:
+        """Refresh the node store from disk if using simple storage.
+        
+        This is necessary to synchronize multiple uvicorn workers when using
+        local file-based storage, as one worker's ingestion won't be visible
+        in another worker's memory until a reload occurs.
+        """
+        match self.settings.nodestore.database:
+            case "simple":
+                try:
+                    self.index_store = SimpleIndexStore.from_persist_dir(
+                        persist_dir=str(local_data_path)
+                    )
+                    self.doc_store = SimpleDocumentStore.from_persist_dir(
+                        persist_dir=str(local_data_path)
+                    )
+                    logger.debug("Refreshed local node store from disk")
+                except FileNotFoundError:
+                    # If not found, keep existing in-memory stores
+                    logger.debug("Local store files not found during refresh, skipping")
             case _:
-                # Should be unreachable
-                # The settings validator should have caught this
-                raise ValueError(
-                    f"Database {settings.nodestore.database} not supported"
-                )
+                # For other databases like Postgres, synchronization is handled by the DB
+                pass

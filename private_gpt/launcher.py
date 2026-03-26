@@ -104,6 +104,7 @@ def create_app(root_injector: Injector) -> FastAPI:
                 "http://192.168.1.93:88",
                 "http://192.168.1.98",
                 "http://192.168.1.98:3000",
+                "http://192.168.1.68:3000",
                 "http://localhost:3000",
                 "https://globaldocquery.gibl.com.np",
                 "http://127.0.0.1",

@@ -75,6 +75,7 @@ class IngestService:
         self.embedding_model = embedding_component.embedding_model
         self.settings = settings()
         self.entity_component = entity_component
+        self.node_store_component = node_store_component
         
     def _validate_file_name(self, file_name: str) -> None:
         """Validate file name for security and correctness."""
@@ -380,18 +381,11 @@ class IngestService:
 
     def _get_freshest_docstore(self):
         """Returns the freshest docstore, reloading from disk if using SimpleDocumentStore to sync workers."""
-        docstore = self.storage_context.docstore
-        from llama_index.core.storage.docstore import SimpleDocumentStore
-        from private_gpt.paths import local_data_path
-        
-        if isinstance(docstore, SimpleDocumentStore):
-            try:
-                # Hot-reload from disk to synchronize across multiple uvicorn workers
-                docstore = SimpleDocumentStore.from_persist_dir(persist_dir=str(local_data_path))
-                self.storage_context.docstore = docstore
-            except FileNotFoundError:
-                pass
-        return docstore
+        if self.settings.nodestore.database == "simple":
+            self.node_store_component.refresh()
+            self.storage_context.docstore = self.node_store_component.doc_store
+            self.storage_context.index_store = self.node_store_component.index_store
+        return self.storage_context.docstore
 
     def get_raw_document(self, doc_id: str) -> Optional[Document]:
         """Get the raw (pre-chunked) document by ID."""

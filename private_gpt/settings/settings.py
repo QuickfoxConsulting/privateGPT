@@ -674,6 +674,14 @@ class OCRSettings(BaseModel):
         default=True,
         description="Flag indicating if Vision-Aware Ingestion is enabled.",
     )
+    use_gemini: bool = Field(
+        default=False,
+        description="If True, use Gemini API for OCR instead of the external vLLM server.",
+    )
+    gemini_model: str = Field(
+        default="gemini-2.0-flash",
+        description="Gemini vision model to use for OCR when use_gemini is True.",
+    )
     base_url: str = Field(
         default="http://host.docker.internal:8000/v1",
         description="Base URL for the VLM/OpenAI-compatible server.",

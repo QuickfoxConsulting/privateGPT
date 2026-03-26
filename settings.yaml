@@ -184,6 +184,8 @@ ner:
 
 ocr:
   enabled: true
+  use_gemini: true          # Set to true to use Gemini instead of external vLLM
+  gemini_model: gemini-2.5-flash  # Vision-capable Gemini model for OCR
   base_url: http://192.168.1.135:8000/v1
   model_name: nanonets/Nanonets-OCR2-3B
   timeout: 120

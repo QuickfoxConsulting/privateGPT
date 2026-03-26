@@ -20,13 +20,23 @@ class VlmOcrEngine:
     """
     Inference engine that connects to a vLLM server (OpenAI-compatible)
     to perform high-precision OCR using Vision-Language Models.
+
+    When settings.ocr.use_gemini is True, delegates all inference to
+    GeminiOcrEngine instead.
     """
 
     @inject
     def __init__(self, settings: Settings):
         self.config = settings.ocr
-        logger.info("-> OCR: Initializing VlmOcrEngine at %s using model: %s", 
-                    self.config.base_url, self.config.model_name)
+        self._gemini_delegate = None
+
+        if self.config.use_gemini:
+            from private_gpt.components.ocr_components.inference.gemini_ocr_engine import GeminiOcrEngine
+            logger.info("-> OCR: use_gemini=True. Initializing Gemini delegate...")
+            self._gemini_delegate = GeminiOcrEngine(settings)
+        else:
+            logger.info("-> OCR: Initializing VlmOcrEngine at %s using model: %s", 
+                        self.config.base_url, self.config.model_name)
 
     def _encode_image(self, image: Image.Image) -> str:
         """Converts a PIL image to a base64 encoded string, with resizing to fit VLM context."""
@@ -48,6 +58,10 @@ class VlmOcrEngine:
         """
         Performs OCR on a single image.
         """
+        # Delegate to Gemini if configured
+        if self._gemini_delegate:
+            return self._gemini_delegate.infer_strip(image, custom_prompt)
+
         b64_image = self._encode_image(image)
         
         # Determine the prompt
