@@ -36,6 +36,18 @@ from private_gpt.server.ingest.model import IngestedDoc, IngestPatchInput
 from private_gpt.constants import UPLOAD_DIR
 from private_gpt.settings.settings import settings
 from llama_index.core.extractors import SummaryExtractor
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from llama_index.core.node_parser import LangchainNodeParser
+
+# Create the langchain splitter
+lc_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=512,
+    chunk_overlap=200,
+    separators=["\n\n", "\n", " ", ""],  # default separators
+)
+
+
 if TYPE_CHECKING:
     from llama_index.core.storage.docstore.types import RefDocInfo
 
@@ -159,12 +171,14 @@ class IngestService:
             )
         elif strategy == ChunkingStrategy.HIERARCHICAL:
             # Create hierarchical chunks based on settings
-            return HierarchicalNodeParser.from_defaults(
-                chunk_sizes=self.settings.chunking.hierarchical_chunk_sizes,
-                chunk_overlap=self.settings.chunking.hierarchical_chunk_overlap,
-                include_metadata=True,
-                include_prev_next_rel=True
-            )
+            # return HierarchicalNodeParser.from_defaults(
+            #     chunk_sizes=self.settings.chunking.hierarchical_chunk_sizes,
+            #     chunk_overlap=self.settings.chunking.hierarchical_chunk_overlap,
+            #     include_metadata=True,
+            #     include_prev_next_rel=True
+            # )
+            return LangchainNodeParser(lc_splitter)
+        
         elif strategy == ChunkingStrategy.BASIC:
             # --- ADVANCED BASIC STRATEGY ---
             # This is an upgraded version of RecursiveCharacterTextSplitter.

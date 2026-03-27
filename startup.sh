@@ -39,4 +39,4 @@ huggingface-cli download prithivida/Splade_PP_en_v1 --cache-dir /app/models/cach
 
 echo "Starting FastAPI server with profile: gemini (Using asyncio loop)"
 # FORCED --loop asyncio to support nest_asyncio
-PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 4 --loop asyncio
+PYTHONUNBUFFERED=1 PGPT_PROFILES=gemini poetry run python -m uvicorn private_gpt.main:app --host 0.0.0.0 --port 8000 --workers 3 --loop asyncio
