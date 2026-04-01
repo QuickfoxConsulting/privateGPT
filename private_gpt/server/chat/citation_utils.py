@@ -112,6 +112,10 @@ def smart_citation_replacement(response: str, nodes: List[NodeWithScore]) -> str
     # regex updated to capture [N] and any following (link) to avoid duplication
     citation_regex = r'\[(\d+)(?: \(p\. .*?\))?\](?:\s*\([^\)]+\))?'
     new_response = re.sub(citation_regex, replace_match, response)
+    
+    # Strip <thinking> tags and their content
+    new_response = re.sub(r'<thinking>.*?</thinking>', '', new_response, flags=re.DOTALL).strip()
+    
     return new_response
 
 class CitationHelper:
