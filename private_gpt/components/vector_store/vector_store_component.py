@@ -323,11 +323,7 @@ class VectorStoreComponent:
             logger.info("Detected hierarchical chunks for file retrieval, using AutoMergingRetriever")
             base_retriever = VectorIndexRetriever(
                 index=index,
-                filters=(
-                    filters
-                    if self.settings.vectorstore.database != "qdrant"
-                    else None
-                ),
+                filters=filters,
                 similarity_top_k=similarity_top_k * 2,
                 sparse_top_k=20,
                 vector_store_query_mode="hybrid",
@@ -342,11 +338,7 @@ class VectorStoreComponent:
         
         return VectorIndexRetriever(
             index=index,
-            filters=(
-                filters
-                if self.settings.vectorstore.database != "qdrant"
-                else None
-            ),
+            filters=filters,
             similarity_top_k=similarity_top_k,
             sparse_top_k=20,              # Increased from 12
             vector_store_query_mode="hybrid",

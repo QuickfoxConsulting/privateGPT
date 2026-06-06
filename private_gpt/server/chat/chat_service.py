@@ -548,11 +548,19 @@ class ChatService:
             )
 
         elif use_context == ChatMode.SEARCH.value:
-            vector_index_retriever = self.vector_store_component.get_retriever(
-                index=self.index,
-                context_filter=context_filter,
-                similarity_top_k=self.settings.rag.similarity_top_k,
-            )
+            if file_list and len(file_list) == 1:
+                logger.info("Using tagged file retriever for: %s", file_list[0])
+                vector_index_retriever = self.vector_store_component.file_vector_retriever(
+                    index=self.index,
+                    file_name=file_list[0],
+                    similarity_top_k=self.settings.rag.similarity_top_k,
+                )
+            else:
+                vector_index_retriever = self.vector_store_component.get_retriever(
+                    index=self.index,
+                    context_filter=context_filter,
+                    similarity_top_k=self.settings.rag.similarity_top_k,
+                )
 
             # 1. Base Processors
             node_postprocessors = [
