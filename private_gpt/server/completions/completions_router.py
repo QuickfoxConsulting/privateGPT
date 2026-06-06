@@ -96,6 +96,8 @@ REFUSAL_PATTERNS = [
     r"answer is not in the context provided"
 ]
 
+DOC_MENTION_PATTERN = re.compile(r"(?<!\S)@(?P<name>\"[^\"]+\"|'[^']+'|\S+)")
+
 def check_is_answered(response_text: str, source_count: int, mode: str) -> bool:
     """
     Smart logic to determine if a question was answered.
@@ -149,6 +151,57 @@ async def get_latest_version_ids(
         latest_doc_ids.extend(exact_docs)
     
     return latest_doc_ids
+
+
+def parse_document_mentions(prompt: str) -> tuple[List[str], str]:
+    """Extract @document mentions and return mentioned names plus cleaned prompt."""
+    mentions: List[str] = []
+
+    def collect(match: re.Match) -> str:
+        raw_name = match.group("name").strip()
+        if (
+            (raw_name.startswith('"') and raw_name.endswith('"'))
+            or (raw_name.startswith("'") and raw_name.endswith("'"))
+        ):
+            raw_name = raw_name[1:-1]
+        raw_name = raw_name.strip().rstrip(".,;:!?")
+        if raw_name:
+            mentions.append(raw_name)
+        return " "
+
+    clean_prompt = DOC_MENTION_PATTERN.sub(collect, prompt or "")
+    clean_prompt = re.sub(r"\s+", " ", clean_prompt).strip()
+    return mentions, clean_prompt or prompt
+
+
+def find_mentioned_documents(
+    mentions: List[str], documents: List[Document]
+) -> tuple[List[Document], List[str]]:
+    """Resolve @mentions against documents already allowed for the user."""
+    matched: List[Document] = []
+    unmatched: List[str] = []
+
+    for mention in mentions:
+        normalized_mention = mention.lower()
+        exact_matches = [
+            doc for doc in documents if doc.filename.lower() == normalized_mention
+        ]
+        partial_matches = [
+            doc
+            for doc in documents
+            if normalized_mention in doc.filename.lower()
+            and doc not in exact_matches
+        ]
+
+        matches = exact_matches or partial_matches
+        if matches:
+            for doc in matches:
+                if doc not in matched:
+                    matched.append(doc)
+        else:
+            unmatched.append(mention)
+
+    return matched, unmatched
 
 def create_chat_item(db: Session, sender: str, content: dict, conversation_id: uuid.UUID) -> models.ChatItem:
     chat_item_create = schemas.ChatItemCreate( 
@@ -349,9 +402,16 @@ async def prompt_completion(
         # doc_service = DocumentSelectionService(db)
         original_prompt = body.prompt
         original_use_context = body.use_context
+        tagged_document_names, retrieval_prompt = parse_document_mentions(
+            original_prompt
+        )
         document_status = "not_requested"
         department = None
         latest_doc_ids = []
+        file_list = []
+
+        if tagged_document_names and body.use_context == ChatMode.CHAT.value:
+            body.use_context = ChatMode.SEARCH.value
         
         # Log the chat completion attempt
         log_audit(
@@ -363,7 +423,8 @@ async def prompt_completion(
                 "use_context": original_use_context,
                 "stream": body.stream,
                 "conversation_id": str(body.conversation_id),
-                "category_id": body.category_id
+                "category_id": body.category_id,
+                "tagged_documents": tagged_document_names,
             },
             user_id=current_user.id,
             username=current_user.username,
@@ -450,37 +511,66 @@ async def prompt_completion(
                     severity="INFO"
                 )
             else:
-                latest_doc_ids = await get_latest_version_ids(service, documents)
-            
-            # Add website content
-            try:
-                website_service = WebsiteCrawlService(db)
-                # Pass department_id to filter by department
-                ingested_pages = website_service.get_ingested_pages(department.id)
-                for page in ingested_pages:
-                     # Use URL as filename to get doc IDs
-                    page_doc_ids = service.get_doc_ids_by_filename(page.url)
-                    latest_doc_ids.extend(page_doc_ids)
-                
-                if ingested_pages:
-                    logger.info(f"Added nodes from {len(ingested_pages)} website pages")
-            except Exception as e:
-                logger.error(f"Failed to add website content: {e}")
+                documents_for_retrieval = documents
+                if tagged_document_names:
+                    tagged_documents, unmatched_mentions = find_mentioned_documents(
+                        tagged_document_names, documents
+                    )
+                    if unmatched_mentions:
+                        logger.warning(
+                            "Tagged documents were not accessible: %s",
+                            unmatched_mentions,
+                        )
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=(
+                                "Tagged document not found or not accessible: "
+                                + ", ".join(unmatched_mentions)
+                            ),
+                        )
 
-            # Add Google Drive content
-            try:
-                drive_service = GoogleDriveService(db)
-                ingested_drive_files = drive_service.get_ingested_files(department.id)
-                for file in ingested_drive_files:
-                    # Use unique doc_id stored in metadata to avoid filename collisions
-                    unique_doc_id = f"google_drive_{file.file_id}"
-                    drive_doc_ids = service.get_doc_ids_by_metadata("doc_id", unique_doc_id)
-                    latest_doc_ids.extend(drive_doc_ids)
-                
-                if ingested_drive_files:
-                    logger.info(f"Added nodes from {len(ingested_drive_files)} Google Drive files")
-            except Exception as e:
-                logger.error(f"Failed to add Google Drive content: {e}")
+                    documents_for_retrieval = tagged_documents
+                    file_list = [doc.filename for doc in tagged_documents]
+                    document_status = "tagged_available"
+                    logger.info(
+                        "Restricting retrieval to tagged documents: %s",
+                        file_list,
+                    )
+
+                latest_doc_ids = await get_latest_version_ids(
+                    service, documents_for_retrieval
+                )
+
+            if not tagged_document_names:
+                # Add website content
+                try:
+                    website_service = WebsiteCrawlService(db)
+                    # Pass department_id to filter by department
+                    ingested_pages = website_service.get_ingested_pages(department.id)
+                    for page in ingested_pages:
+                         # Use URL as filename to get doc IDs
+                        page_doc_ids = service.get_doc_ids_by_filename(page.url)
+                        latest_doc_ids.extend(page_doc_ids)
+
+                    if ingested_pages:
+                        logger.info(f"Added nodes from {len(ingested_pages)} website pages")
+                except Exception as e:
+                    logger.error(f"Failed to add website content: {e}")
+
+                # Add Google Drive content
+                try:
+                    drive_service = GoogleDriveService(db)
+                    ingested_drive_files = drive_service.get_ingested_files(department.id)
+                    for file in ingested_drive_files:
+                        # Use unique doc_id stored in metadata to avoid filename collisions
+                        unique_doc_id = f"google_drive_{file.file_id}"
+                        drive_doc_ids = service.get_doc_ids_by_metadata("doc_id", unique_doc_id)
+                        latest_doc_ids.extend(drive_doc_ids)
+
+                    if ingested_drive_files:
+                        logger.info(f"Added nodes from {len(ingested_drive_files)} Google Drive files")
+                except Exception as e:
+                    logger.error(f"Failed to add Google Drive content: {e}")
 
             if not latest_doc_ids:
                 document_status = "no_valid_versions"
@@ -510,7 +600,9 @@ async def prompt_completion(
                     severity="WARNING"
                 )
             else:
-                document_status = "available"
+                document_status = (
+                    "tagged_available" if tagged_document_names else "available"
+                )
                 body.context_filter = ContextFilter(docs_ids=latest_doc_ids)
                 logger.info(f"Found {len(latest_doc_ids)} valid document nodes/versions")
 
@@ -526,7 +618,7 @@ async def prompt_completion(
                 )
             return history_messages
 
-        user_message = OpenAIMessage(content=original_prompt, role="user")
+        user_message = OpenAIMessage(content=retrieval_prompt, role="user")
         user_message_json = {"text": original_prompt}
         
         user_chat = create_chat_item(
@@ -554,6 +646,7 @@ async def prompt_completion(
             "context_requested": original_use_context,
             "context_used": body.use_context,
             "document_status": document_status,
+            "tagged_documents": tagged_document_names,
         }
         
         if department:
