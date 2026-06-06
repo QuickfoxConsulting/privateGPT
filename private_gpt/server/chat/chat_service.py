@@ -437,11 +437,12 @@ class ChatService:
         return str(content or "")
 
     def _conversation_context_text(self, messages: list[ChatMessage]) -> list[str]:
-        return [
-            self._message_content_to_text(message.content)
-            for message in messages[:-1]
-            if self._message_content_to_text(message.content)
-        ]
+        context = []
+        for message in messages[:-1]:
+            content = self._message_content_to_text(message.content)
+            if content:
+                context.append(content)
+        return context
 
     async def _chat_engine(
         self,
@@ -643,7 +644,7 @@ class ChatService:
                 f"Message {i} ({msg.role}): content type={type(msg.content)}, content_preview={str(msg.content)[:100]}"
             )
 
-        chat_engine_input = ChatEngineInput.from_messages(messages)
+        chat_engine_input = ChatEngineInput.from_messages(list(messages))
         last_message_content = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
@@ -873,7 +874,7 @@ class ChatService:
     ) -> Completion:
         self._refresh_index()
 
-        chat_engine_input = ChatEngineInput.from_messages(messages)
+        chat_engine_input = ChatEngineInput.from_messages(list(messages))
         last_message_content = (
             chat_engine_input.last_message.content
             if chat_engine_input.last_message
