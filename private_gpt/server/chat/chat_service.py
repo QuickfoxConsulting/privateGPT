@@ -48,6 +48,7 @@ from private_gpt.components.postprocessor.PrevNext import (
 
 from private_gpt.server.agents.orchestrator_engine import HierarchicalAgentEngine
 from private_gpt.server.tools.tool_registry import ToolRegistry
+from private_gpt.server.tools.document_catalog_tool import DocumentCatalogTool
 
 from private_gpt.server.cache.cache_service import CacheService
 from private_gpt.users.services.prompt_service import prompt_service
@@ -242,6 +243,7 @@ class ChatService:
 
         self._index_last_built: float = time.time()
         self._index_check_interval: float = 3.0  # seconds
+        self.document_catalog_tool = DocumentCatalogTool()
 
     def _get_index_mtime(self) -> float:
         """Get the latest modification time of the docstore/index files."""
@@ -400,6 +402,24 @@ class ChatService:
         except Exception as e:
             logger.error(f"Error checking FAQ cache: {e}", exc_info=True)
         return None
+
+    def _answer_document_catalog_query(
+        self, db: Session | None, user_id: int | None, question: str
+    ) -> str | None:
+        if not db or not user_id or not question:
+            return None
+
+        try:
+            result = self.document_catalog_tool.answer(
+                db=db, user_id=user_id, question=question
+            )
+            return result.answer if result else None
+        except Exception as e:
+            logger.error("Document catalog tool failed", exc_info=True)
+            return (
+                "I could not retrieve the document inventory right now. "
+                "Please try again."
+            )
 
     async def _chat_engine(
         self,
@@ -619,6 +639,17 @@ class ChatService:
             f"Extracted last_message: '{last_message[:100]}...' (original type: {type(last_message_content)})"
         )
 
+        catalog_answer = self._answer_document_catalog_query(
+            db=db, user_id=user_id, question=last_message
+        )
+        if catalog_answer:
+            logger.info("Answering streaming chat with DocumentCatalogTool")
+
+            async def catalog_stream():
+                yield catalog_answer
+
+            return CompletionGen(response=catalog_stream(), sources=[])
+
         # Check FAQ cache for streaming mode too (performance optimization)
         if cache_service and last_message and use_context == ChatMode.SEARCH.value:
             cache_answer = self._check_faq_cache(cache_service, last_message)
@@ -830,6 +861,13 @@ class ChatService:
             last_message = last_message_content.get("text", "")
         elif isinstance(last_message_content, str):
             last_message = last_message_content
+
+        catalog_answer = self._answer_document_catalog_query(
+            db=db, user_id=user_id, question=last_message
+        )
+        if catalog_answer:
+            logger.info("Answering chat with DocumentCatalogTool")
+            return Completion(response=catalog_answer, sources=[], cache_id=None)
 
         # Check FAQ cache for non-streaming mode too
         if cache_service and last_message and use_context == ChatMode.SEARCH.value:
