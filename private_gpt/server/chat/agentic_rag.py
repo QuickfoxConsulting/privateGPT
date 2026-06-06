@@ -717,6 +717,27 @@ class AgenticCondenseChatEngine(BaseChatEngine):
             # 4. Retrieve
             context_str, context_nodes = self._retrieve_and_process_nodes(sub_queries)
 
+        if not context_nodes:
+            context_source = ToolOutput(
+                tool_name="advanced_rag",
+                content=context_str,
+                raw_input={"standalone_query": standalone_question},
+                raw_output=[],
+            )
+            return (
+                [
+                    ChatMessage(
+                        content=(
+                            "I could not retrieve relevant content from the selected "
+                            "document right now. Please try again in a moment."
+                        ),
+                        role=MessageRole.ASSISTANT,
+                    )
+                ],
+                context_source,
+                [],
+            )
+
         # 5. Construct System Message with Detail-Level Awareness
         # Detect detail level from original message
         detail_level = self._detect_detail_level(message)
@@ -807,6 +828,27 @@ class AgenticCondenseChatEngine(BaseChatEngine):
                 sub_queries
             )
 
+        if not context_nodes:
+            context_source = ToolOutput(
+                tool_name="advanced_rag",
+                content=context_str,
+                raw_input={"standalone_query": standalone_question},
+                raw_output=[],
+            )
+            return (
+                [
+                    ChatMessage(
+                        content=(
+                            "I could not retrieve relevant content from the selected "
+                            "document right now. Please try again in a moment."
+                        ),
+                        role=MessageRole.ASSISTANT,
+                    )
+                ],
+                context_source,
+                [],
+            )
+
         # 5. Construct System Message with Detail-Level Awareness
         # Detect detail level from original message
         detail_level = self._detect_detail_level(message)
@@ -853,6 +895,15 @@ class AgenticCondenseChatEngine(BaseChatEngine):
             chat_messages, context_source, context_nodes = (
                 self._run_agentic_condense_sync(message, chat_history)
             )
+
+            if not context_nodes and chat_messages:
+                assistant_message = chat_messages[0]
+                self._memory.put(assistant_message)
+                return AgentChatResponse(
+                    response=assistant_message.content or "",
+                    sources=[context_source],
+                    source_nodes=[],
+                )
 
             chat_response = self._llm.chat(chat_messages)
             assistant_message = chat_response.message
@@ -936,6 +987,15 @@ class AgenticCondenseChatEngine(BaseChatEngine):
                 context_source,
                 context_nodes,
             ) = await self._arun_agentic_condense(message, chat_history)
+
+            if not context_nodes and chat_messages:
+                assistant_message = chat_messages[0]
+                self._memory.put(assistant_message)
+                return AgentChatResponse(
+                    response=assistant_message.content or "",
+                    sources=[context_source],
+                    source_nodes=[],
+                )
 
             chat_response = await self._llm.achat(chat_messages)
             assistant_message = chat_response.message
