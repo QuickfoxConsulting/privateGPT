@@ -45,12 +45,13 @@ async def get_current_user(token: Optional[str], db: Session):
         logger.error(f"JWT validation error: {str(e)}")
         return None
 
+@websocket_router.websocket("/ws/")
 @websocket_router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     db: Session = Depends(deps.get_db),
 ):
-    print("GETTING Params: {websocket.query_params}")
+    logger.debug("WebSocket query params received")
     token = websocket.query_params.get("token")
     if not token: 
         await websocket.close(code=4001, reason="Missing authentication token")

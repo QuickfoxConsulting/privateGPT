@@ -73,6 +73,7 @@ def list_departments(
         )
 
 
+@router.post("/create/", response_model=schemas.Department, include_in_schema=False)
 @router.post("/create", response_model=schemas.Department)
 def create_department(
     request: Request,
