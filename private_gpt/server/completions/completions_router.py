@@ -203,6 +203,36 @@ def find_mentioned_documents(
 
     return matched, unmatched
 
+
+def get_accessible_enabled_documents(
+    db: Session, current_user: models.User, category_ids: Optional[List[int]] = None
+) -> List[Document]:
+    role = (
+        current_user.user_role.role.name
+        if current_user.user_role and current_user.user_role.role
+        else None
+    )
+
+    if role in {"SUPER_ADMIN", "OPERATOR"}:
+        documents = (
+            crud.documents.get_multi_documents(db)
+            .filter(Document.is_enabled == True)
+            .all()
+        )
+        if category_ids:
+            documents = [
+                doc
+                for doc in documents
+                if any(category.id in category_ids for category in doc.categories)
+            ]
+        return documents
+
+    return crud.documents.get_enabled_documents_by_departments(
+        db,
+        department_id=current_user.department_id,
+        category_ids=category_ids,
+    )
+
 def create_chat_item(db: Session, sender: str, content: dict, conversation_id: uuid.UUID) -> models.ChatItem:
     chat_item_create = schemas.ChatItemCreate( 
             sender=sender,
@@ -458,9 +488,19 @@ async def prompt_completion(
         if is_using_context:
             service = request.state.injector.get(IngestService)
             document_status = "requested"
-            
-            department = crud.department.get_by_id(db, id=current_user.department_id)
-            if not department:
+            user_role = (
+                current_user.user_role.role.name
+                if current_user.user_role and current_user.user_role.role
+                else None
+            )
+            has_global_document_access = user_role in {"SUPER_ADMIN", "OPERATOR"}
+
+            department = (
+                crud.department.get_by_id(db, id=current_user.department_id)
+                if current_user.department_id
+                else None
+            )
+            if not department and not has_global_document_access:
                 # Log missing department
                 log_audit(
                     model="Chat",
@@ -479,11 +519,11 @@ async def prompt_completion(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="No department assigned to you"
                 )
-                
-            documents = crud.documents.get_enabled_documents_by_departments(
+
+            documents = get_accessible_enabled_documents(
                 db,
-                department_id=department.id,
-                category_ids=body.category_id
+                current_user=current_user,
+                category_ids=body.category_id,
             )
             # documents = doc_service.get_enabled_documents(user_id=current_user.id)
             file_list = [doc.filename for doc in documents]
@@ -493,7 +533,10 @@ async def prompt_completion(
                 body.use_context = ChatMode.SEARCH.value
                 body.system_prompt = (body.system_prompt or "") + "\n\nIMPORTANT: No documents are available for this user's department. "            
                 body.context_filter = None
-                logger.warning(f"No documents found for department {department.id}")
+                logger.warning(
+                    "No documents found for department %s",
+                    department.id if department else None,
+                )
                 
                 # Log no documents available
                 log_audit(
@@ -502,7 +545,7 @@ async def prompt_completion(
                     details={
                         "query": original_prompt,
                         "user": current_user.username,
-                        "department_id": department.id,
+                        "department_id": department.id if department else None,
                         "category_id": body.category_id
                     },
                     user_id=current_user.id,
@@ -546,7 +589,11 @@ async def prompt_completion(
                 try:
                     website_service = WebsiteCrawlService(db)
                     # Pass department_id to filter by department
-                    ingested_pages = website_service.get_ingested_pages(department.id)
+                    ingested_pages = (
+                        website_service.get_ingested_pages(department.id)
+                        if department
+                        else []
+                    )
                     for page in ingested_pages:
                          # Use URL as filename to get doc IDs
                         page_doc_ids = service.get_doc_ids_by_filename(page.url)
@@ -560,7 +607,11 @@ async def prompt_completion(
                 # Add Google Drive content
                 try:
                     drive_service = GoogleDriveService(db)
-                    ingested_drive_files = drive_service.get_ingested_files(department.id)
+                    ingested_drive_files = (
+                        drive_service.get_ingested_files(department.id)
+                        if department
+                        else []
+                    )
                     for file in ingested_drive_files:
                         # Use unique doc_id stored in metadata to avoid filename collisions
                         unique_doc_id = f"google_drive_{file.file_id}"
@@ -589,7 +640,7 @@ async def prompt_completion(
                     details={
                         "query": original_prompt,
                         "user": current_user.username,
-                        "department_id": department.id,
+                        "department_id": department.id if department else None,
                         "reason": "no_valid_document_versions",
                         "source_count": 0,
                         "is_answered": False
