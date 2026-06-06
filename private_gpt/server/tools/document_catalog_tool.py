@@ -26,20 +26,42 @@ class DocumentCatalogTool:
         rf"\bwhat\b.*\b{_DOC_WORD}\b.*\b(have|available|access)\b",
         rf"\bwhich\b.*\b{_DOC_WORD}\b.*\b(have|available|access)\b",
     )
+    _FOLLOW_UP_LIST_PATTERNS = (
+        r"\bwhat\s+are\s+they\b",
+        r"\bwhat\s+ar\s+ethey\b",
+        r"\bwhat\s+are\s+those\b",
+        r"\bwhich\s+ones\b",
+        r"\blist\s+them\b",
+        r"\bshow\s+them\b",
+    )
+    _INVENTORY_CONTEXT_PATTERNS = (
+        rf"\byou have access to\b.*\b{_DOC_WORD}\b",
+        rf"\baccess to\b.*\b{_DOC_WORD}\b",
+    )
 
     @classmethod
-    def can_answer(cls, question: str) -> bool:
+    def can_answer(
+        cls, question: str, conversation_context: Sequence[str] | None = None
+    ) -> bool:
         normalized = cls._normalize(question)
         if not normalized:
             return False
 
         patterns = cls._COUNT_PATTERNS + cls._LIST_PATTERNS
-        return any(re.search(pattern, normalized) for pattern in patterns)
+        if any(re.search(pattern, normalized) for pattern in patterns):
+            return True
+
+        return cls._is_contextual_list_request(normalized, conversation_context)
 
     def answer(
-        self, *, db: Session, user_id: int, question: str
+        self,
+        *,
+        db: Session,
+        user_id: int,
+        question: str,
+        conversation_context: Sequence[str] | None = None,
     ) -> DocumentCatalogResult | None:
-        if not self.can_answer(question):
+        if not self.can_answer(question, conversation_context=conversation_context):
             return None
 
         user = crud.user.get(db, id=user_id)
@@ -47,7 +69,9 @@ class DocumentCatalogTool:
             return None
 
         documents = self._get_accessible_documents(db, user)
-        wants_list = self._wants_list(question)
+        wants_list = self._wants_list(
+            question, conversation_context=conversation_context
+        )
         total_count = len(documents)
         enabled_count = sum(1 for doc in documents if doc.is_enabled)
 
@@ -73,9 +97,30 @@ class DocumentCatalogTool:
         ).all()
 
     @classmethod
-    def _wants_list(cls, question: str) -> bool:
+    def _wants_list(
+        cls, question: str, conversation_context: Sequence[str] | None = None
+    ) -> bool:
         normalized = cls._normalize(question)
-        return any(re.search(pattern, normalized) for pattern in cls._LIST_PATTERNS)
+        if any(re.search(pattern, normalized) for pattern in cls._LIST_PATTERNS):
+            return True
+
+        return cls._is_contextual_list_request(normalized, conversation_context)
+
+    @classmethod
+    def _is_contextual_list_request(
+        cls, normalized_question: str, conversation_context: Sequence[str] | None
+    ) -> bool:
+        if not any(
+            re.search(pattern, normalized_question)
+            for pattern in cls._FOLLOW_UP_LIST_PATTERNS
+        ):
+            return False
+
+        context = cls._normalize(" ".join(conversation_context or []))
+        return any(
+            re.search(pattern, context)
+            for pattern in cls._INVENTORY_CONTEXT_PATTERNS
+        )
 
     @staticmethod
     def _normalize(question: str) -> str:

@@ -404,14 +404,21 @@ class ChatService:
         return None
 
     def _answer_document_catalog_query(
-        self, db: Session | None, user_id: int | None, question: str
+        self,
+        db: Session | None,
+        user_id: int | None,
+        question: str,
+        conversation_context: list[str] | None = None,
     ) -> str | None:
         if not db or not user_id or not question:
             return None
 
         try:
             result = self.document_catalog_tool.answer(
-                db=db, user_id=user_id, question=question
+                db=db,
+                user_id=user_id,
+                question=question,
+                conversation_context=conversation_context,
             )
             return result.answer if result else None
         except Exception as e:
@@ -420,6 +427,21 @@ class ChatService:
                 "I could not retrieve the document inventory right now. "
                 "Please try again."
             )
+
+    @staticmethod
+    def _message_content_to_text(content: object) -> str:
+        if isinstance(content, dict):
+            return str(content.get("text", ""))
+        if isinstance(content, str):
+            return content
+        return str(content or "")
+
+    def _conversation_context_text(self, messages: list[ChatMessage]) -> list[str]:
+        return [
+            self._message_content_to_text(message.content)
+            for message in messages[:-1]
+            if self._message_content_to_text(message.content)
+        ]
 
     async def _chat_engine(
         self,
@@ -640,7 +662,10 @@ class ChatService:
         )
 
         catalog_answer = self._answer_document_catalog_query(
-            db=db, user_id=user_id, question=last_message
+            db=db,
+            user_id=user_id,
+            question=last_message,
+            conversation_context=self._conversation_context_text(messages),
         )
         if catalog_answer:
             logger.info("Answering streaming chat with DocumentCatalogTool")
@@ -863,7 +888,10 @@ class ChatService:
             last_message = last_message_content
 
         catalog_answer = self._answer_document_catalog_query(
-            db=db, user_id=user_id, question=last_message
+            db=db,
+            user_id=user_id,
+            question=last_message,
+            conversation_context=self._conversation_context_text(messages),
         )
         if catalog_answer:
             logger.info("Answering chat with DocumentCatalogTool")
