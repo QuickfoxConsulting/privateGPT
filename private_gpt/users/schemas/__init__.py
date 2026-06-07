@@ -10,8 +10,9 @@ from .subscription import (
 )
 from .company import Company, CompanyBase, CompanyCreate, CompanyUpdate
 from .documents import (
-    Document, DocumentCreate, DocumentsBase, DocumentUpdate, DocumentList, 
-    DepartmentList, DocumentEnable, DocumentDepartmentUpdate, DocumentCheckerUpdate, 
+    Document, DocumentCreate, DocumentsBase, DocumentUpdate, DocumentList,
+    DepartmentList, DocumentEnable, DocumentMentionSuggestion,
+    DocumentDepartmentUpdate, DocumentCheckerUpdate,
     DocumentMakerCreate, DocumentView, DocumentVerify, 
     DocumentFilter, DocumentCategoryUpdate, DocCatUpdate, UrlUpload, UrlMakerChecker, DocumentUpload,
     DocumentVersionBase, DocumentVersionCreate, DocumentVersionOut, DocumentVersionUpdate, DocumentFilePath, DocumentSelection, StatusUpdate

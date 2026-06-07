@@ -26,6 +26,11 @@ class DocumentEnable(BaseModel):
     id: int
     is_enabled: bool
 
+class DocumentMentionSuggestion(BaseModel):
+    id: int
+    filename: str
+    mention: str
+
 class DocumentDepartmentUpdate(DocumentsBase):
     departments: List[int] = []
 

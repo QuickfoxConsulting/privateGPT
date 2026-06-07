@@ -42,6 +42,73 @@ def get_id(db, username):
     name = crud.user.get_by_name(db=db, name=username)
     return name
 
+
+def _mention_for_filename(filename: str) -> str:
+    if any(char.isspace() for char in filename):
+        return f'@"{filename}"'
+    return f"@{filename}"
+
+
+def _accessible_documents_query(db: Session, current_user: models.User):
+    role = (
+        current_user.user_role.role.name
+        if current_user.user_role and current_user.user_role.role
+        else None
+    )
+    if role in ("SUPER_ADMIN", "OPERATOR"):
+        return crud.documents.get_multi_documents(db)
+
+    return crud.documents.get_documents_by_departments(
+        db,
+        department_id=current_user.department_id,
+    )
+
+
+@router.get(
+    "/mention-suggestions",
+    response_model=List[schemas.DocumentMentionSuggestion],
+)
+def mention_suggestions(
+    query: str = Query("", description="Text typed after @"),
+    limit: int = Query(10, ge=1, le=20),
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Security(deps.get_current_user),
+) -> List[schemas.DocumentMentionSuggestion]:
+    """
+    Return accessible documents for @mention autocomplete.
+    """
+    typed = (query or "").strip().lstrip("@").lower()
+    documents_query = _accessible_documents_query(db, current_user).filter(
+        models.Document.is_enabled == True
+    )
+
+    if typed:
+        filter_safe = typed.replace("%", r"\%").replace("_", r"\_")
+        documents_query = documents_query.filter(
+            models.Document.filename.ilike(f"%{filter_safe}%")
+        )
+
+    documents = documents_query.all()
+    if typed:
+        documents.sort(
+            key=lambda doc: (
+                not doc.filename.lower().startswith(typed),
+                doc.filename.lower(),
+            )
+        )
+    else:
+        documents.sort(key=lambda doc: doc.uploaded_at, reverse=True)
+
+    return [
+        schemas.DocumentMentionSuggestion(
+            id=doc.id,
+            filename=doc.filename,
+            mention=_mention_for_filename(doc.filename),
+        )
+        for doc in documents[:limit]
+    ]
+
+
 @router.get("/{id}", response_model=schemas.DocumentView)
 def get_document(
     id: int,
